@@ -84,6 +84,7 @@ const quarryRun: StageDef = {
   bank: 'dirt',
   hazards: { kinds: ['rock', 'bale', 'pole'], spacing: 12 },
   entryFee: 250,
+  requiresMedals: 1,
   payouts: { author: 5200, gold: 3200, silver: 1800, bronze: 1000, finish: 600 },
   checkpoints: 4,
   medals: { author: 34, gold: 39, silver: 46, bronze: 55 },
@@ -129,6 +130,7 @@ const northPass: StageDef = {
   bank: 'snow',
   hazards: { kinds: ['pole', 'tree', 'rock'], spacing: 17 },
   entryFee: 500,
+  requiresMedals: 2,
   payouts: { author: 8600, gold: 5400, silver: 3000, bronze: 1700, finish: 1000 },
   checkpoints: 4,
   medals: { author: 45, gold: 53, silver: 66, bronze: 85 },
@@ -165,7 +167,21 @@ import { GENERATED_STAGES } from './generated.js';
  * data and go through exactly the same code — the only difference is that a
  * person picked the corners of the first three.
  */
-export const STAGES: StageDef[] = [pineLoop, quarryRun, northPass, ...GENERATED_STAGES];
+/**
+ * Generated stages open progressively, three medals apart, so the career has a
+ * shape beyond a rising balance. The ramp is deliberately gentle and the free
+ * stage never locks, so nobody is ever stuck with nothing to drive.
+ */
+const gated = GENERATED_STAGES.map((stage, i) => ({
+  ...stage,
+  // Must stay reachable: with N stages open a player can hold at most N
+  // medals, so a requirement above a stage's own position in the unlock order
+  // dead-ends the career with money in the bank and nothing to spend it on.
+  // A step below one keeps slack, so nobody has to medal literally everything.
+  requiresMedals: 3 + Math.floor(i * 0.8),
+}));
+
+export const STAGES: StageDef[] = [pineLoop, quarryRun, northPass, ...gated];
 
 export const stageById = (id: string): StageDef => {
   const found = STAGES.find((s) => s.id === id);

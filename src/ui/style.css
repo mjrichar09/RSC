@@ -656,3 +656,5 @@ html, body {
 .race-pace.medal-silver { color: #c8d0d9; }
 .race-pace.medal-bronze { color: #cd8642; }
 .race-pace.medal-finish { color: var(--dim); }
+
+.locked-note { color: var(--hot); letter-spacing: 0.08em; }

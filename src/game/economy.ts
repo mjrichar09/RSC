@@ -55,7 +55,7 @@ export function payout(
   return { amount: earned, floored: false };
 }
 
-export type EntryRefusal = 'too-poor' | 'undriveable';
+export type EntryRefusal = 'too-poor' | 'undriveable' | 'locked';
 
 export interface EntryCheck {
   allowed: boolean;
@@ -71,8 +71,14 @@ export interface EntryCheck {
  */
 export function canEnter(
   stage: StageDef,
-  options: { money: number; carIsDriveable: boolean },
+  options: { money: number; carIsDriveable: boolean; medals?: number },
 ): EntryCheck {
+  // Locked first: it is a fact about progress rather than about this moment,
+  // and telling a player they cannot afford a stage they have not unlocked is
+  // the less useful of the two answers.
+  if ((stage.requiresMedals ?? 0) > (options.medals ?? 0)) {
+    return { allowed: false, reason: 'locked' };
+  }
   if (!options.carIsDriveable) return { allowed: false, reason: 'undriveable' };
   if (options.money < stage.entryFee) return { allowed: false, reason: 'too-poor' };
   return { allowed: true, reason: null };

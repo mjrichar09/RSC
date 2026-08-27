@@ -69,23 +69,25 @@ describe('payouts', () => {
 });
 
 describe('entry rules', () => {
+  const unlocked = { medals: 99 };
+
   it('lets a solvent player with a working car in', () => {
-    expect(canEnter(PAID, { money: 9999, carIsDriveable: true }).allowed).toBe(true);
+    expect(canEnter(PAID, { money: 9999, carIsDriveable: true, ...unlocked }).allowed).toBe(true);
   });
 
   it('refuses a player who cannot pay', () => {
-    expect(canEnter(PAID, { money: 10, carIsDriveable: true })).toEqual({
+    expect(canEnter(PAID, { money: 10, carIsDriveable: true, ...unlocked })).toEqual({
       allowed: false,
       reason: 'too-poor',
     });
   });
 
   it('refuses a broken car even on the free stage', () => {
-    expect(canEnter(FREE, { money: 0, carIsDriveable: false }).reason).toBe('undriveable');
+    expect(canEnter(FREE, { money: 0, carIsDriveable: false, medals: 0 }).reason).toBe('undriveable');
   });
 
   it('always lets a solvent player onto the free stage', () => {
-    expect(canEnter(FREE, { money: 0, carIsDriveable: true }).allowed).toBe(true);
+    expect(canEnter(FREE, { money: 0, carIsDriveable: true, medals: 0 }).allowed).toBe(true);
   });
 });
 
@@ -170,6 +172,12 @@ describe('career', () => {
   });
 
   it('charges the entry fee, and only when the stage is entered', async () => {
+    // Unlock the paid stage first: entry fees and progression are separate
+    // rules, and this one is about the fee.
+    await career['save'].update((p) => {
+      p.records['pine-loop'] = { time: 50, medal: 'silver', setAt: 0 };
+      p.records['north-pass'] = { time: 50, medal: 'silver', setAt: 0 };
+    });
     const before = career.money;
     expect(await career.enter(FREE)).toBe(true);
     expect(career.money).toBe(before);
@@ -181,6 +189,8 @@ describe('career', () => {
   it('refuses entry it cannot afford', async () => {
     await career['save'].update((p) => {
       p.money = 10;
+      p.records['pine-loop'] = { time: 50, medal: 'silver', setAt: 0 };
+      p.records['north-pass'] = { time: 50, medal: 'silver', setAt: 0 };
     });
     expect(await career.enter(PAID)).toBe(false);
     expect(career.money).toBe(10);
@@ -310,5 +320,53 @@ describe('career', () => {
 
     for (const d of [bare, caged]) d.applyImpact(impactPointFromForce(HEAD_ON), 26_000);
     expect(caged.get('engine')).toBeGreaterThan(bare.get('engine'));
+  });
+});
+
+describe('progression', () => {
+  it('never locks the free stage', () => {
+    expect(FREE.requiresMedals ?? 0).toBe(0);
+    expect(canEnter(FREE, { money: 0, carIsDriveable: true, medals: 0 }).allowed).toBe(true);
+  });
+
+  it('locks a stage until enough medals are held', () => {
+    const gated = { ...PAID, requiresMedals: 3 };
+    expect(canEnter(gated, { money: 99_999, carIsDriveable: true, medals: 2 })).toEqual({
+      allowed: false,
+      reason: 'locked',
+    });
+    expect(canEnter(gated, { money: 99_999, carIsDriveable: true, medals: 3 }).allowed).toBe(true);
+  });
+
+  it('reports locked before poor, since locked is the more useful answer', () => {
+    const gated = { ...PAID, requiresMedals: 3 };
+    expect(canEnter(gated, { money: 0, carIsDriveable: false, medals: 0 }).reason).toBe('locked');
+  });
+
+  it('opens stages in a reachable order', () => {
+    // Every stage must be reachable by medals earned on stages already open,
+    // or the career dead-ends with money in the bank and nothing to spend it on.
+    const byRequirement = [...STAGES].sort(
+      (a, b) => (a.requiresMedals ?? 0) - (b.requiresMedals ?? 0),
+    );
+    byRequirement.forEach((stage, index) => {
+      // With `index` stages already open, at most `index` medals can be held.
+      expect(stage.requiresMedals ?? 0).toBeLessThanOrEqual(index);
+    });
+  });
+
+  it('counts only stages actually medalled', async () => {
+    const save = new SaveStore();
+    await save.open();
+    await save.clear();
+    const career = new Career(save, STAGES);
+
+    expect(career.medalsHeld).toBe(0);
+    await career['save'].update((p) => {
+      p.records['pine-loop'] = { time: 50, medal: 'silver', setAt: 0 };
+      p.records['quarry-run'] = { time: 90, medal: 'finish', setAt: 0 };
+    });
+    // Finishing without a medal is not a medal.
+    expect(career.medalsHeld).toBe(1);
   });
 });

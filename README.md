@@ -209,6 +209,13 @@ drove, entry fees the cost of where you race, payouts what you earn back. The
 tension is that a good run on an expensive stage pays less than a bad crash
 costs, so pace has to be weighed against risk rather than simply maximised.
 
+Stages unlock progressively as medals are earned — the free stage is always
+open, then a gentle ramp. Nine stages available at once gives a new player no
+direction and leaves the career with no shape beyond a rising balance. The
+unlock order is checked by a test: with N stages open a player can hold at most
+N medals, so a requirement above a stage's own position in the order would
+dead-end the career with money in the bank and nothing to spend it on.
+
 **Damage belongs to the car, not the run.** It follows you to the next start
 line unless you pay to put it right, and a failed component stops you entering
 at all — which is what makes declining a repair a real gamble rather than free

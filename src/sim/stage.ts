@@ -66,6 +66,14 @@ export interface StageDef {
   entryFee: number;
   /** What each medal pays on a finish. */
   payouts: { author: number; gold: number; silver: number; bronze: number; finish: number };
+  /**
+   * Medals that must already be held elsewhere before this stage opens.
+   *
+   * Nine stages available at once gives a new player no direction, and a
+   * career with no shape beyond a rising balance. Zero, or absent, means
+   * always open — the free stage never locks.
+   */
+  requiresMedals?: number;
   cameraZones?: CameraZone[];
   /** Roadside hazards. Omit for a bare corridor. */
   hazards?: HazardProfile;

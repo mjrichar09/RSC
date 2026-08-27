@@ -78,8 +78,17 @@ export class Career {
     return this.buildDamage().warnings();
   }
 
+  /** Stages the player holds at least a bronze on. Drives what is unlocked. */
+  get medalsHeld(): number {
+    return Object.values(this.profile.records).filter((r) => r.medal !== 'finish').length;
+  }
+
   canEnter(stage: StageDef): EntryCheck {
-    return canEnter(stage, { money: this.money, carIsDriveable: this.carIsDriveable });
+    return canEnter(stage, {
+      money: this.money,
+      carIsDriveable: this.carIsDriveable,
+      medals: this.medalsHeld,
+    });
   }
 
   /** Take the entry fee. Returns false when the stage cannot be entered. */

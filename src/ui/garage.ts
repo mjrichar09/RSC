@@ -110,7 +110,7 @@ export class Garage {
         <header class="garage-head">
           <div>
             <div class="garage-title">GARAGE</div>
-            <div class="garage-sub">${this.conditionLine()}</div>
+            <div class="garage-sub">${this.conditionLine()} · ${this.career.medalsHeld} medal${this.career.medalsHeld === 1 ? '' : 's'}</div>
           </div>
           <div class="garage-money"><span>FUNDS</span><b>${money(this.career.money)}</b></div>
         </header>
@@ -162,7 +162,9 @@ export class Garage {
             ? 'not enough funds'
             : check.reason === 'undriveable'
               ? 'car undriveable'
-              : '';
+              : check.reason === 'locked'
+                ? `${stage.requiresMedals} medal${stage.requiresMedals === 1 ? '' : 's'}`
+                : '';
 
         const best = record
           ? `<span style="color:${MEDAL_TINT[record.medal]}">${formatTime(record.time)} · ${record.medal}</span>`
@@ -173,7 +175,9 @@ export class Garage {
             <div class="stage-key">${i + 1}</div>
             <div class="stage-body">
               <div class="stage-name">${stage.name}</div>
-              <div class="stage-meta">${stage.biome} · ${stage.entryFee === 0 ? 'free entry' : `entry ${money(stage.entryFee)}`}</div>
+              <div class="stage-meta">${stage.biome} · ${stage.entryFee === 0 ? 'free entry' : `entry ${money(stage.entryFee)}`}${
+                check.reason === 'locked' ? ` · <span class="locked-note">locked</span>` : ''
+              }</div>
               <div class="stage-meta">${best}</div>
             </div>
             <div class="stage-pay">
