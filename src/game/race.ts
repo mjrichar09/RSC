@@ -11,7 +11,7 @@ import type { MedalTimes, Stage } from '../sim/stage.js';
 import type { VehicleState } from '../sim/vehicle.js';
 
 export type Medal = 'author' | 'gold' | 'silver' | 'bronze' | 'finish';
-export type RacePhase = 'staging' | 'running' | 'finished';
+export type RacePhase = 'staging' | 'running' | 'finished' | 'retired';
 
 /** Best medal earned for a time, or 'finish' if it beat none of them. */
 export function medalFor(time: number, medals: MedalTimes): Medal {
@@ -39,6 +39,8 @@ export class Race {
   splits: Split[] = [];
   finishTime: number | null = null;
   medal: Medal | null = null;
+  /** Why the run ended, when the car failed rather than finished. */
+  retirement: string | null = null;
 
   private nextCheckpoint = 0;
   private hint: number | undefined;
@@ -58,8 +60,19 @@ export class Race {
   }
 
   /** Call once per fixed step, after the sim has advanced. */
+  /**
+   * End the run without a finish. The clock stops, no medal is awarded, and
+   * P5 will still charge for the repairs — which is the whole point of the
+   * damage model having consequences.
+   */
+  retire(reason: string): void {
+    if (this.phase === 'finished' || this.phase === 'retired') return;
+    this.phase = 'retired';
+    this.retirement = reason;
+  }
+
   update(state: VehicleState, dt: number): void {
-    if (this.phase === 'finished') return;
+    if (this.phase === 'finished' || this.phase === 'retired') return;
 
     const here = this.stage.progressAt(state.position, this.hint);
     this.hint = here.index;
@@ -104,6 +117,7 @@ export class Race {
     this.splits = [];
     this.finishTime = null;
     this.medal = null;
+    this.retirement = null;
     this.nextCheckpoint = 0;
     this.hint = undefined;
   }

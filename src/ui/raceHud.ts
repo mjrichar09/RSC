@@ -8,6 +8,7 @@
  */
 
 import type { Medal, Race } from '../game/race.js';
+import type { DamageModel } from '../sim/damage.js';
 import type { Stage } from '../sim/stage.js';
 
 export const formatTime = (seconds: number): string => {
@@ -98,7 +99,21 @@ export class RaceHud {
     this.panel.innerHTML = '';
   }
 
-  update(race: Race): void {
+  /** Repair bill appended to the finish panel — the cost of how you drove. */
+  private billMarkup(damage: DamageModel | null): string {
+    if (!damage) return '';
+    const bill = damage.repairBill();
+    if (bill.total === 0) return '<div class="finish-bill"><div class="bill-total"><span>REPAIRS</span><b>none</b></div></div>';
+
+    const rows = bill.lines
+      .slice(0, 5)
+      .map((l) => `<div class="bill-row"><span>${l.label}</span><span>${l.cost}</span></div>`)
+      .join('');
+    const rest = bill.lines.length > 5 ? `<div class="bill-row"><span>+${bill.lines.length - 5} more</span><span></span></div>` : '';
+    return `<div class="finish-bill">${rows}${rest}<div class="bill-total"><span>REPAIRS</span><b>${bill.total}</b></div></div>`;
+  }
+
+  update(race: Race, damage: DamageModel | null = null): void {
     this.clock.textContent = formatTime(race.time);
     this.clock.classList.toggle('staged', race.phase === 'staging');
     this.progressFill.style.width = `${(race.progress * 100).toFixed(1)}%`;
@@ -122,7 +137,9 @@ export class RaceHud {
     if (race.phase !== this.lastPhase) {
       this.lastPhase = race.phase;
       if (race.phase === 'finished' && race.medal) {
-        this.showFinish(race.medal, race.finishTime ?? 0, race.stage);
+        this.showFinish(race.medal, race.finishTime ?? 0, race.stage, damage);
+      } else if (race.phase === 'retired') {
+        this.showRetired(race.retirement ?? 'RETIRED', race.time, damage);
       }
     }
   }
@@ -136,7 +153,18 @@ export class RaceHud {
     this.panel.prepend(banner);
   }
 
-  private showFinish(medal: Medal, time: number, stage: Stage): void {
+  /** The run ended without a finish: no medal, no payout, full repair bill. */
+  private showRetired(reason: string, time: number, damage: DamageModel | null): void {
+    this.panel.className = 'race-panel is-open finish-retired';
+    this.panel.innerHTML = `
+      <div class="finish-medal">RETIRED</div>
+      <div class="finish-reason">${reason}</div>
+      <div class="finish-time">${formatTime(time)}</div>
+      ${this.billMarkup(damage)}
+      <div class="finish-hint"><b>R</b> to restart</div>`;
+  }
+
+  private showFinish(medal: Medal, time: number, stage: Stage, damage: DamageModel | null): void {
     const m = stage.def.medals;
     const rows = (
       [
@@ -160,6 +188,7 @@ export class RaceHud {
       <div class="finish-medal">${MEDAL_LABEL[medal]}</div>
       <div class="finish-time">${formatTime(time)}</div>
       <div class="finish-medals">${rows}</div>
+      ${this.billMarkup(damage)}
       <div class="finish-hint"><b>R</b> to restart</div>`;
   }
 }

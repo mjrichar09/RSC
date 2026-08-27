@@ -38,11 +38,18 @@ const cells = cellSpec.split(',').map((spec) => {
   const isTrace = name!.startsWith('trace:');
   // `ghost:` seeds a recorded AI lap first, so the frame shows the chase.
   const withGhost = name!.startsWith('ghost:');
-  const id = isTrace ? name!.slice(6) : withGhost ? name!.slice(6) : name!;
+  // `crash:<stage>:<seconds>@<t>` drives into the bank before the frame.
+  const crashMatch = /^crash(\d+(?:\.\d+)?)?:(.+)$/.exec(name!);
+  const crashFor = crashMatch ? Number(crashMatch[1] ?? '2') : 0;
+
+  const id = isTrace || withGhost ? name!.slice(6) : (crashMatch?.[2] ?? name!);
   const url = isTrace
     ? `/?trace=${id}&t=${seconds}`
-    : `/?stage=${id}&t=${seconds}${withGhost ? '&ghost=1' : ''}`;
-  return { url, label: `${id} @ ${seconds}s${withGhost ? ' + ghost' : ''}` };
+    : `/?stage=${id}&t=${seconds}${withGhost ? '&ghost=1' : ''}${crashFor ? `&crash=${crashFor}` : ''}`;
+  return {
+    url,
+    label: `${id} @ ${seconds}s${withGhost ? ' + ghost' : ''}${crashFor ? ` + ${crashFor}s crash` : ''}`,
+  };
 });
 
 const server = await createServer({ server: { port: 0 }, logLevel: 'error' });
@@ -91,7 +98,10 @@ try {
     await page.waitForFunction(() => window.RSC?.rendered === true, undefined, { timeout: 90_000 });
     const buf = await page.screenshot({ type: 'png' });
     shots.push(`data:image/png;base64,${buf.toString('base64')}`);
-    console.log(`  captured ${cell.label}`);
+    // Print the game's own numbers alongside: text is far cheaper to check than
+    // an image, and most questions a frame raises are answerable from it.
+    const status = await page.evaluate(() => window.RSC?.status?.() ?? null);
+    console.log(`  captured ${cell.label}  ${status ? JSON.stringify(status) : ''}`);
   }
 
   // Stitch in-page: an offscreen canvas is already available and needs no

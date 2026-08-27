@@ -33,6 +33,25 @@ export interface MedalTimes {
   bronze: number;
 }
 
+export type PropKind = 'tree' | 'rock' | 'bale' | 'pole';
+
+export interface StageProp {
+  kind: PropKind;
+  position: Vec3;
+  /** Collider half-extents, metres. */
+  radius: number;
+  height: number;
+  /** Rotation about Y, radians. Visual only. */
+  yaw: number;
+}
+
+/** What lines the verge in each biome, and how densely. */
+export interface HazardProfile {
+  kinds: PropKind[];
+  /** Average metres between hazards. Smaller is more claustrophobic. */
+  spacing: number;
+}
+
 export interface StageDef {
   id: string;
   name: string;
@@ -46,9 +65,42 @@ export interface StageDef {
   /** Cost to enter. Zero means the stage is always free to attempt. */
   entryFee: number;
   cameraZones?: CameraZone[];
+  /** Roadside hazards. Omit for a bare corridor. */
+  hazards?: HazardProfile;
   /** Number of intermediate checkpoints. They are spaced evenly along the stage. */
   checkpoints?: number;
 }
+
+/**
+ * Deterministic RNG, so a stage's hazards are identical on every load and in
+ * every headless run. Nothing about a stage may depend on Math.random.
+ */
+function seededRandom(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Hash a stage id into a seed, so hazard layout is stable but stage-specific. */
+function hashString(text: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+const PROP_SHAPE: Record<PropKind, { radius: number; height: number }> = {
+  tree: { radius: 0.42, height: 5.5 },
+  rock: { radius: 0.85, height: 1.3 },
+  bale: { radius: 0.75, height: 1.5 },
+  pole: { radius: 0.16, height: 2.2 },
+};
 
 /** Corridor cross-section, in metres either side of the driveable width. */
 const VERGE_WIDTH = 3.2;
@@ -110,6 +162,7 @@ export class Stage {
   readonly spline: Spline;
   readonly geometry: StageGeometry;
   readonly checkpoints: Checkpoint[];
+  readonly props: StageProp[];
   readonly start: { position: Vec3; heading: number };
   readonly length: number;
 
@@ -119,6 +172,7 @@ export class Stage {
     this.length = this.spline.length;
     this.geometry = this.buildGeometry();
     this.checkpoints = this.buildCheckpoints(def.checkpoints ?? 3);
+    this.props = this.buildProps();
 
     // Sit the car a few metres up the road from the start line, well inside the
     // geometry, and let the apron cover anything behind it.
@@ -235,6 +289,60 @@ export class Stage {
       out.push({ distance, position: s.position, width: s.width, right: s.right });
     }
     return out;
+  }
+
+  /**
+   * Place roadside hazards along the verge.
+   *
+   * Without them the damage model has almost nothing to act on: the
+   * embankments are shallow ramps, so a car that runs wide simply climbs one
+   * and slides back with a couple of thousand newton-seconds of contact — far
+   * below the threshold for even paint damage. Real rally stages are lined with
+   * trees, rocks and bales, and those are what make going off-line a decision
+   * rather than a minor inconvenience.
+   *
+   * They sit just beyond the verge, so clipping one is the price of running
+   * genuinely wide rather than of using the road's full width.
+   */
+  private buildProps(): StageProp[] {
+    const profile = this.def.hazards;
+    if (!profile || profile.kinds.length === 0) return [];
+
+    const random = seededRandom(hashString(this.def.id));
+    const props: StageProp[] = [];
+    const gateClearance = 14;
+
+    for (let d = 12; d < this.length - 12; d += profile.spacing * (0.6 + random() * 0.8)) {
+      // Keep the start, finish and every checkpoint gate clear.
+      const nearGate =
+        d < gateClearance ||
+        d > this.length - gateClearance ||
+        this.checkpoints.some((c) => Math.abs(c.distance - d) < gateClearance);
+      if (nearGate) continue;
+
+      const sample = this.spline.at(d);
+      const side = random() < 0.5 ? -1 : 1;
+      const kind = profile.kinds[Math.floor(random() * profile.kinds.length)]!;
+      const shape = PROP_SHAPE[kind];
+
+      // Just past the verge, scattered into the lower part of the bank.
+      const offset = sample.width + VERGE_WIDTH * 0.85 + random() * BANK_WIDTH * 0.75;
+      const along = (random() - 0.5) * profile.spacing * 0.4;
+
+      const base = add(
+        add(sample.position, scale(sample.right, offset * side)),
+        scale(sample.forward, along),
+      );
+
+      props.push({
+        kind,
+        position: v3(base.x, base.y - VERGE_DROP, base.z),
+        radius: shape.radius,
+        height: shape.height,
+        yaw: random() * Math.PI * 2,
+      });
+    }
+    return props;
   }
 
   /** Total half-width of the corridor at a sample, including verge and bank. */

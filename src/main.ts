@@ -13,6 +13,7 @@ import { SaveStore } from './game/save.js';
 import { NEUTRAL_INPUT } from './sim/input.js';
 import { Driver } from './sim/driver.js';
 import { GhostPlayer, GhostRecorder } from './sim/replay.js';
+import type { FailureId } from './sim/damage.js';
 import { Stage } from './sim/stage.js';
 import { TRACES, sampleTrace } from './sim/trace.js';
 import { SimWorld, initPhysics } from './sim/world.js';
@@ -28,6 +29,7 @@ import { buildStageView, type StageView } from './render/stageMesh.js';
 import { Controls } from './ui/controls.js';
 import { Hud } from './ui/hud.js';
 import { RaceHud } from './ui/raceHud.js';
+import { DamagePanel } from './ui/damagePanel.js';
 import { TuningPanel } from './ui/tuningPanel.js';
 
 /**
@@ -37,8 +39,13 @@ import { TuningPanel } from './ui/tuningPanel.js';
 interface HarnessHooks {
   ready: boolean;
   rendered: boolean;
-  /** Run a stage forward with the AI driver to `seconds`, then draw. */
-  seekStage: (stageId: string, seconds: number) => void;
+  /**
+   * Run a stage forward with the AI driver to `seconds`, then draw.
+   * `crashFor` seconds of full lock into the embankment first, so a harness
+   * frame can show real damage produced by the real impact pipeline rather
+   * than by poking numbers into the model.
+   */
+  seekStage: (stageId: string, seconds: number, crashFor?: number) => void;
   /**
    * Drive a full AI lap, store it as the ghost, then replay a fresh run to
    * `seconds` so both cars are on screen. Used by the screenshot harness.
@@ -47,6 +54,8 @@ interface HarnessHooks {
   /** Run a proving-ground input trace to `seconds`, then draw. */
   seekTrace: (traceName: string, seconds: number) => void;
   draw: () => void;
+  /** Text snapshot for the harness: cheaper to check than a screenshot. */
+  status: () => Record<string, unknown>;
 }
 
 declare global {
@@ -57,6 +66,18 @@ declare global {
 
 /** Seconds of being stuck before the car is put back on the road. */
 const AUTO_RESCUE_AFTER = 3.5;
+
+/** Why the run ended, in words the player can act on. */
+const FAILURE_REASON: Record<FailureId, string> = {
+  'engine-seized': 'Engine seized',
+  overheated: 'Engine overheated — the radiator was holed',
+  'driveshaft-snapped': 'Driveshaft snapped',
+  'out-of-fuel': 'Out of fuel',
+  'wheel-lost-FL': 'Lost the front left wheel',
+  'wheel-lost-FR': 'Lost the front right wheel',
+  'wheel-lost-RL': 'Lost the rear left wheel',
+  'wheel-lost-RR': 'Lost the rear right wheel',
+};
 
 async function main(): Promise<void> {
   await initPhysics();
@@ -70,6 +91,7 @@ async function main(): Promise<void> {
   ghostView.visible = false;
   const hud = new Hud(hudRoot);
   const raceHud = new RaceHud(hudRoot);
+  const damagePanel = new DamagePanel(hudRoot);
   const controls = new Controls();
   const save = new SaveStore();
   await save.open();
@@ -106,8 +128,11 @@ async function main(): Promise<void> {
     stageView = buildStageView(stage);
     scene.add(stageView.group);
 
-    world = new SimWorld({ stage });
+    // Damage is on for stages and off for the proving ground: the handling
+    // tests and the tuning sweep are measuring the car, not the crashing.
+    world = new SimWorld({ stage, damage: true });
     race = new Race(stage);
+    damagePanel.reset();
     raceHud.setStage(stage);
     tuningPanel?.rebind(world.vehicle.tuning);
 
@@ -143,6 +168,8 @@ async function main(): Promise<void> {
       raceHud.setSplitDeltas([]);
       raceHud.setDelta(null);
       recorder.reset();
+      world.damage?.reset();
+      damagePanel.reset();
       camera.applyZones(stage.def.cameraZones, 0);
     } else {
       world.vehicle.reset({ x: 0, y: 1.2, z: 0 }, 0);
@@ -217,7 +244,7 @@ async function main(): Promise<void> {
   window.RSC = {
     ready: true,
     rendered: false,
-    seekStage(stageId, seconds) {
+    seekStage(stageId, seconds, crashFor = 0) {
       // Reuse the loaded stage when possible: reloading would drop the ghost
       // that seedGhostAndSeek has just attached.
       if (!stage || stage.def.id !== stageId) loadStage(stageId);
@@ -228,6 +255,16 @@ async function main(): Promise<void> {
       while (world.time < seconds) {
         world.step(driver.input(world.state(), world.dt));
         race!.update(world.state(), world.dt);
+      }
+      if (crashFor > 0) {
+        const until = world.time + crashFor;
+        while (world.time < until) {
+          world.step({ throttle: 1, brake: 0, steer: 1, handbrake: 0 });
+          race!.update(world.state(), world.dt);
+          const failure = [...(world.damage?.failures ?? [])][0];
+          if (failure) race!.retire(FAILURE_REASON[failure]);
+        }
+        damagePanel.report(world.damage!.drainEvents());
       }
       raceHud.setSplitDeltas(
         race!.splits.map((split) => {
@@ -246,7 +283,8 @@ async function main(): Promise<void> {
       }
       camera.applyZones(stage!.def.cameraZones, race!.furthest);
       camera.jumpTo(world.state().position);
-      raceHud.update(race!);
+      raceHud.update(race!, world.damage);
+      damagePanel.update(world.damage!);
       hud.update(world.state(), 60);
     },
     async seedGhostAndSeek(stageId, seconds) {
@@ -284,6 +322,24 @@ async function main(): Promise<void> {
       drawOnce(1, 1 / 60);
       window.RSC!.rendered = true;
     },
+    status() {
+      const d = world.damage;
+      return {
+        stage: stage?.def.id ?? 'free',
+        phase: race?.phase ?? 'n/a',
+        time: race?.time.toFixed(2),
+        condition: d ? +(d.condition * 100).toFixed(1) : null,
+        bill: d?.repairBill().total ?? null,
+        worst: d
+          ? d
+              .repairBill()
+              .lines.slice(0, 3)
+              .map((l) => l.label)
+          : null,
+        failures: d ? [...d.failures] : [],
+        temp: d ? +d.temperature.toFixed(2) : null,
+      };
+    },
   };
 
   const harnessTrace = params.get('trace');
@@ -296,7 +352,7 @@ async function main(): Promise<void> {
   if (harnessSeek) {
     const id = params.get('stage') ?? STAGES[0]!.id;
     if (params.has('ghost')) await window.RSC.seedGhostAndSeek(id, Number(harnessSeek));
-    else window.RSC.seekStage(id, Number(harnessSeek));
+    else window.RSC.seekStage(id, Number(harnessSeek), Number(params.get('crash') ?? '0'));
     window.RSC.draw();
     return;
   }
@@ -317,6 +373,15 @@ async function main(): Promise<void> {
       const wasRunning = race.phase === 'running';
       const splitsBefore = race.splits.length;
       race.update(state, dt);
+
+      // Surface what just broke while the impact is still on screen.
+      if (world.damage) {
+        damagePanel.report(world.damage.drainEvents());
+        damagePanel.update(world.damage);
+
+        const failure = [...world.damage.failures][0];
+        if (failure && race.phase === 'running') race.retire(FAILURE_REASON[failure]);
+      }
 
       if (race.phase === 'running') {
         recorder.capture(race.time, race.furthest, state);

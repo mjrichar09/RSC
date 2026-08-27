@@ -39,6 +39,7 @@ npm test           # unit + headless handling regression tests (text, fast)
 npm run telemetry  # headless run -> speeds, drift, slide time, 0-100
 npm run sweep      # steady-state cornering matrix -> grip and balance table
 npm run stages     # drive every stage with the AI -> completable? how fast?
+npm run crash      # drive into a wall at known speeds -> what breaks, what it costs
 npm run shoot      # -> ONE composite grid PNG in shots/
 npm run typecheck
 ```
@@ -80,6 +81,36 @@ telemetry and the regression suite possible.
 The sim runs at a fixed 120 Hz; rendering interpolates between the last two
 steps, so handling is identical on any display refresh rate.
 
+### Damage
+
+Every part that can break is a component with a position on the car, a
+toughness and a repair cost. An impact is resolved to a point on the chassis and
+each component takes damage in proportion to how close it is and how hard the
+hit was — so a nose-first hit wrecks the radiator and the front suspension,
+while the same energy on the rear quarter mostly costs panels.
+
+Two rules shape it. Effects are **continuous and always legible**: a component at
+70% degrades the car by a felt amount, and the HUD names the worst one rather
+than saying "damaged". Total failures are **rare, loud, and always the
+consequence of something you saw happen** — a holed radiator does not stop you,
+it gives you about thirty seconds.
+
+Thresholds are in newton-seconds, which nobody has intuition for, so they are
+calibrated with `npm run crash` against measured impacts rather than guessed. A
+flat nose-first hit produces roughly 350 N·s per km/h of entry speed:
+
+| Entry | Outcome |
+|---|---|
+| 20 km/h | a scrape — paint and a light, ~120 |
+| 50 km/h | radiator holed, panel wrecked, ~980 |
+| 70 km/h | engine down to 67%, steering bent, ~2 600 |
+| 130 km/h | engine seized — the race is over |
+
+Stages are lined with trees, rocks and bales because without them the damage
+model has nothing to act on: the embankments are shallow ramps, so a car that
+runs wide climbs one and slides back with far too little force to hurt anything.
+The hazards are what make running wide a decision rather than an inconvenience.
+
 ### Ghosts
 
 Ghosts store sampled transforms, not inputs. Replaying inputs would be smaller,
@@ -117,7 +148,9 @@ buried in an embankment belonging to a section it has not reached yet.
 - **P3 — Ghosts** ✅ your best run per stage recorded, saved to IndexedDB and
   replayed as a translucent chase car, with a live delta and per-checkpoint
   split deltas against it.
-- **P4 — Damage.** Component graph, impact mapping, failures, damage HUD.
+- **P4 — Damage** ✅ 31 components with their own toughness and repair cost,
+  impacts resolved to where they actually landed, continuous handling effects,
+  heat and fuel, race-ending failures, and a damage HUD that names what broke.
 - **P5 — Economy.** Entry fees, payouts, repair bills, upgrades, career.
 - **P6 — Juice.** Particles, skids, audio, stylized shading, replay cam.
 - **P7 — Scale & ship.** Procedural stage generation, Tauri desktop build.

@@ -11,7 +11,8 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { CAR, SIM, type VehicleTuning } from '../data/tuning.js';
 import type { DriverInput } from './input.js';
 import { NEUTRAL_INPUT } from './input.js';
-import { type Quat, type Vec3, add, lerpVec, slerp, v3 } from './math.js';
+import { DamageModel, type DamageOptions, impactPointFromForce } from './damage.js';
+import { type Quat, type Vec3, add, lerpVec, rotateInverse, slerp, v3 } from './math.js';
 import { type Stage } from './stage.js';
 import { type SurfaceId, surface } from './surfaces.js';
 import { Vehicle, type VehicleState } from './vehicle.js';
@@ -43,9 +44,21 @@ export interface WorldOptions {
   baseSurface?: SurfaceId;
   /** Rectangular surface patches, tested in order. Replaced by stages in P2. */
   patches?: GroundPatch[];
+  /**
+   * A static wall on the proving ground, for controlled impact calibration.
+   * Damage thresholds are in units nobody has intuition for, so they are set by
+   * driving into this at a known speed rather than by guessing.
+   */
+  wall?: { x: number; z: number; halfX: number; halfY: number; halfZ: number };
   spawn?: { position: Vec3; heading?: number };
   /** Overrides merged over the default car. Drives the sweep tool and the live panel. */
   tuning?: Partial<VehicleTuning>;
+  /**
+   * Enable component damage. Pass options to configure it, or `false`/omit for
+   * an indestructible car — which is what the handling tests and the tuning
+   * sweep want, since they are measuring the car, not the crashing.
+   */
+  damage?: DamageOptions | boolean;
 }
 
 /** Merge overrides over the baseline car setup. */
@@ -58,6 +71,7 @@ export class SimWorld {
   readonly world: RAPIER.World;
   readonly vehicle: Vehicle;
   readonly stage: Stage | null;
+  readonly damage: DamageModel | null;
   readonly dt = 1 / SIM.hz;
 
   /** Simulated seconds since construction. Not wall-clock time. */
@@ -71,6 +85,8 @@ export class SimWorld {
    * per-wheel surface lookup into a short local scan instead of a spatial query.
    */
   private splineHint: number | undefined;
+  /** Collects contact-force events so impacts can be turned into damage. */
+  private readonly events: RAPIER.EventQueue | null;
   /** Transform at the start of the last fixed step, for render interpolation. */
   private previous: { position: Vec3; rotation: Quat } = {
     position: v3(),
@@ -107,14 +123,90 @@ export class SimWorld {
       );
     }
 
+    if (options.wall) {
+      const w = options.wall;
+      const wallBody = this.world.createRigidBody(
+        RAPIER.RigidBodyDesc.fixed().setTranslation(w.x, w.halfY, w.z),
+      );
+      this.world.createCollider(
+        RAPIER.ColliderDesc.cuboid(w.halfX, w.halfY, w.halfZ).setFriction(0.8),
+        wallBody,
+      );
+    }
+
+    if (this.stage) {
+      // Hazards are static cylinders standing on the verge. They are what give
+      // the damage model something to actually hit.
+      for (const prop of this.stage.props) {
+        const body = this.world.createRigidBody(
+          RAPIER.RigidBodyDesc.fixed().setTranslation(
+            prop.position.x,
+            prop.position.y + prop.height / 2,
+            prop.position.z,
+          ),
+        );
+        this.world.createCollider(
+          RAPIER.ColliderDesc.cylinder(prop.height / 2, prop.radius).setFriction(0.7),
+          body,
+        );
+      }
+    }
+
     const spawn =
       options.spawn ??
       (this.stage
         ? { position: this.stage.start.position, heading: this.stage.start.heading }
         : { position: v3(0, 1.2, 0), heading: 0 });
 
+    this.damage =
+      options.damage === undefined || options.damage === false
+        ? null
+        : new DamageModel(options.damage === true ? {} : options.damage);
+    this.events = this.damage ? new RAPIER.EventQueue(true) : null;
+
     this.vehicle = new Vehicle(RAPIER, this.world, resolveTuning(options.tuning), spawn, {
       surfaceAt: (p) => surface(this.surfaceIdAt(p)),
+      ...(this.damage ? { damage: this.damage } : {}),
+    });
+  }
+
+  /**
+   * Turn this step's contact forces into component damage.
+   *
+   * Rapier reports a force magnitude and the direction of the strongest
+   * contact, but not a dependable contact point, so the impact location is
+   * reconstructed from the direction the car was pushed — see
+   * `impactPointFromForce`. Force is integrated over the step into an impulse,
+   * which means a long gentle scrape does little while a single hard hit does
+   * a lot, exactly as it should.
+   */
+  private processImpacts(): void {
+    if (!this.events || !this.damage) return;
+
+    const carHandle = this.vehicle.collider.handle;
+    const rotation = this.vehicle.body.rotation() as Quat;
+
+    this.events.drainContactForceEvents((event) => {
+      const involvesCar = event.collider1() === carHandle || event.collider2() === carHandle;
+      if (!involvesCar) return;
+
+      const impulse = event.totalForceMagnitude() * this.dt;
+      if (impulse <= 0) return;
+
+      const worldDirection = event.maxForceDirection() as Vec3;
+      // Rapier's force direction points from collider1 toward collider2. When
+      // the car is collider2 that already means "the way the car was pushed";
+      // when it is collider1 the direction points away from it and has to be
+      // flipped. Getting this backwards puts a nose-first impact through the
+      // back of the car.
+      const sign = event.collider1() === carHandle ? -1 : 1;
+      const local = rotateInverse(rotation, {
+        x: worldDirection.x * sign,
+        y: worldDirection.y * sign,
+        z: worldDirection.z * sign,
+      });
+
+      this.damage!.applyImpact(impactPointFromForce(local), impulse);
     });
   }
 
@@ -142,7 +234,8 @@ export class SimWorld {
       rotation: { ...(this.vehicle.body.rotation() as Quat) },
     };
     this.vehicle.step(this.dt, input);
-    this.world.step();
+    this.world.step(this.events ?? undefined);
+    this.processImpacts();
     this.time += this.dt;
     this.steps++;
   }

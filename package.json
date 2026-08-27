@@ -12,7 +12,8 @@
     "shoot": "tsx tools/shoot.ts",
     "typecheck": "tsc --noEmit",
     "sweep": "tsx tools/sweep.ts",
-    "stages": "tsx tools/stages.ts"
+    "stages": "tsx tools/stages.ts",
+    "crash": "tsx tools/crash.ts"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.14.0",

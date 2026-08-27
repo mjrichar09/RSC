@@ -1,0 +1,245 @@
+/**
+ * Component damage.
+ *
+ * The design rules these protect: impacts land where they actually hit, effects
+ * are continuous rather than binary, total failures are reachable but only from
+ * genuinely big accidents, and the repair bill is proportional to what broke.
+ */
+
+import { describe, expect, it } from 'vitest';
+import {
+  COMPONENTS,
+  DamageModel,
+  impactPointFromForce,
+} from '../src/sim/damage.js';
+import { v3 } from '../src/sim/math.js';
+
+/** A head-on impact pushes the car backwards, so the force direction is -z. */
+const HEAD_ON = v3(0, 0, -1);
+const REAR_ON = v3(0, 0, 1);
+const LEFT_ON = v3(1, 0, 0);
+
+describe('impactPointFromForce', () => {
+  it('puts a head-on impact on the nose', () => {
+    const p = impactPointFromForce(HEAD_ON);
+    expect(p.z).toBeGreaterThan(1.5);
+    expect(Math.abs(p.x)).toBeLessThan(0.1);
+  });
+
+  it('puts a rear impact on the tail', () => {
+    expect(impactPointFromForce(REAR_ON).z).toBeLessThan(-1.5);
+  });
+
+  it('puts a hit from the left on the left flank', () => {
+    const p = impactPointFromForce(LEFT_ON);
+    expect(p.x).toBeLessThan(-0.5);
+  });
+
+  it('never returns a point outside the chassis', () => {
+    for (const d of [v3(1, 1, 1), v3(-3, 0.2, 0.4), v3(0, -1, 0), v3(0.1, 0, -5)]) {
+      const p = impactPointFromForce(d);
+      expect(Math.abs(p.x)).toBeLessThanOrEqual(0.86);
+      expect(Math.abs(p.y)).toBeLessThanOrEqual(0.46);
+      expect(Math.abs(p.z)).toBeLessThanOrEqual(1.96);
+    }
+  });
+
+  it('survives a zero-length direction', () => {
+    expect(Number.isFinite(impactPointFromForce(v3(0, 0, 0)).z)).toBe(true);
+  });
+});
+
+describe('impacts', () => {
+  it('starts undamaged', () => {
+    const d = new DamageModel();
+    expect(d.condition).toBe(1);
+    expect(d.retired).toBe(false);
+    expect(d.repairBill().total).toBe(0);
+  });
+
+  it('ignores impacts below every threshold', () => {
+    const d = new DamageModel();
+    d.applyImpact(impactPointFromForce(HEAD_ON), 800);
+    expect(d.condition).toBe(1);
+  });
+
+  it('damages the front, and only the front, in a head-on hit', () => {
+    const d = new DamageModel();
+    d.applyImpact(impactPointFromForce(HEAD_ON), 20_000);
+
+    expect(d.get('panelFront')).toBeLessThan(1);
+    expect(d.get('cooling')).toBeLessThan(1);
+    // Nothing at the other end of the car should be touched.
+    expect(d.get('panelRear')).toBe(1);
+    expect(d.get('differential')).toBe(1);
+    expect(d.get('tyreRL')).toBe(1);
+  });
+
+  it('damages one corner in a side hit, not both', () => {
+    const d = new DamageModel();
+    d.applyImpact(impactPointFromForce(LEFT_ON), 22_000);
+    expect(d.get('panelLeft')).toBeLessThan(1);
+    expect(d.get('panelRight')).toBe(1);
+  });
+
+  it('scales with impact severity', () => {
+    const light = new DamageModel();
+    const heavy = new DamageModel();
+    light.applyImpact(impactPointFromForce(HEAD_ON), 12_000);
+    heavy.applyImpact(impactPointFromForce(HEAD_ON), 30_000);
+    expect(heavy.condition).toBeLessThan(light.condition);
+    expect(heavy.repairBill().total).toBeGreaterThan(light.repairBill().total);
+  });
+
+  it('never drives a component below zero, however many hits it takes', () => {
+    const d = new DamageModel();
+    for (let i = 0; i < 40; i++) d.applyImpact(impactPointFromForce(HEAD_ON), 40_000);
+    for (const c of COMPONENTS) expect(d.get(c.id)).toBeGreaterThanOrEqual(0);
+  });
+
+  it('ends the race on a big enough head-on impact', () => {
+    const d = new DamageModel();
+    for (let i = 0; i < 4; i++) d.applyImpact(impactPointFromForce(HEAD_ON), 46_000);
+    expect(d.retired).toBe(true);
+    expect(d.failures.has('engine-seized')).toBe(true);
+  });
+
+  it('is softened by a rollcage — but only for what a cage protects', () => {
+    const bare = new DamageModel();
+    const caged = new DamageModel({ rollcage: 0.6 });
+    for (const d of [bare, caged]) d.applyImpact(impactPointFromForce(HEAD_ON), 26_000);
+
+    expect(caged.get('engine')).toBeGreaterThan(bare.get('engine'));
+    // Panels are bodywork, not structure: a cage does nothing for them.
+    expect(caged.get('panelFront')).toBeCloseTo(bare.get('panelFront'), 5);
+  });
+
+  it('reports what broke, so the HUD can say so', () => {
+    const d = new DamageModel();
+    d.applyImpact(impactPointFromForce(HEAD_ON), 20_000);
+    const events = d.drainEvents();
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.every((e) => e.amount > 0 && e.remaining >= 0)).toBe(true);
+    // Draining clears them, so the same break is never reported twice.
+    expect(d.drainEvents()).toEqual([]);
+  });
+});
+
+describe('handling effects', () => {
+  it('leaves an undamaged car completely unaffected', () => {
+    const fx = new DamageModel({ random: () => 1 }).effects();
+    expect(fx.engineTorque).toBe(1);
+    expect(fx.wheelGrip).toEqual([1, 1, 1, 1]);
+    expect(fx.steeringOffset).toBe(0);
+    expect(fx.dragScale).toBe(1);
+    expect(fx.wheelLost).toEqual([false, false, false, false]);
+  });
+
+  it('degrades continuously rather than in steps', () => {
+    const readings = [1, 0.75, 0.5, 0.25, 0].map((health) => {
+      const d = new DamageModel({ random: () => 1 });
+      d.health.set('engine', health);
+      return d.effects().engineTorque;
+    });
+    for (let i = 1; i < readings.length; i++) {
+      expect(readings[i]!).toBeLessThan(readings[i - 1]!);
+    }
+  });
+
+  it('loses grip on the corner with the damaged tyre only', () => {
+    const d = new DamageModel({ random: () => 1 });
+    d.health.set('tyreFL', 0);
+    const fx = d.effects();
+    expect(fx.wheelGrip[0]).toBeLessThan(0.3);
+    expect(fx.wheelGrip[1]).toBe(1);
+  });
+
+  it('pulls the steering and reduces lock when the rack is bent', () => {
+    const d = new DamageModel({ random: () => 1 });
+    d.health.set('steering', 0.3);
+    const fx = d.effects();
+    expect(fx.steeringOffset).toBeGreaterThan(0);
+    expect(fx.steeringRange).toBeLessThan(1);
+  });
+
+  it('detaches a wheel when its hub is destroyed', () => {
+    const d = new DamageModel({ random: () => 1 });
+    d.health.set('hubRR', 0);
+    expect(d.effects().wheelLost).toEqual([false, false, false, true]);
+  });
+});
+
+describe('heat and fuel', () => {
+  const race = (d: DamageModel, seconds: number) => {
+    for (let t = 0; t < seconds * 120; t++) d.update(1 / 120, { rpmFraction: 0.62, speed: 26 });
+  };
+
+  it('never overheats with a healthy radiator', () => {
+    const d = new DamageModel();
+    race(d, 300);
+    expect(d.temperature).toBeLessThan(0.1);
+    expect(d.failures.has('overheated')).toBe(false);
+  });
+
+  it('boils within a stage when the radiator is holed', () => {
+    const d = new DamageModel();
+    d.health.set('cooling', 0);
+    race(d, 60);
+    // The failure has to be able to bite inside a race, or it means nothing.
+    expect(d.failures.has('overheated')).toBe(true);
+  });
+
+  it('cuts power before it boils, as a warning', () => {
+    const d = new DamageModel({ random: () => 1 });
+    d.health.set('cooling', 0);
+    race(d, 26);
+    expect(d.failures.has('overheated')).toBe(false);
+    expect(d.effects().engineTorque).toBeLessThan(0.95);
+  });
+
+  it('carries enough fuel for any stage, until the line is holed', () => {
+    const healthy = new DamageModel();
+    race(healthy, 200);
+    expect(healthy.fuel).toBeGreaterThan(0);
+    expect(healthy.failures.has('out-of-fuel')).toBe(false);
+
+    const leaking = new DamageModel();
+    leaking.health.set('fuelLine', 0);
+    race(leaking, 200);
+    expect(leaking.failures.has('out-of-fuel')).toBe(true);
+  });
+});
+
+describe('repair bills', () => {
+  it('charges nothing for a pristine car and lists the worst damage first', () => {
+    const d = new DamageModel();
+    expect(d.repairBill().total).toBe(0);
+
+    d.applyImpact(impactPointFromForce(HEAD_ON), 34_000);
+    const bill = d.repairBill();
+    expect(bill.total).toBeGreaterThan(0);
+    for (let i = 1; i < bill.lines.length; i++) {
+      expect(bill.lines[i]!.cost).toBeLessThanOrEqual(bill.lines[i - 1]!.cost);
+    }
+  });
+
+  it('costs more the worse the accident', () => {
+    const bill = (impulse: number) => {
+      const d = new DamageModel();
+      d.applyImpact(impactPointFromForce(HEAD_ON), impulse);
+      return d.repairBill().total;
+    };
+    expect(bill(10_000)).toBeLessThan(bill(20_000));
+    expect(bill(20_000)).toBeLessThan(bill(40_000));
+  });
+
+  it('resets to a factory-fresh car', () => {
+    const d = new DamageModel();
+    for (let i = 0; i < 5; i++) d.applyImpact(impactPointFromForce(HEAD_ON), 40_000);
+    d.reset();
+    expect(d.condition).toBe(1);
+    expect(d.retired).toBe(false);
+    expect(d.temperature).toBe(0);
+    expect(d.fuel).toBe(d.fuelCapacity);
+  });
+});

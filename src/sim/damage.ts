@@ -1,0 +1,372 @@
+/**
+ * Component-level damage.
+ *
+ * Every part that can break is a component with a position on the car, a
+ * toughness, and a repair cost. An impact is resolved to a point on the
+ * chassis, and each component takes damage in proportion to how close it is to
+ * that point and how hard the hit was — so a nose-first hit into a bank wrecks
+ * the radiator and the front suspension, while the same energy taken on the
+ * rear quarter mostly costs panels.
+ *
+ * Two rules shape the whole design:
+ *
+ * 1. Effects are continuous and always legible. A component at 70% health
+ *    degrades the car by a visible, felt amount; nothing is a hidden stat.
+ * 2. Total failures are rare, loud, and always the consequence of something the
+ *    player saw happen. "Hardcore" has to mean consequential, not arbitrary.
+ */
+
+import { type Vec3, clamp, length, sub, v3 } from './math.js';
+
+export type ComponentId =
+  | 'engine'
+  | 'cooling'
+  | 'turbo'
+  | 'transmission'
+  | 'driveshaft'
+  | 'differential'
+  | 'steering'
+  | 'fuelLine'
+  | 'lights'
+  | 'suspensionFL' | 'suspensionFR' | 'suspensionRL' | 'suspensionRR'
+  | 'hubFL' | 'hubFR' | 'hubRL' | 'hubRR'
+  | 'tyreFL' | 'tyreFR' | 'tyreRL' | 'tyreRR'
+  | 'brakeFL' | 'brakeFR' | 'brakeRL' | 'brakeRR'
+  | 'panelFront' | 'panelRear' | 'panelLeft' | 'panelRight' | 'panelRoof' | 'panelFloor';
+
+export interface ComponentDef {
+  id: ComponentId;
+  label: string;
+  /** Position in chassis-local space, metres. */
+  at: Vec3;
+  /** Radius over which an impact still reaches this component, metres. */
+  reach: number;
+  /** Impulse below which this component is unharmed, newton-seconds. */
+  threshold: number;
+  /** Impulse above the threshold that would destroy it outright. */
+  scale: number;
+  /** Cost to repair from destroyed to new. */
+  repairCost: number;
+  /** Whether a rollcage protects it. Panels and glass are not protected. */
+  caged: boolean;
+}
+
+const WHEEL_AT = {
+  FL: v3(-0.78, -0.25, 1.32),
+  FR: v3(0.78, -0.25, 1.32),
+  RL: v3(-0.78, -0.25, -1.32),
+  RR: v3(0.78, -0.25, -1.32),
+} as const;
+
+const corner = (
+  id: ComponentId,
+  label: string,
+  at: Vec3,
+  threshold: number,
+  scale: number,
+  repairCost: number,
+  reach = 1.0,
+): ComponentDef => ({ id, label, at, reach, threshold, scale, repairCost, caged: true });
+
+/**
+ * Thresholds and scales are in newton-seconds, calibrated with `npm run crash`
+ * against measured impacts. As a reference point, a flat nose-first hit into a
+ * wall produces roughly 350 N·s per km/h of entry speed:
+ *
+ *   20 km/h  ~7 000    a parking scrape — paint and a light
+ *   50 km/h  ~18 000   radiator holed, panel wrecked, engine bruised
+ *   70 km/h  ~25 000   a genuinely expensive accident
+ *  100 km/h  ~35 000   the race is very likely over
+ */
+export const COMPONENTS: ComponentDef[] = [
+  // Drivetrain. Deep in the car, so it takes a serious hit to reach.
+  corner('engine', 'Engine', v3(0, -0.1, 1.5), 17000, 17000, 4200, 1.8),
+  // The radiator sits in front of everything and is made of foil.
+  corner('cooling', 'Radiator', v3(0, -0.15, 1.92), 7500, 16000, 620, 1.1),
+  corner('turbo', 'Turbo', v3(0.4, 0.05, 1.25), 16000, 28000, 1800, 0.9),
+  corner('transmission', 'Gearbox', v3(0, -0.2, 0.6), 19000, 34000, 2600, 1.1),
+  corner('driveshaft', 'Driveshaft', v3(0, -0.32, 0), 26000, 22000, 1400, 1.6),
+  corner('differential', 'Differential', v3(0, -0.3, -1.25), 19000, 34000, 1900, 1.0),
+  corner('steering', 'Steering rack', v3(0, -0.24, 1.15), 14000, 26000, 1100, 1.0),
+  corner('fuelLine', 'Fuel line', v3(0, -0.32, -0.8), 15000, 26000, 340, 1.0),
+  corner('lights', 'Lights', v3(0, 0.12, 1.94), 4000, 9000, 260, 0.9),
+
+  // Suspension, hubs, tyres and brakes: one of each per corner, all clustered
+  // at the wheel so a corner impact takes several of them together.
+  ...(['FL', 'FR', 'RL', 'RR'] as const).flatMap((c) => [
+    corner(`suspension${c}` as ComponentId, `Suspension ${c}`, WHEEL_AT[c], 9000, 20000, 880, 0.95),
+    corner(`hub${c}` as ComponentId, `Hub ${c}`, WHEEL_AT[c], 24000, 24000, 1250, 1.0),
+    corner(`tyre${c}` as ComponentId, `Tyre ${c}`, WHEEL_AT[c], 7000, 16000, 310, 0.85),
+    corner(`brake${c}` as ComponentId, `Brake ${c}`, WHEEL_AT[c], 13000, 26000, 540, 0.85),
+  ]),
+
+  // Body panels: cheap, fragile, and the first thing you notice.
+  { id: 'panelFront', label: 'Front panel', at: v3(0, 0, 1.9), reach: 1.5, threshold: 4200, scale: 20000, repairCost: 520, caged: false },
+  { id: 'panelRear', label: 'Rear panel', at: v3(0, 0, -1.9), reach: 1.5, threshold: 4200, scale: 20000, repairCost: 480, caged: false },
+  { id: 'panelLeft', label: 'Left flank', at: v3(-0.84, 0, 0), reach: 1.25, threshold: 4200, scale: 20000, repairCost: 420, caged: false },
+  { id: 'panelRight', label: 'Right flank', at: v3(0.84, 0, 0), reach: 1.25, threshold: 4200, scale: 20000, repairCost: 420, caged: false },
+  { id: 'panelRoof', label: 'Roof', at: v3(0, 0.46, 0), reach: 1.6, threshold: 5000, scale: 21000, repairCost: 560, caged: false },
+  { id: 'panelFloor', label: 'Floor', at: v3(0, -0.46, 0), reach: 1.6, threshold: 9000, scale: 28000, repairCost: 700, caged: false },
+];
+
+export const COMPONENT_BY_ID = new Map(COMPONENTS.map((c) => [c.id, c]));
+
+export type FailureId =
+  | 'engine-seized'
+  | 'overheated'
+  | 'driveshaft-snapped'
+  | 'out-of-fuel'
+  | `wheel-lost-${'FL' | 'FR' | 'RL' | 'RR'}`;
+
+export interface DamageEvent {
+  component: ComponentId;
+  label: string;
+  /** How much health this single impact removed, 0..1. */
+  amount: number;
+  /** Health remaining afterwards. */
+  remaining: number;
+}
+
+/** Multipliers the vehicle applies. All are 1 (or 0) on an undamaged car. */
+export interface DamageEffects {
+  engineTorque: number;
+  /** Random misfire this step — a torque dropout from a damaged engine. */
+  misfiring: boolean;
+  wheelGrip: [number, number, number, number];
+  wheelBrake: [number, number, number, number];
+  wheelSuspension: [number, number, number, number];
+  /** Wheels that have detached. Those corners have no grip and no suspension. */
+  wheelLost: [boolean, boolean, boolean, boolean];
+  /** Constant steering offset from a bent rack, radians. Pulls to one side. */
+  steeringOffset: number;
+  steeringRange: number;
+  /** Extra aerodynamic drag from crumpled panels and a flapping bonnet. */
+  dragScale: number;
+  /** Chance per shift that the gearbox refuses. */
+  shiftFailure: number;
+  retired: boolean;
+}
+
+export interface DamageOptions {
+  /** 0..1 reduction applied to caged components. A rollcage upgrade in P5. */
+  rollcage?: number;
+  /** Litres of fuel carried. */
+  fuel?: number;
+  /** Deterministic random source, so headless runs stay reproducible. */
+  random?: () => number;
+}
+
+const WHEEL_KEYS = ['FL', 'FR', 'RL', 'RR'] as const;
+
+/** Half-extents of the chassis, used to project impacts onto its surface. */
+const CHASSIS = v3(0.85, 0.45, 1.95);
+
+/**
+ * Approximate the impact point on the chassis from the direction the impact
+ * force pushed the car.
+ *
+ * Rapier's contact-force events report a force magnitude and direction but not
+ * a reliable contact point, so the point is reconstructed: the car is pushed
+ * away from whatever it hit, so the impact is on the surface opposite the
+ * force. Projecting onto the chassis box is accurate enough to tell a nose-on
+ * hit from a rear-quarter scrape, which is the distinction that matters.
+ */
+export function impactPointFromForce(localForceDirection: Vec3): Vec3 {
+  const d = v3(-localForceDirection.x, -localForceDirection.y, -localForceDirection.z);
+  const mag = length(d);
+  if (mag < 1e-6) return v3(0, 0, CHASSIS.z);
+
+  // Scale along the direction until it first crosses a face of the box.
+  const t = Math.min(
+    Math.abs(d.x) > 1e-6 ? CHASSIS.x / Math.abs(d.x) : Infinity,
+    Math.abs(d.y) > 1e-6 ? CHASSIS.y / Math.abs(d.y) : Infinity,
+    Math.abs(d.z) > 1e-6 ? CHASSIS.z / Math.abs(d.z) : Infinity,
+  );
+  return v3(d.x * t, d.y * t, d.z * t);
+}
+
+export class DamageModel {
+  /** Health per component, 1 = new, 0 = destroyed. */
+  readonly health = new Map<ComponentId, number>();
+
+  /** Coolant temperature, 0 = cold, 1 = boiling. */
+  temperature = 0;
+  fuel: number;
+  readonly fuelCapacity: number;
+
+  readonly failures = new Set<FailureId>();
+  /** Largest single impact impulse seen, newton-seconds. Used for calibration. */
+  peakImpulse = 0;
+  /** Damage events since the last drain. The HUD turns these into toasts. */
+  private pending: DamageEvent[] = [];
+
+  private readonly rollcage: number;
+  private readonly random: () => number;
+
+  constructor(options: DamageOptions = {}) {
+    this.rollcage = clamp(options.rollcage ?? 0, 0, 0.9);
+    this.fuelCapacity = options.fuel ?? 45;
+    this.fuel = this.fuelCapacity;
+    this.random = options.random ?? Math.random;
+    for (const c of COMPONENTS) this.health.set(c.id, 1);
+  }
+
+  get(id: ComponentId): number {
+    return this.health.get(id) ?? 1;
+  }
+
+  /** True once the car can no longer complete the stage. */
+  get retired(): boolean {
+    return this.failures.size > 0;
+  }
+
+  /** Average condition across every component, for a single headline number. */
+  get condition(): number {
+    let total = 0;
+    for (const c of COMPONENTS) total += this.get(c.id);
+    return total / COMPONENTS.length;
+  }
+
+  drainEvents(): DamageEvent[] {
+    const out = this.pending;
+    this.pending = [];
+    return out;
+  }
+
+  /**
+   * Apply an impact.
+   *
+   * @param localPoint where the impact landed, in chassis-local space
+   * @param impulse    total impulse of the contact, newton-seconds
+   */
+  applyImpact(localPoint: Vec3, impulse: number): void {
+    this.peakImpulse = Math.max(this.peakImpulse, impulse);
+    for (const def of COMPONENTS) {
+      const distance = length(sub(def.at, localPoint));
+      if (distance > def.reach) continue;
+
+      // Linear falloff to the edge of the component's reach.
+      const proximity = 1 - distance / def.reach;
+      const over = impulse - def.threshold;
+      if (over <= 0) continue;
+
+      const mitigation = def.caged ? 1 - this.rollcage : 1;
+      const amount = clamp((over / def.scale) * proximity * mitigation, 0, 1);
+      if (amount < 0.005) continue;
+
+      const before = this.get(def.id);
+      const after = clamp(before - amount, 0, 1);
+      this.health.set(def.id, after);
+      this.pending.push({ component: def.id, label: def.label, amount: before - after, remaining: after });
+
+      if (after <= 0) this.registerFailure(def.id);
+    }
+  }
+
+  private registerFailure(id: ComponentId): void {
+    if (id === 'engine') this.failures.add('engine-seized');
+    if (id === 'driveshaft') this.failures.add('driveshaft-snapped');
+    for (const key of WHEEL_KEYS) {
+      if (id === `hub${key}`) this.failures.add(`wheel-lost-${key}`);
+    }
+  }
+
+  /**
+   * Continuous damage: heat and fuel.
+   *
+   * These are what turn a survivable hit into a race against the clock. A
+   * holed radiator does not stop you — it gives you a couple of minutes.
+   */
+  update(dt: number, load: { rpmFraction: number; speed: number }): void {
+    const cooling = this.get('cooling');
+    const engine = this.get('engine');
+
+    // Heat generated by revs, shed by the radiator and by airflow.
+    //
+    // Rated so that a healthy radiator keeps the car cold indefinitely, while a
+    // holed one boils it in about half a minute. If overheating took longer
+    // than a stage the failure could never actually bite, which would make the
+    // radiator the cheapest and least interesting component on the car.
+    const generated = 0.05 * (0.25 + load.rpmFraction);
+    const shed = 0.055 * (0.15 + cooling * 0.85) * (0.5 + Math.min(Math.abs(load.speed) / 40, 1));
+    this.temperature = clamp(this.temperature + (generated - shed) * dt, 0, 1.2);
+    if (this.temperature >= 1.15) this.failures.add('overheated');
+
+    // Consumption rises with revs; a holed fuel line dumps the rest overboard.
+    const burn = (0.0022 + 0.011 * load.rpmFraction) * (1 + (1 - engine) * 0.4);
+    const leak = (1 - this.get('fuelLine')) * 0.05;
+    this.fuel = Math.max(0, this.fuel - (burn + leak) * dt * 10);
+    if (this.fuel <= 0) this.failures.add('out-of-fuel');
+  }
+
+  /** Current handling penalties. Read once per physics step by the vehicle. */
+  effects(): DamageEffects {
+    const engine = this.get('engine');
+    const overheat = clamp((this.temperature - 0.8) / 0.35, 0, 1);
+
+    const wheelGrip: [number, number, number, number] = [1, 1, 1, 1];
+    const wheelBrake: [number, number, number, number] = [1, 1, 1, 1];
+    const wheelSuspension: [number, number, number, number] = [1, 1, 1, 1];
+    const wheelLost: [boolean, boolean, boolean, boolean] = [false, false, false, false];
+
+    WHEEL_KEYS.forEach((key, i) => {
+      const tyre = this.get(`tyre${key}` as ComponentId);
+      const hub = this.get(`hub${key}` as ComponentId);
+      // A punctured tyre keeps a little grip on the rim, and not much.
+      wheelGrip[i] = tyre <= 0 ? 0.22 : 0.45 + 0.55 * tyre;
+      wheelBrake[i] = this.get(`brake${key}` as ComponentId);
+      wheelSuspension[i] = 0.3 + 0.7 * this.get(`suspension${key}` as ComponentId);
+      wheelLost[i] = hub <= 0;
+    });
+
+    // A bent rack pulls the car to one side by an amount you have to hold out.
+    const steering = this.get('steering');
+    const damage = 1 - steering;
+
+    const panels =
+      (this.get('panelFront') + this.get('panelRear') + this.get('panelLeft') + this.get('panelRight')) / 4;
+
+    return {
+      engineTorque: (0.25 + 0.75 * engine) * (1 - overheat * 0.7),
+      // Below half health the engine starts cutting out at random.
+      misfiring: engine < 0.5 && this.random() < (0.5 - engine) * 0.5,
+      wheelGrip,
+      wheelBrake,
+      wheelSuspension,
+      wheelLost,
+      // Signed by which side the rack bent toward, kept deterministic by
+      // deriving it from the component id rather than from a coin flip.
+      steeringOffset: damage * 0.12,
+      steeringRange: 1 - damage * 0.45,
+      dragScale: 1 + (1 - panels) * 0.35,
+      shiftFailure: (1 - this.get('transmission')) * 0.4,
+      retired: this.retired,
+    };
+  }
+
+  /** Total cost to return the car to new. */
+  repairBill(): { total: number; lines: { id: ComponentId; label: string; cost: number }[] } {
+    const lines: { id: ComponentId; label: string; cost: number }[] = [];
+    let total = 0;
+    for (const def of COMPONENTS) {
+      const missing = 1 - this.get(def.id);
+      if (missing <= 0.001) continue;
+      // Slightly superlinear: a light scuff is cheap, a wrecked part is not.
+      const cost = Math.round(def.repairCost * Math.pow(missing, 1.15));
+      if (cost <= 0) continue;
+      lines.push({ id: def.id, label: def.label, cost });
+      total += cost;
+    }
+    lines.sort((a, b) => b.cost - a.cost);
+    return { total, lines };
+  }
+
+  reset(): void {
+    for (const c of COMPONENTS) this.health.set(c.id, 1);
+    this.failures.clear();
+    this.pending = [];
+    this.temperature = 0;
+    this.fuel = this.fuelCapacity;
+    this.peakImpulse = 0;
+  }
+}

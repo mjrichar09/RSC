@@ -12,6 +12,7 @@
 
 import type RAPIER from '@dimforge/rapier3d-compat';
 import type { VehicleTuning } from '../data/tuning.js';
+import type { DamageEffects, DamageModel } from './damage.js';
 import type { DriverInput } from './input.js';
 import { type Surface, surface } from './surfaces.js';
 import { slipAngle, slipRatio, tireForces } from './tires.js';
@@ -78,7 +79,24 @@ export interface VehicleState {
 export interface VehicleOptions {
   /** Resolves the surface under a contact point. P0 uses a single surface. */
   surfaceAt?: (point: Vec3) => Surface;
+  /** Component damage. When absent the car behaves as if factory fresh. */
+  damage?: DamageModel;
 }
+
+/** What an undamaged car looks like, so the damage-free path costs nothing. */
+const PRISTINE: DamageEffects = {
+  engineTorque: 1,
+  misfiring: false,
+  wheelGrip: [1, 1, 1, 1],
+  wheelBrake: [1, 1, 1, 1],
+  wheelSuspension: [1, 1, 1, 1],
+  wheelLost: [false, false, false, false],
+  steeringOffset: 0,
+  steeringRange: 1,
+  dragScale: 1,
+  shiftFailure: 0,
+  retired: false,
+};
 
 export class Vehicle {
   readonly body: RAPIER.RigidBody;
@@ -88,6 +106,8 @@ export class Vehicle {
   private readonly world: RAPIER.World;
   readonly tuning: VehicleTuning;
   private readonly surfaceAt: (point: Vec3) => Surface;
+  readonly damage: DamageModel | null;
+  private effects: DamageEffects = PRISTINE;
 
   readonly wheels: WheelState[] = [];
 
@@ -110,6 +130,7 @@ export class Vehicle {
     this.tuning = tuning;
     this.engineRpm = tuning.idleRpm;
     this.surfaceAt = options.surfaceAt ?? (() => surface('tarmac'));
+    this.damage = options.damage ?? null;
 
     const h = tuning.halfExtents;
     const heading = spawn.heading ?? 0;
@@ -199,6 +220,12 @@ export class Vehicle {
     const speed = dot(linvel, nose);
     const planarSpeed = Math.hypot(linvel.x, linvel.z);
 
+    if (this.damage) {
+      this.damage.update(dt, { rpmFraction: this.engineRpm / t.maxRpm, speed });
+      this.effects = this.damage.effects();
+    }
+    const fx = this.effects;
+
     this.updateSteering(dt, input.steer, planarSpeed);
 
     // --- Suspension pass -----------------------------------------------------
@@ -212,6 +239,16 @@ export class Vehicle {
       const mountLocal = t.wheelPositions[i]!;
       const mount = add(pos, rotate(rot, mountLocal));
       const maxToi = t.suspensionRestLength + t.wheelRadius;
+
+      if (fx.wheelLost[i]) {
+        // A detached wheel carries no load and generates no force at all.
+        w.grounded = false;
+        w.compression = 0;
+        w.load = 0;
+        w.saturation = 0;
+        w.contact = mount;
+        continue;
+      }
 
       const ray = new this.rapier.Ray(mount, scale(up, -1));
       const result = this.world.castRayAndGetNormal(
@@ -243,7 +280,13 @@ export class Vehicle {
 
       const damping =
         compressionSpeed >= 0 ? t.suspensionDamping : t.suspensionReboundDamping;
-      const force = Math.max(0, t.suspensionStiffness * compression + damping * compressionSpeed);
+      // A collapsed spring supports less and rebounds worse, so the corner
+      // bottoms out and the car pulls toward the damaged side.
+      const wear = fx.wheelSuspension[i]!;
+      const force = Math.max(
+        0,
+        t.suspensionStiffness * wear * compression + damping * wear * compressionSpeed,
+      );
 
       susp[i] = force;
       hit[i] = { point, normal: result.normal as Vec3 };
@@ -291,7 +334,7 @@ export class Vehicle {
     const driveInput = inReverse ? input.brake : input.throttle;
     const brakeInput = inReverse ? input.throttle : input.brake;
 
-    const engineTorque = this.engineTorque(driveInput);
+    const engineTorque = this.engineTorque(driveInput) * fx.engineTorque * (fx.misfiring ? 0 : 1);
     const gearRatio = t.gearRatios[this.gearIndex] ?? 0;
     const shifting = this.shiftTimer > 0;
     const axleTorque = shifting
@@ -309,7 +352,7 @@ export class Vehicle {
       const driveTorque = driveTorques[i]!;
       const axleBrake = brakeInput * (front ? t.brakeBias : 1 - t.brakeBias) * 2;
       const brakeTorque =
-        t.brakeTorque * clamp(axleBrake, 0, 1) +
+        t.brakeTorque * clamp(axleBrake, 0, 1) * fx.wheelBrake[i]! +
         (front ? 0 : t.handbrakeTorque * input.handbrake);
 
       const h = hit[i];
@@ -343,7 +386,7 @@ export class Vehicle {
       const balance = front ? t.tireGripBalance : 2 - t.tireGripBalance;
       const handbrakeLoss =
         front || input.handbrake === 0 ? 1 : 1 - input.handbrake * (1 - t.handbrakeGripLoss);
-      const mu = t.tireGrip * w.surface.grip * balance * handbrakeLoss;
+      const mu = t.tireGrip * w.surface.grip * balance * handbrakeLoss * fx.wheelGrip[i]!;
 
       const f = tireForces({
         load: susp[i]!,
@@ -378,7 +421,7 @@ export class Vehicle {
     // --- Body forces ---------------------------------------------------------
     const v = length(linvel);
     if (v > 0.1) {
-      body.addForce(scale(normalize(linvel), -t.dragFactor * v * v), true);
+      body.addForce(scale(normalize(linvel), -t.dragFactor * fx.dragScale * v * v), true);
     }
     const grounded = this.wheels.some((w) => w.grounded);
     if (grounded) {
@@ -463,10 +506,18 @@ export class Vehicle {
 
   private updateSteering(dt: number, target: number, speed: number): void {
     const t = this.tuning;
+    const fx = this.effects;
     const falloff =
       1 -
       (1 - t.steerSpeedFalloff) * clamp(speed / t.steerSpeedFalloffAt, 0, 1);
-    const desired = clamp(target, -1, 1) * t.maxSteerAngle * falloff;
+    const maxAngle = t.maxSteerAngle * fx.steeringRange;
+    // A bent rack biases the whole range, so the car pulls even hands-off and
+    // has less lock available to correct with.
+    const desired = clamp(
+      clamp(target, -1, 1) * maxAngle * falloff + fx.steeringOffset,
+      -maxAngle,
+      maxAngle,
+    );
     const rate = Math.abs(target) < 0.05 ? t.steerReturnRate : t.steerRate;
     this.steerAngle = moveToward(this.steerAngle, desired, rate * t.maxSteerAngle * dt);
   }
@@ -518,6 +569,11 @@ export class Vehicle {
 
     const frac = this.engineRpm / t.maxRpm;
     if (frac > t.upshiftAt && this.gearIndex < t.gearRatios.length - 1) {
+      // A damaged gearbox sometimes refuses the shift and sits on the limiter.
+      if (this.effects.shiftFailure > 0 && Math.random() < this.effects.shiftFailure) {
+        this.shiftTimer = t.shiftTime * 2;
+        return;
+      }
       this.gearIndex++;
       this.shiftTimer = t.shiftTime;
     } else if (frac < t.downshiftAt && this.gearIndex > 1) {
@@ -540,6 +596,7 @@ export class Vehicle {
     this.shiftTimer = 0;
     this.reverseHold = 0;
     this.engineRpm = this.tuning.idleRpm;
+    this.effects = this.damage ? this.damage.effects() : PRISTINE;
     for (const w of this.wheels) {
       w.spin = 0;
       w.rotation = 0;

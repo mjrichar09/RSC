@@ -11,7 +11,7 @@
  */
 
 import * as THREE from 'three';
-import type { Stage } from '../sim/stage.js';
+import type { PropKind, Stage } from '../sim/stage.js';
 import { SURFACES } from '../sim/surfaces.js';
 
 /** Slight per-vertex value jitter so large flat areas do not read as dead. */
@@ -59,6 +59,7 @@ export function buildStageView(stage: Stage): StageView {
 
   group.add(buildGates(stage));
   group.add(buildEdgeMarkers(stage));
+  group.add(buildProps(stage));
 
   return {
     group,
@@ -67,6 +68,62 @@ export function buildStageView(stage: Stage): StageView {
       (road.material as THREE.Material).dispose();
     },
   };
+}
+
+/**
+ * Roadside hazards.
+ *
+ * Instanced per kind, and deliberately chunky: at this camera distance a
+ * hazard has to be unmistakable, because hitting one is expensive and the
+ * player needs to have seen it coming.
+ */
+function buildProps(stage: Stage): THREE.Group {
+  const group = new THREE.Group();
+  if (stage.props.length === 0) return group;
+
+  const byKind = new Map<PropKind, typeof stage.props>();
+  for (const prop of stage.props) {
+    const list = byKind.get(prop.kind) ?? [];
+    list.push(prop);
+    byKind.set(prop.kind, list);
+  }
+
+  const build: Record<PropKind, () => { geometry: THREE.BufferGeometry; color: number }> = {
+    // Trunk plus canopy merged into one silhouette by stacking two cylinders.
+    tree: () => ({ geometry: new THREE.ConeGeometry(1.5, 5.5, 6), color: 0x33512f }),
+    rock: () => ({ geometry: new THREE.DodecahedronGeometry(0.95, 0), color: 0x6a6a68 }),
+    bale: () => ({ geometry: new THREE.CylinderGeometry(0.75, 0.75, 1.5, 8), color: 0xb59a55 }),
+    pole: () => ({ geometry: new THREE.BoxGeometry(0.22, 2.2, 0.22), color: 0xdcd6c6 }),
+  };
+
+  for (const [kind, props] of byKind) {
+    const { geometry, color } = build[kind]();
+    const mesh = new THREE.InstancedMesh(
+      geometry,
+      new THREE.MeshStandardMaterial({ color, roughness: 0.85, flatShading: true }),
+      props.length,
+    );
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+
+    const m = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const pos = new THREE.Vector3();
+    const scl = new THREE.Vector3(1, 1, 1);
+
+    props.forEach((prop, i) => {
+      pos.set(prop.position.x, prop.position.y + prop.height / 2, prop.position.z);
+      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), prop.yaw);
+      // Rocks look wrong perfectly upright; a little tilt reads as natural.
+      if (kind === 'rock') q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), prop.yaw * 0.3));
+      m.compose(pos, q, scl);
+      mesh.setMatrixAt(i, m);
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    group.add(mesh);
+  }
+
+  return group;
 }
 
 /** Start line, checkpoint gates and finish line, as paired posts plus a banner. */
