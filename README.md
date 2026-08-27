@@ -227,11 +227,19 @@ different from an idle retry. The free stage stays freely retryable, which keeps
 the Trackmania practice loop intact, and its payout always covers the cheapest
 paid entry — being broke is a setback, never a dead end.
 
-Every upgrade is a trade rather than a straight gain: grippier tyres let go later
-but more abruptly, a rollcage costs weight and protects nothing cosmetic, weight
-reduction makes the car better in every direction and less forgiving of impacts.
-An upgrade tree where every purchase is strictly better turns money into a
-formality.
+Every upgrade is a trade rather than a straight gain: a rollcage costs weight and
+protects nothing cosmetic, weight reduction makes the car better in every
+direction and less forgiving of impacts, and softer tyres grip harder, let go
+more abruptly and wear noticeably faster. An upgrade tree where every purchase is
+strictly better turns money into a formality.
+
+**Tyres are a consumable.** They are worn by sliding rather than by rolling —
+wear tracks how far past the grip limit a tyre is, scaled by the load it carries
+and how abrasive the surface is. Gravel is the worst of both worlds, not grippy
+enough to stop you sliding and abrasive enough to punish it; ice barely wears a
+tyre at all. This is what connects driving style directly to the repair bill: a
+careful lap costs a few percent of tyre life, while a committed lap on soft
+compounds can cost ten times that.
 
 ### Ghosts
 

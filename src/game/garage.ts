@@ -61,7 +61,7 @@ export const UPGRADES: UpgradeDef[] = [
   {
     id: 'tyres',
     label: 'Tyres',
-    description: '+6% peak grip per level, with a lower slide floor — quicker, but snappier at the limit.',
+    description: '+6% peak grip per level. Softer compounds: quicker, snappier at the limit, and they wear noticeably faster.',
     costs: [2600, 6200, 13000],
   },
   {
@@ -145,6 +145,8 @@ export function tuneFor(levels: UpgradeLevels): VehicleTuning {
     t.tireGrip = CAR.tireGrip * (1 + tyres * 0.06);
     // Grippier tyres let go later but more abruptly — the trade for the pace.
     t.slideGripFloor = Math.max(CAR.slideGripFloor - tyres * 0.03, 0.55);
+    // And a softer compound is a consumable: pace now, tyre bills later.
+    t.tireWearRate = CAR.tireWearRate * (1 + tyres * 0.35);
   }
 
   const weight = levelOf(levels, 'weight');

@@ -84,6 +84,13 @@ export interface VehicleTuning {
 
   /** Peak friction coefficient of the tire, before surface multipliers. */
   tireGrip: number;
+  /**
+   * How fast a sliding tyre wears, as a fraction of its life per second at
+   * full slip on tarmac under nominal load. Softer compounds grip harder and
+   * wear faster — the classic trade, and the one that makes the tyre upgrade a
+   * decision rather than a free improvement.
+   */
+  tireWearRate: number;
   /** Front/rear grip balance. >1 gives the front more bite (more oversteer). */
   tireGripBalance: number;
   /** Slip angle of peak lateral force, radians. */
@@ -158,6 +165,7 @@ export const CAR: VehicleTuning = {
   handbrakeGripLoss: 0.42,
 
   tireGrip: 1.35,
+  tireWearRate: 0.012,
   tireGripBalance: 1.12,
   peakSlipAngle: 0.18,
   peakSlipRatio: 0.14,

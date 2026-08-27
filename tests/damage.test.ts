@@ -13,6 +13,7 @@ import {
   impactPointFromForce,
 } from '../src/sim/damage.js';
 import { v3 } from '../src/sim/math.js';
+import { SURFACES } from '../src/sim/surfaces.js';
 
 /** A head-on impact pushes the car backwards, so the force direction is -z. */
 const HEAD_ON = v3(0, 0, -1);
@@ -318,5 +319,80 @@ describe('warning accuracy', () => {
     const fatal = d.warnings().filter((w) => w.severity === 'fatal');
     expect(fatal).toHaveLength(1);
     expect(fatal[0]!.text).toContain('rear left wheel');
+  });
+});
+
+describe('tyre wear', () => {
+  const wheel = (saturation: number, abrasion = 1, load = 2900) => ({
+    saturation,
+    load,
+    surface: { abrasion },
+  });
+  const four = (w: ReturnType<typeof wheel>) => [w, w, w, w];
+
+  const wearFor = (
+    wheels: ReturnType<typeof four>,
+    seconds = 10,
+    rate = 0.012,
+  ): number => {
+    const d = new DamageModel();
+    for (let i = 0; i < seconds * 120; i++) d.wearTyres(1 / 120, wheels, rate);
+    return 1 - d.get('tyreFL');
+  };
+
+  it('does not wear a tyre that is gripping', () => {
+    expect(wearFor(four(wheel(0.5)))).toBe(0);
+    expect(wearFor(four(wheel(0.89)))).toBe(0);
+  });
+
+  it('wears faster the harder the tyre is sliding', () => {
+    expect(wearFor(four(wheel(1.4)))).toBeGreaterThan(wearFor(four(wheel(1.0))));
+  });
+
+  it('wears faster under load, so the loaded outside tyre goes first', () => {
+    expect(wearFor(four(wheel(1.3, 1, 5000)))).toBeGreaterThan(wearFor(four(wheel(1.3, 1, 1500))));
+  });
+
+  it('wears most on gravel and barely at all on ice', () => {
+    const gravel = wearFor(four(wheel(1.3, SURFACES.gravel.abrasion)));
+    const tarmac = wearFor(four(wheel(1.3, SURFACES.tarmac.abrasion)));
+    const ice = wearFor(four(wheel(1.3, SURFACES.ice.abrasion)));
+    expect(gravel).toBeGreaterThan(tarmac);
+    expect(tarmac).toBeGreaterThan(ice);
+    expect(ice).toBeLessThan(gravel * 0.2);
+  });
+
+  it('wears each corner independently', () => {
+    const d = new DamageModel();
+    const wheels = [wheel(1.4), wheel(0.5), wheel(0.5), wheel(0.5)];
+    for (let i = 0; i < 600; i++) d.wearTyres(1 / 120, wheels, 0.012);
+    expect(d.get('tyreFL')).toBeLessThan(1);
+    expect(d.get('tyreFR')).toBe(1);
+  });
+
+  it('wears a soft compound faster, which is the trade for the grip', () => {
+    expect(wearFor(four(wheel(1.3)), 10, 0.012 * 2.05)).toBeGreaterThan(
+      wearFor(four(wheel(1.3)), 10, 0.012),
+    );
+  });
+
+  it('stops at a puncture rather than going negative, and announces it', () => {
+    const d = new DamageModel();
+    const wheels = four(wheel(1.5, 2));
+    for (let i = 0; i < 120 * 400; i++) d.wearTyres(1 / 120, wheels, 0.02);
+    expect(d.get('tyreFL')).toBe(0);
+
+    const events = d.drainEvents();
+    expect(events.some((e) => e.component === 'tyreFL' && e.remaining === 0)).toBe(true);
+    // And it is only announced once, however long the wheel keeps spinning.
+    for (let i = 0; i < 1200; i++) d.wearTyres(1 / 120, wheels, 0.02);
+    expect(d.drainEvents()).toEqual([]);
+  });
+
+  it('costs a few percent over a careful lap, not a whole tyre', () => {
+    // Roughly a 45-second stage spent mostly gripping, occasionally sliding.
+    const worn = wearFor(four(wheel(1.05, SURFACES.gravel.abrasion)), 45);
+    expect(worn).toBeGreaterThan(0.01);
+    expect(worn).toBeLessThan(0.2);
   });
 });

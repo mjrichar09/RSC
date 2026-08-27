@@ -222,6 +222,9 @@ export class Vehicle {
 
     if (this.damage) {
       this.damage.update(dt, { rpmFraction: this.engineRpm / t.maxRpm, speed });
+      // Wear is read from the previous step's tyre state, which is the state
+      // that actually did the sliding.
+      this.damage.wearTyres(dt, this.wheels, t.tireWearRate);
       this.effects = this.damage.effects();
     }
     const fx = this.effects;

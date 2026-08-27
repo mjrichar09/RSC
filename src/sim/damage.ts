@@ -309,6 +309,50 @@ export class DamageModel {
   }
 
   /**
+   * Wear the tyres.
+   *
+   * A tyre is consumed by sliding, not by rolling: wear tracks how far past
+   * the grip limit it is, scaled by the load it is carrying and how abrasive
+   * the surface is. This is what connects driving style directly to the repair
+   * bill — a clean run costs a few percent of tyre life, a run spent sideways
+   * on gravel costs a great deal more.
+   */
+  wearTyres(
+    dt: number,
+    wheels: readonly { saturation: number; load: number; surface: { abrasion: number } }[],
+    rate: number,
+  ): void {
+    const NOMINAL_LOAD = 2900;
+
+    for (let i = 0; i < WHEEL_KEYS.length; i++) {
+      const wheel = wheels[i];
+      if (!wheel) continue;
+
+      const slip = wheel.saturation - 0.9;
+      if (slip <= 0) continue;
+
+      const id = `tyre${WHEEL_KEYS[i]}` as ComponentId;
+      const health = this.get(id);
+      if (health <= 0) continue;
+
+      const wear =
+        rate * Math.min(slip, 1.5) * (wheel.load / NOMINAL_LOAD) * wheel.surface.abrasion * dt;
+      const after = clamp(health - wear, 0, 1);
+      this.health.set(id, after);
+
+      // A tyre worn to nothing is a puncture, and it is worth announcing.
+      if (after <= 0) {
+        this.pending.push({
+          component: id,
+          label: COMPONENT_BY_ID.get(id)!.label,
+          amount: health,
+          remaining: 0,
+        });
+      }
+    }
+  }
+
+  /**
    * Continuous damage: heat and fuel.
    *
    * These are what turn a survivable hit into a race against the clock. A
