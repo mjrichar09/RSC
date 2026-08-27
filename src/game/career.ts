@@ -12,7 +12,27 @@ import type { Medal } from './race.js';
 import type { Profile, SaveStore } from './save.js';
 import { COMPONENTS, type ComponentId, DamageModel } from '../sim/damage.js';
 import type { VehicleTuning } from '../data/tuning.js';
-import type { StageDef } from '../sim/stage.js';
+import { type StageDef, type StageVariant, stageVariants, variantKey } from '../sim/stage.js';
+
+/** A stage under particular conditions — what a player actually enters. */
+export interface RaceTarget {
+  def: StageDef;
+  variant: StageVariant;
+}
+
+/**
+ * Every stage-and-conditions pairing available in the game, in the order they
+ * open up.
+ *
+ * Sorting by unlock requirement rather than by stage keeps the garage list a
+ * progression: grouped per stage it zig-zagged, offering a five-medal night
+ * variant of the first stage above the one-medal second stage. It also makes
+ * the numbered shortcut keys mean something.
+ */
+export const allTargets = (stages: StageDef[]): RaceTarget[] =>
+  stages
+    .flatMap((def) => stageVariants(def).map((variant) => ({ def, variant })))
+    .sort((a, b) => a.variant.requiresMedals - b.variant.requiresMedals || a.variant.entryFee - b.variant.entryFee);
 
 export interface SettleResult extends RunLedger {
   medal: Medal | null;
@@ -43,7 +63,17 @@ export class Career {
 
   /** The cheapest stage anyone can enter — the anti-softlock reference point. */
   get cheapestFee(): number {
-    return Math.min(...this.stages.map((s) => s.entryFee));
+    return Math.min(...allTargets(this.stages).map((t) => t.variant.entryFee));
+  }
+
+  /** Everything the player can see in the garage. */
+  targets(): RaceTarget[] {
+    return allTargets(this.stages);
+  }
+
+  /** Record key for a target: stage and conditions together. */
+  keyFor(target: RaceTarget): string {
+    return variantKey(target.def.id, target.variant.id);
   }
 
   /** Tuning with the fitted upgrades applied. */
@@ -78,26 +108,35 @@ export class Career {
     return this.buildDamage().warnings();
   }
 
-  /** Stages the player holds at least a bronze on. Drives what is unlocked. */
+  /**
+   * Medals held. Each stage-and-conditions pairing counts separately, so a
+   * night variant is its own achievement rather than a repeat of the day one.
+   */
   get medalsHeld(): number {
     return Object.values(this.profile.records).filter((r) => r.medal !== 'finish').length;
   }
 
-  canEnter(stage: StageDef): EntryCheck {
-    return canEnter(stage, {
-      money: this.money,
-      carIsDriveable: this.carIsDriveable,
-      medals: this.medalsHeld,
-    });
+  canEnter(target: RaceTarget): EntryCheck {
+    // A variant carries its own fee and its own unlock requirement, so the
+    // check runs against the variant rather than its parent stage.
+    return canEnter(
+      { ...target.def, entryFee: target.variant.entryFee, requiresMedals: target.variant.requiresMedals },
+      { money: this.money, carIsDriveable: this.carIsDriveable, medals: this.medalsHeld },
+    );
   }
 
-  /** Take the entry fee. Returns false when the stage cannot be entered. */
-  async enter(stage: StageDef): Promise<boolean> {
-    if (!this.canEnter(stage).allowed) return false;
+  /** Take the entry fee. Returns false when the target cannot be entered. */
+  async enter(target: RaceTarget): Promise<boolean> {
+    if (!this.canEnter(target).allowed) return false;
     await this.save.update((p) => {
-      p.money -= stage.entryFee;
+      p.money -= target.variant.entryFee;
     });
     return true;
+  }
+
+  /** Best time and medal for a target, or null if never completed. */
+  recordFor(target: RaceTarget) {
+    return this.save.recordFor(this.keyFor(target));
   }
 
   /**
@@ -106,7 +145,7 @@ export class Career {
    * here — that is a separate decision the player makes in the garage.
    */
   async settle(
-    stage: StageDef,
+    target: RaceTarget,
     outcome: {
       medal: Medal | null;
       time: number | null;
@@ -124,17 +163,23 @@ export class Career {
     let earned = 0;
     let floored = false;
     if (!outcome.retired && outcome.medal) {
-      const result = payout(stage, outcome.medal, {
-        money: this.money,
-        cheapestFee: this.cheapestFee,
-      });
+      const result = payout(
+        { ...target.def, entryFee: target.variant.entryFee, payouts: target.variant.payouts },
+        outcome.medal,
+        { money: this.money, cheapestFee: this.cheapestFee },
+      );
       earned = result.amount;
       floored = result.floored;
     }
 
     let newRecord = false;
     if (!outcome.retired && outcome.medal && outcome.time !== null && outcome.ghost) {
-      newRecord = await this.save.submitRun(stage.id, outcome.time, outcome.medal, outcome.ghost);
+      newRecord = await this.save.submitRun(
+        this.keyFor(target),
+        outcome.time,
+        outcome.medal,
+        outcome.ghost,
+      );
     }
 
     await this.save.update((p) => {
@@ -145,7 +190,7 @@ export class Career {
     });
 
     return {
-      ...ledger(stage.entryFee, earned, repairs, floored),
+      ...ledger(target.variant.entryFee, earned, repairs, floored),
       medal: outcome.retired ? null : outcome.medal,
       retired: outcome.retired,
       newRecord,

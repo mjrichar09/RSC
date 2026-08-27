@@ -8,7 +8,7 @@
 
 import { STAGES, stageById } from './data/stages/index.js';
 import { TEST_PATCHES } from './data/testGround.js';
-import { Career } from './game/career.js';
+import { Career, type RaceTarget } from './game/career.js';
 import { rollcageMitigation } from './game/garage.js';
 import { Race } from './game/race.js';
 import { SaveStore } from './game/save.js';
@@ -16,7 +16,7 @@ import { NEUTRAL_INPUT } from './sim/input.js';
 import { Driver } from './sim/driver.js';
 import { GhostPlayer, GhostRecorder } from './sim/replay.js';
 import { FAILURE_LABEL, type ComponentId } from './sim/damage.js';
-import { Stage, findVariant, type StageVariant } from './sim/stage.js';
+import { Stage, findVariant, type StageVariant, variantKey } from './sim/stage.js';
 import { visibility } from './sim/conditions.js';
 import { TRACES, sampleTrace } from './sim/trace.js';
 import { SimWorld, initPhysics } from './sim/world.js';
@@ -108,6 +108,14 @@ async function main(): Promise<void> {
   let race: Race | null = null;
   let stageView: StageView | null = null;
   let variant: StageVariant | null = null;
+
+  /**
+   * The stage-and-conditions pairing currently loaded. Fees, payouts, records
+   * and ghosts all key off this rather than off the stage alone: a night run is
+   * its own race.
+   */
+  const currentTarget = (): RaceTarget => ({ def: stage!.def, variant: variant! });
+  const currentKey = (): string => variantKey(stage!.def.id, variant!.id);
   let tuningPanel: TuningPanel | null = null;
   let stuckFor = 0;
   let ghost: GhostPlayer | null = null;
@@ -123,14 +131,14 @@ async function main(): Promise<void> {
   let sessionHealth: Partial<Record<ComponentId, number>> = {};
   let settled = false;
 
-  /** Show the stored best for this stage, and start chasing its ghost. */
-  const attachGhost = async (stageId: string) => {
-    const record = save.recordFor(stageId);
+  /** Show the stored best for this pairing, and start chasing its ghost. */
+  const attachGhost = async (key: string) => {
+    const record = save.recordFor(key);
     raceHud.setBest(record?.time ?? null);
 
-    const stored = await save.loadGhost(stageId);
-    // Guard against the player switching stage while this was loading.
-    if (!stage || stage.def.id !== stageId) return;
+    const stored = await save.loadGhost(key);
+    // Guard against the player switching stage or variant while this loaded.
+    if (!stage || !variant || currentKey() !== key) return;
     ghost = stored ? new GhostPlayer(stored) : null;
     ghostView.visible = ghost !== null;
   };
@@ -176,7 +184,7 @@ async function main(): Promise<void> {
     ghost = null;
     ghostView.visible = false;
     recorder.reset();
-    void attachGhost(stage.def.id);
+    void attachGhost(currentKey());
   };
 
   /** Seed the world's damage model with the condition the car is actually in. */
@@ -216,16 +224,16 @@ async function main(): Promise<void> {
       // costs the damage economy most of its meaning.
       const attemptUsed = race.phase !== 'staging';
       if (stage.def.entryFee > 0 && attemptUsed) {
-        if (!career.canEnter(stage.def).allowed) {
+        if (!career.canEnter(currentTarget()).allowed) {
           openGarage();
           return;
         }
-        void career.enter(stage.def);
+        void career.enter(currentTarget());
       }
       world.vehicle.reset(stage.start.position, stage.start.heading);
       race.reset();
       raceHud.setStage(stage, variant?.name, variant?.medals);
-      raceHud.setBest(save.recordFor(stage.def.id)?.time ?? null);
+      raceHud.setBest(save.recordFor(currentKey())?.time ?? null);
       raceHud.setSplitDeltas([]);
       raceHud.setDelta(null);
       recorder.reset();
@@ -249,12 +257,12 @@ async function main(): Promise<void> {
     world.rescue(race?.furthest);
     stuckFor = 0;
   };
-  const garage = new Garage(hudRoot, career, STAGES);
-  garage.onEnter = (def) => {
+  const garage = new Garage(hudRoot, career);
+  garage.onEnter = (target) => {
     // The fee is taken by the garage; this is the condition the attempt starts
     // from, and the one a restart returns to.
     sessionHealth = { ...career.profile.carHealth };
-    loadStage(def.id);
+    loadStage(target.def.id, target.variant.id);
   };
 
   const openGarage = () => {
@@ -292,21 +300,21 @@ async function main(): Promise<void> {
     settled = true;
 
     const time = race.finishTime;
-    const previous = save.recordFor(stage.def.id)?.time ?? null;
+    const previous = save.recordFor(currentKey())?.time ?? null;
 
-    const result = await career.settle(stage.def, {
+    const result = await career.settle(currentTarget(), {
       medal: race.medal,
       time,
       retired,
       damage: world.damage,
-      ...(retired || time === null ? {} : { ghost: recorder.finish(stage.def.id, time) }),
+      ...(retired || time === null ? {} : { ghost: recorder.finish(currentKey(), time) }),
     });
 
     raceHud.setLedger(result);
     if (result.newRecord && time !== null) {
       raceHud.setBest(time);
       raceHud.markRecord(previous);
-      await attachGhost(stage.def.id);
+      await attachGhost(currentKey());
     }
   };
 
@@ -423,7 +431,7 @@ async function main(): Promise<void> {
       }
 
       restart();
-      await attachGhost(stageId);
+      await attachGhost(currentKey());
       this.seekStage(stageId, seconds);
     },
     seekTrace(traceName, seconds) {
@@ -609,6 +617,9 @@ async function main(): Promise<void> {
     precipitation.update(dt, camera.focus, window.innerHeight / (2 * camera.effectiveViewSize));
 
     drawOnce(alpha, dt);
+    // The visual harness waits on this, so the live loop has to set it too or
+    // a garage screenshot waits for a frame that only the seek path reports.
+    window.RSC!.rendered = true;
     hud.update(state, fps);
     tuningPanel!.update(state);
     requestAnimationFrame(frame);

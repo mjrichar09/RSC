@@ -47,6 +47,10 @@ const cells = cellSpec.split(',').map((spec) => {
   const crashMatch = /^crash(\d+(?:\.\d+)?)?:(.+)$/.exec(name!);
   const crashFor = crashMatch ? Number(crashMatch[1] ?? '2') : 0;
 
+  // `garage` shoots the stage-select screen itself, which is the only place
+  // the variant list is visible.
+  if (name === 'garage') return { url: '/', label: 'garage' };
+
   const raw = isTrace || withGhost ? name!.slice(6) : (crashMatch?.[2] ?? name!);
   const [id, cellVariant] = raw.split('/');
   const useVariant = cellVariant ?? variantArg;

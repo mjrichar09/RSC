@@ -15,7 +15,7 @@ import type { ComponentId } from '../sim/damage.js';
 import type { Ghost } from '../sim/replay.js';
 
 const DB_NAME = 'rsc';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const PROFILE_KEY = 'profile';
 
 /** Enough to enter the second stage and still afford a mistake. */
@@ -104,6 +104,17 @@ function migrate(stored: unknown): Profile {
   // v1 -> v2: carried damage and lifetime totals were added, and money went
   // from a placeholder zero to a real starting balance.
   if (version < 2 && !stored.money) out.money = STARTING_MONEY;
+
+  // v2 -> v3: conditions became stage variants, so a record belongs to the
+  // conditions it was set in. Everything recorded before that was driven in
+  // clear daylight, and is re-keyed accordingly rather than discarded.
+  if (version < 3) {
+    const remapped: Profile['records'] = {};
+    for (const [key, record] of Object.entries(out.records)) {
+      remapped[key.includes(':') ? key : `${key}:day-clear`] = record;
+    }
+    out.records = remapped;
+  }
 
   return out;
 }

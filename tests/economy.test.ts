@@ -10,15 +10,21 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { STAGES } from '../src/data/stages/index.js';
 import { CAR } from '../src/data/tuning.js';
-import { Career } from '../src/game/career.js';
+import { Career, type RaceTarget } from '../src/game/career.js';
 import { RECOVERY_FLOOR, canEnter, ledger, payout } from '../src/game/economy.js';
 import { UPGRADES, investedIn, nextCost, rollcageMitigation, tuneFor } from '../src/game/garage.js';
 import { SaveStore } from '../src/game/save.js';
 import { impactPointFromForce } from '../src/sim/damage.js';
 import { v3 } from '../src/sim/math.js';
+import { stageVariants } from '../src/sim/stage.js';
 
 const FREE = STAGES.find((s) => s.entryFee === 0)!;
 const PAID = STAGES.find((s) => s.entryFee > 0)!;
+
+// What the career layer actually takes: a stage under particular conditions.
+// The baseline variant is clear daylight, carrying the stage's own numbers.
+const FREE_T: RaceTarget = { def: FREE, variant: stageVariants(FREE)[0]! };
+const PAID_T: RaceTarget = { def: PAID, variant: stageVariants(PAID)[0]! };
 const HEAD_ON = v3(0, 0, -1);
 
 describe('payouts', () => {
@@ -165,6 +171,41 @@ describe('career', () => {
     career = new Career(save, STAGES);
   });
 
+  it('offers every stage-and-conditions pairing as its own race', () => {
+    const targets = career.targets();
+    // Every stage contributes at least its clear-daylight baseline.
+    expect(targets.length).toBeGreaterThan(STAGES.length);
+    // Keys are unique, or two variants would share one record and one ghost.
+    const keys = targets.map((t) => career.keyFor(t));
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(keys).toContain(`${FREE.id}:day-clear`);
+  });
+
+  it('makes a harder variant its own entry, paying more and unlocking later', () => {
+    const variants = career.targets().filter((t) => t.def.id === FREE.id);
+    const base = variants[0]!;
+    const harder = variants[1];
+    // The free stage has at least one alternative set of conditions to race.
+    expect(harder).toBeDefined();
+    expect(harder!.variant.payouts.gold).toBeGreaterThan(base.variant.payouts.gold);
+    expect(harder!.variant.requiresMedals).toBeGreaterThan(base.variant.requiresMedals);
+    // Locked to begin with, and by its own requirement rather than the stage's.
+    expect(career.canEnter(harder!)).toMatchObject({ allowed: false, reason: 'locked' });
+  });
+
+  it('keeps a record per variant, so a night time never displaces a day one', async () => {
+    const [base, harder] = career.targets().filter((t) => t.def.id === FREE.id);
+    await career.settle(base!, {
+      medal: 'gold',
+      time: 40,
+      retired: false,
+      damage: career.buildDamage(),
+      ghost: { stageId: base!.def.id, time: 40, recordedAt: 0, frames: new Float32Array(0) },
+    });
+    expect(career.recordFor(base!)?.time).toBe(40);
+    expect(career.recordFor(harder!)).toBeNull();
+  });
+
   it('starts with money and an undamaged car', () => {
     expect(career.money).toBeGreaterThan(0);
     expect(career.condition).toBe(1);
@@ -179,10 +220,10 @@ describe('career', () => {
       p.records['north-pass'] = { time: 50, medal: 'silver', setAt: 0 };
     });
     const before = career.money;
-    expect(await career.enter(FREE)).toBe(true);
+    expect(await career.enter(FREE_T)).toBe(true);
     expect(career.money).toBe(before);
 
-    expect(await career.enter(PAID)).toBe(true);
+    expect(await career.enter(PAID_T)).toBe(true);
     expect(career.money).toBe(before - PAID.entryFee);
   });
 
@@ -192,7 +233,7 @@ describe('career', () => {
       p.records['pine-loop'] = { time: 50, medal: 'silver', setAt: 0 };
       p.records['north-pass'] = { time: 50, medal: 'silver', setAt: 0 };
     });
-    expect(await career.enter(PAID)).toBe(false);
+    expect(await career.enter(PAID_T)).toBe(false);
     expect(career.money).toBe(10);
   });
 
@@ -201,7 +242,7 @@ describe('career', () => {
     damage.applyImpact(impactPointFromForce(HEAD_ON), 22_000);
 
     const before = career.money;
-    const result = await career.settle(FREE, {
+    const result = await career.settle(FREE_T, {
       medal: 'silver',
       time: 55,
       retired: false,
@@ -222,7 +263,7 @@ describe('career', () => {
     for (let i = 0; i < 5; i++) damage.applyImpact(impactPointFromForce(HEAD_ON), 46_000);
 
     const before = career.money;
-    const result = await career.settle(PAID, { medal: null, time: null, retired: true, damage });
+    const result = await career.settle(PAID_T, { medal: null, time: null, retired: true, damage });
 
     expect(result.payout).toBe(0);
     expect(career.money).toBe(before);
@@ -235,7 +276,7 @@ describe('career', () => {
   it('lets damage be left unrepaired — that is the whole gamble', async () => {
     const damage = career.buildDamage();
     damage.applyImpact(impactPointFromForce(HEAD_ON), 20_000);
-    await career.settle(FREE, { medal: 'bronze', time: 60, retired: false, damage });
+    await career.settle(FREE_T, { medal: 'bronze', time: 60, retired: false, damage });
 
     const carried = career.buildDamage();
     expect(carried.condition).toBeLessThan(1);
@@ -246,7 +287,7 @@ describe('career', () => {
   it('repairs everything when it can be afforded', async () => {
     const damage = career.buildDamage();
     damage.applyImpact(impactPointFromForce(HEAD_ON), 20_000);
-    await career.settle(FREE, { medal: 'gold', time: 40, retired: false, damage });
+    await career.settle(FREE_T, { medal: 'gold', time: 40, retired: false, damage });
 
     const bill = career.repairBill().total;
     const before = career.money;
@@ -258,7 +299,7 @@ describe('career', () => {
   it('refuses a repair it cannot afford, and changes nothing', async () => {
     const damage = career.buildDamage();
     for (let i = 0; i < 4; i++) damage.applyImpact(impactPointFromForce(HEAD_ON), 40_000);
-    await career.settle(FREE, { medal: null, time: null, retired: true, damage });
+    await career.settle(FREE_T, { medal: null, time: null, retired: true, damage });
 
     await career['save'].update((p) => {
       p.money = 5;
@@ -271,7 +312,7 @@ describe('career', () => {
   it('repairs a single component, leaving the rest broken', async () => {
     const damage = career.buildDamage();
     damage.applyImpact(impactPointFromForce(HEAD_ON), 24_000);
-    await career.settle(FREE, { medal: 'gold', time: 40, retired: false, damage });
+    await career.settle(FREE_T, { medal: 'gold', time: 40, retired: false, damage });
 
     const worst = career.repairBill().lines[0]!;
     const spent = await career.repairComponent(worst.id);
@@ -283,7 +324,7 @@ describe('career', () => {
   it('can fix just enough to get the car to the start line', async () => {
     const damage = career.buildDamage();
     for (let i = 0; i < 5; i++) damage.applyImpact(impactPointFromForce(HEAD_ON), 46_000);
-    await career.settle(FREE, { medal: null, time: null, retired: true, damage });
+    await career.settle(FREE_T, { medal: null, time: null, retired: true, damage });
     expect(career.carIsDriveable).toBe(false);
 
     // Enough in the bank that this tests the mechanism, not affordability.
@@ -352,6 +393,18 @@ describe('progression', () => {
     byRequirement.forEach((stage, index) => {
       // With `index` stages already open, at most `index` medals can be held.
       expect(stage.requiresMedals ?? 0).toBeLessThanOrEqual(index);
+    });
+  });
+
+  it('opens every variant in a reachable order too', async () => {
+    // The same dead-end rule, but counted across variants: a night run is a
+    // medal of its own, so the ladder is longer and easy to mis-gate.
+    const save = new SaveStore();
+    await save.open();
+    await save.clear();
+    const targets = new Career(save, STAGES).targets();
+    targets.forEach((target, index) => {
+      expect(target.variant.requiresMedals).toBeLessThanOrEqual(index);
     });
   });
 

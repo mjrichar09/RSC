@@ -102,9 +102,38 @@ describe('profile migration', () => {
     const out = migrateProfile(v1);
     expect(out.version).toBeGreaterThanOrEqual(2);
     expect(out.money).toBe(STARTING_MONEY);
-    expect(out.records['pine-loop']?.time).toBe(50);
+    // v3 keys records by stage *and* conditions, so an old bare stage key
+    // becomes that stage in clear daylight — the conditions it was set under.
+    expect(out.records['pine-loop:day-clear']?.time).toBe(50);
+    expect(out.records['pine-loop']).toBeUndefined();
     expect(out.carHealth).toEqual({});
     expect(out.totals.earned).toBe(0);
+  });
+
+  it('re-keys v2 records to the clear-daylight variant without losing any', () => {
+    // Losing a record to a migration is losing the player's whole history with
+    // a stage, so this checks the medal and ghost key survive, not just a time.
+    const v2 = {
+      version: 2,
+      money: 3000,
+      records: {
+        'pine-loop': { time: 50, medal: 'gold', setAt: 7 },
+        'quarry-run': { time: 91.5, medal: 'silver', setAt: 8 },
+      },
+    };
+    const out = migrateProfile(v2);
+    expect(Object.keys(out.records).sort()).toEqual(['pine-loop:day-clear', 'quarry-run:day-clear']);
+    expect(out.records['pine-loop:day-clear']).toEqual({ time: 50, medal: 'gold', setAt: 7 });
+    expect(out.records['quarry-run:day-clear']?.medal).toBe('silver');
+  });
+
+  it('leaves records that are already variant-keyed alone', () => {
+    const out = migrateProfile({
+      version: 2,
+      records: { 'pine-loop:night-rain': { time: 70, medal: 'bronze', setAt: 1 } },
+    });
+    expect(out.records['pine-loop:night-rain']?.time).toBe(70);
+    expect(out.records['pine-loop:night-rain:day-clear']).toBeUndefined();
   });
 
   it('keeps a v1 profile that already had money', () => {

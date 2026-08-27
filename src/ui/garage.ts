@@ -7,9 +7,8 @@
  * the stage that pays for it.
  */
 
-import { Career } from '../game/career.js';
+import { Career, type RaceTarget } from '../game/career.js';
 import { UPGRADES, levelOf, maxLevel, nextCost } from '../game/garage.js';
-import type { StageDef } from '../sim/stage.js';
 import { formatTime } from './raceHud.js';
 
 const MEDAL_TINT: Record<string, string> = {
@@ -25,15 +24,13 @@ const money = (n: number): string => `${n < 0 ? '−' : ''}${Math.abs(n).toLocal
 export class Garage {
   private readonly root: HTMLElement;
   private readonly career: Career;
-  private readonly stages: StageDef[];
   private open = false;
 
-  /** Raised when the player commits to a stage. */
-  onEnter: ((stage: StageDef) => void) | null = null;
+  /** Raised when the player commits to a stage under particular conditions. */
+  onEnter: ((target: RaceTarget) => void) | null = null;
 
-  constructor(parent: HTMLElement, career: Career, stages: StageDef[]) {
+  constructor(parent: HTMLElement, career: Career) {
     this.career = career;
-    this.stages = stages;
 
     this.root = document.createElement('div');
     this.root.className = 'garage';
@@ -52,11 +49,11 @@ export class Garage {
   private async handle(action: string, id: string): Promise<void> {
     switch (action) {
       case 'enter': {
-        const stage = this.stages.find((s) => s.id === id);
-        if (stage && this.career.canEnter(stage).allowed) {
-          if (await this.career.enter(stage)) {
+        const target = this.career.targets().find((t) => this.career.keyFor(t) === id);
+        if (target && this.career.canEnter(target).allowed) {
+          if (await this.career.enter(target)) {
             this.setOpen(false);
-            this.onEnter?.(stage);
+            this.onEnter?.(target);
           }
         }
         break;
@@ -97,10 +94,10 @@ export class Garage {
     return this.open;
   }
 
-  /** Enter the nth stage from the keyboard, if it can be entered. */
+  /** Enter the nth row from the keyboard, if it can be entered. */
   async enterByIndex(index: number): Promise<void> {
-    const stage = this.stages[index];
-    if (stage) await this.handle('enter', stage.id);
+    const target = this.career.targets()[index];
+    if (target) await this.handle('enter', this.career.keyFor(target));
   }
 
   render(): void {
@@ -121,7 +118,7 @@ export class Garage {
           <section>${this.upgradesPanel()}</section>
         </div>
         <footer class="garage-foot">
-          <span><b>1</b>–<b>${this.stages.length}</b> enter stage · <b>Esc</b> close</span>
+          <span><b>1</b>–<b>${Math.min(9, this.career.targets().length)}</b> enter stage · <b>Esc</b> close</span>
           <button data-action="close">Close</button>
         </footer>
       </div>`;
@@ -152,39 +149,50 @@ export class Garage {
     return `Car at ${(condition * 100).toFixed(0)}% · repairs outstanding`;
   }
 
+  /**
+   * One row per stage-and-conditions pairing. A night variant is a separate
+   * entry with its own record, fee and payouts, because that is what it is:
+   * the same road, a different race.
+   */
   private stagesPanel(): string {
-    const rows = this.stages
-      .map((stage, i) => {
-        const record = this.career.profile.records[stage.id];
-        const check = this.career.canEnter(stage);
+    const targets = this.career.targets();
+    const rows = targets
+      .map((target, i) => {
+        const { def, variant } = target;
+        const record = this.career.recordFor(target);
+        const check = this.career.canEnter(target);
         const reason =
           check.reason === 'too-poor'
             ? 'not enough funds'
             : check.reason === 'undriveable'
               ? 'car undriveable'
               : check.reason === 'locked'
-                ? `${stage.requiresMedals} medal${stage.requiresMedals === 1 ? '' : 's'}`
+                ? `${variant.requiresMedals} medal${variant.requiresMedals === 1 ? '' : 's'}`
                 : '';
 
         const best = record
           ? `<span style="color:${MEDAL_TINT[record.medal]}">${formatTime(record.time)} · ${record.medal}</span>`
           : '<span class="dim">no time set</span>';
 
+        // Only the first nine rows have a number key, so the rest show none
+        // rather than a key that does nothing.
+        const key = i < 9 ? `${i + 1}` : '';
+
         return `
           <div class="stage-row ${check.allowed ? '' : 'locked'}">
-            <div class="stage-key">${i + 1}</div>
+            <div class="stage-key">${key}</div>
             <div class="stage-body">
-              <div class="stage-name">${stage.name}</div>
-              <div class="stage-meta">${stage.biome} · ${stage.entryFee === 0 ? 'free entry' : `entry ${money(stage.entryFee)}`}${
+              <div class="stage-name">${def.name} <span class="dim">· ${variant.name}</span></div>
+              <div class="stage-meta">${def.biome} · ${variant.entryFee === 0 ? 'free entry' : `entry ${money(variant.entryFee)}`}${
                 check.reason === 'locked' ? ` · <span class="locked-note">locked</span>` : ''
               }</div>
               <div class="stage-meta">${best}</div>
             </div>
             <div class="stage-pay">
-              <div><b style="color:${MEDAL_TINT.gold}">${money(stage.payouts.gold)}</b> gold</div>
-              <div class="dim">${money(stage.payouts.finish)} finish</div>
+              <div><b style="color:${MEDAL_TINT.gold}">${money(variant.payouts.gold)}</b> gold</div>
+              <div class="dim">${money(variant.payouts.finish)} finish</div>
             </div>
-            <button data-action="enter" data-id="${stage.id}" ${check.allowed ? '' : 'disabled'}>
+            <button data-action="enter" data-id="${this.career.keyFor(target)}" ${check.allowed ? '' : 'disabled'}>
               ${check.allowed ? 'Enter' : reason}
             </button>
           </div>`;
