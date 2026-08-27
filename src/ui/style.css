@@ -1,0 +1,93 @@
+:root {
+  --ink: #eef2f7;
+  --dim: #8b95a5;
+  --accent: #f2c14e;
+  --hot: #e8552f;
+  --panel: rgba(12, 15, 20, 0.62);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #0c0f14;
+  color: var(--ink);
+  font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app { position: relative; width: 100vw; height: 100vh; }
+#view { display: block; width: 100%; height: 100%; }
+
+#hud { position: absolute; inset: 0; pointer-events: none; }
+
+.hud-corner { position: absolute; padding: 18px 22px; }
+.hud-tl { top: 0; left: 0; }
+.hud-bl { bottom: 0; left: 0; }
+.hud-br { bottom: 0; right: 0; text-align: right; }
+
+.readout {
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: var(--panel);
+  padding: 4px 10px;
+  border-radius: 3px;
+  margin-bottom: 6px;
+  display: inline-block;
+}
+.readout.dim { color: var(--dim); }
+
+.help {
+  font-size: 12px;
+  color: var(--dim);
+  letter-spacing: 0.05em;
+}
+.help b { color: var(--ink); font-weight: 600; }
+
+.cluster { display: flex; align-items: baseline; justify-content: flex-end; gap: 14px; }
+
+.speed { font-size: 60px; font-weight: 700; line-height: 0.9; letter-spacing: -0.02em; }
+.speed em {
+  font-size: 15px;
+  font-style: normal;
+  color: var(--dim);
+  margin-left: 6px;
+  letter-spacing: 0.1em;
+}
+
+.gear {
+  font-size: 40px;
+  font-weight: 700;
+  color: var(--accent);
+  min-width: 34px;
+  text-align: center;
+}
+
+.rpm {
+  width: 260px;
+  height: 6px;
+  margin: 0 0 10px auto;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.rpm-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: background-color 90ms linear;
+}
+.rpm-fill.redline { background: var(--hot); }
+
+.drift {
+  height: 22px;
+  margin-top: 8px;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--accent);
+}
+.drift.big { color: var(--hot); }

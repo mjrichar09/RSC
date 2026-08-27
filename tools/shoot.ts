@@ -1,0 +1,133 @@
+/**
+ * Visual harness.
+ *
+ * Boots the game in headless Chromium, drives it from scripted traces, and
+ * stitches every frame into ONE labelled composite PNG.
+ *
+ *   npm run shoot
+ *   npm run shoot -- --grid=2x2 --cells=launch@2,slalom@6,handbrake@5.6,circle@8
+ *   npm run shoot -- --out=camera --cell=circle@8 --grid=1x1
+ *
+ * Composites rather than image bursts is a deliberate cost decision: four
+ * variants side by side answer a comparison question for the price of one
+ * image. See "Verification efficiency" in the plan.
+ */
+
+import { existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { chromium } from '@playwright/test';
+import { createServer } from 'vite';
+
+function arg(name: string, fallback: string): string {
+  const hit = process.argv.find((a) => a.startsWith(`--${name}=`));
+  return hit ? hit.split('=').slice(1).join('=') : fallback;
+}
+
+// 640x360 per cell is deliberately small: it is enough to answer "is this laid
+// out right", and detail beyond that answers no question worth the bytes.
+const [CELL_W, CELL_H] = arg('size', '640x360').split('x').map(Number) as [number, number];
+
+const cellSpec = arg('cells', 'launch@2,slalom@6,handbrake@5.6,circle@8');
+const [gridCols, gridRows] = arg('grid', '2x2').split('x').map(Number) as [number, number];
+const outName = arg('out', 'composite');
+
+const cells = cellSpec.split(',').map((spec) => {
+  const [trace, t] = spec.split('@');
+  return { trace: trace!, t: Number(t ?? '3'), label: `${trace} @ ${t ?? 3}s` };
+});
+
+const server = await createServer({ server: { port: 0 }, logLevel: 'error' });
+await server.listen();
+const port = server.config.server.port ?? (server.httpServer!.address() as { port: number }).port;
+const origin = `http://localhost:${port}`;
+
+/**
+ * Use whatever Chromium is already on the machine rather than downloading one.
+ * Playwright pins an exact browser build per release, so a preinstalled browser
+ * from a different build is found by path instead of by version.
+ */
+function findChromium(): string | undefined {
+  const root = process.env.PLAYWRIGHT_BROWSERS_PATH;
+  if (!root || !existsSync(root)) return undefined;
+  const dirs = readdirSync(root)
+    .filter((d) => d.startsWith('chromium-'))
+    .sort()
+    .reverse();
+  for (const d of dirs) {
+    const exe = `${root}/${d}/chrome-linux/chrome`;
+    if (existsSync(exe)) return exe;
+  }
+  return undefined;
+}
+
+const executablePath = findChromium();
+const browser = await chromium.launch({
+  ...(executablePath ? { executablePath } : {}),
+  args: [
+    // SwiftShader gives deterministic software WebGL, so a composite looks the
+    // same whether or not the machine running it has a GPU.
+    '--use-gl=angle',
+    '--use-angle=swiftshader',
+    '--enable-unsafe-swiftshader',
+    '--no-sandbox',
+  ],
+});
+
+try {
+  const page = await browser.newPage({ viewport: { width: CELL_W, height: CELL_H } });
+  const shots: string[] = [];
+
+  for (const cell of cells) {
+    await page.goto(`${origin}/?trace=${cell.trace}&t=${cell.t}`, { waitUntil: 'load' });
+    await page.waitForFunction(() => window.RSC?.rendered === true, undefined, { timeout: 30_000 });
+    const buf = await page.screenshot({ type: 'png' });
+    shots.push(`data:image/png;base64,${buf.toString('base64')}`);
+    console.log(`  captured ${cell.label}`);
+  }
+
+  // Stitch in-page: an offscreen canvas is already available and needs no
+  // native image dependency in Node.
+  const composite = await page.evaluate(
+    async ({ images, labels, cols, rows, w, h }) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = cols * w;
+      canvas.height = rows * h;
+      const ctx = canvas.getContext('2d')!;
+      ctx.fillStyle = '#0c0f14';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      for (let i = 0; i < images.length; i++) {
+        const img = new Image();
+        img.src = images[i]!;
+        await img.decode();
+        const x = (i % cols) * w;
+        const y = Math.floor(i / cols) * h;
+        ctx.drawImage(img, x, y, w, h);
+
+        ctx.fillStyle = 'rgba(12,15,20,0.78)';
+        ctx.fillRect(x + 8, y + 8, 200, 26);
+        ctx.fillStyle = '#f2c14e';
+        ctx.font = '600 15px ui-monospace, monospace';
+        ctx.fillText(labels[i] ?? '', x + 18, y + 26);
+
+        ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+        ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+      }
+      return canvas.toDataURL('image/png');
+    },
+    {
+      images: shots,
+      labels: cells.map((c) => c.label),
+      cols: gridCols,
+      rows: gridRows,
+      w: CELL_W,
+      h: CELL_H,
+    },
+  );
+
+  const path = `shots/${outName}.png`;
+  writeFileSync(path, Buffer.from(composite.split(',')[1]!, 'base64'));
+  console.log(`\n-> ${path}  (${gridCols}x${gridRows}, ${cells.length} frames in one image)`);
+} finally {
+  await browser.close();
+  await server.close();
+}
