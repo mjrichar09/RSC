@@ -11,6 +11,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { CAR, SIM, type VehicleTuning } from '../data/tuning.js';
 import type { DriverInput } from './input.js';
 import { NEUTRAL_INPUT } from './input.js';
+import { CLEAR_DAY, type Conditions } from './conditions.js';
 import { DamageModel, type DamageOptions, impactPointFromForce } from './damage.js';
 import { type Quat, type Vec3, add, lerpVec, rotateInverse, slerp, v3 } from './math.js';
 import { type Stage } from './stage.js';
@@ -61,6 +62,8 @@ export interface WorldOptions {
   damage?: DamageOptions | boolean;
   /** Start the car with these components already damaged. For tests. */
   damageTo?: Record<string, number>;
+  /** Weather and time of day. Defaults to clear daylight. */
+  conditions?: Conditions;
 }
 
 /** Merge overrides over the baseline car setup. */
@@ -74,6 +77,7 @@ export class SimWorld {
   readonly vehicle: Vehicle;
   readonly stage: Stage | null;
   readonly damage: DamageModel | null;
+  readonly conditions: Conditions;
   readonly dt = 1 / SIM.hz;
 
   /** Simulated seconds since construction. Not wall-clock time. */
@@ -169,6 +173,7 @@ export class SimWorld {
         ? { position: this.stage.start.position, heading: this.stage.start.heading }
         : { position: v3(0, 1.2, 0), heading: 0 });
 
+    this.conditions = options.conditions ?? CLEAR_DAY;
     this.damage =
       options.damage === undefined || options.damage === false
         ? null
@@ -177,6 +182,7 @@ export class SimWorld {
 
     this.vehicle = new Vehicle(RAPIER, this.world, resolveTuning(options.tuning), spawn, {
       surfaceAt: (p) => surface(this.surfaceIdAt(p)),
+      conditions: this.conditions,
       ...(this.damage ? { damage: this.damage } : {}),
     });
   }

@@ -30,6 +30,8 @@ export interface Split {
 
 export class Race {
   readonly stage: Stage;
+  /** Medal times in force for this run — a variant's, not always the stage's. */
+  readonly medals: MedalTimes;
 
   phase: RacePhase = 'staging';
   /** Elapsed seconds. Starts when the car first moves. */
@@ -45,8 +47,9 @@ export class Race {
   private nextCheckpoint = 0;
   private hint: number | undefined;
 
-  constructor(stage: Stage) {
+  constructor(stage: Stage, medals?: MedalTimes) {
     this.stage = stage;
+    this.medals = medals ?? stage.def.medals;
   }
 
   /** Fraction of the stage completed, 0..1. */
@@ -78,7 +81,7 @@ export class Race {
   /** The medal this run is currently on for, or null while it is too early. */
   get projectedMedal(): Medal | null {
     const projected = this.projectedTime;
-    return projected === null ? null : medalFor(projected, this.stage.def.medals);
+    return projected === null ? null : medalFor(projected, this.medals);
   }
 
   /** Call once per fixed step, after the sim has advanced. */
@@ -128,7 +131,7 @@ export class Race {
     if (atEnd && this.nextCheckpoint >= checkpoints.length) {
       this.phase = 'finished';
       this.finishTime = this.time;
-      this.medal = medalFor(this.time, this.stage.def.medals);
+      this.medal = medalFor(this.time, this.medals);
     }
   }
 

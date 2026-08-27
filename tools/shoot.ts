@@ -31,6 +31,8 @@ const [CELL_W, CELL_H] = arg('size', '640x360').split('x').map(Number) as [numbe
 const cellSpec = arg('cells', 'pine-loop@22,quarry-run@26,north-pass@30,pine-loop@44');
 /** Driver commitment for stage cells, so a frame can catch the car at real pace. */
 const grip = arg('grip', '0.6');
+/** `--variant=night-rain` shoots the stage under those conditions. */
+const variantArg = arg('variant', '');
 const [gridCols, gridRows] = arg('grid', '2x2').split('x').map(Number) as [number, number];
 const outName = arg('out', 'composite');
 
@@ -40,17 +42,24 @@ const cells = cellSpec.split(',').map((spec) => {
   const isTrace = name!.startsWith('trace:');
   // `ghost:` seeds a recorded AI lap first, so the frame shows the chase.
   const withGhost = name!.startsWith('ghost:');
-  // `crash:<stage>:<seconds>@<t>` drives into the bank before the frame.
+  // `crash:<stage>:<seconds>@<t>` drives into the bank before the frame, and a
+  // cell may name its own variant as `<stage>/<variant>`.
   const crashMatch = /^crash(\d+(?:\.\d+)?)?:(.+)$/.exec(name!);
   const crashFor = crashMatch ? Number(crashMatch[1] ?? '2') : 0;
 
-  const id = isTrace || withGhost ? name!.slice(6) : (crashMatch?.[2] ?? name!);
+  const raw = isTrace || withGhost ? name!.slice(6) : (crashMatch?.[2] ?? name!);
+  const [id, cellVariant] = raw.split('/');
+  const useVariant = cellVariant ?? variantArg;
   const url = isTrace
     ? `/?trace=${id}&t=${seconds}`
-    : `/?stage=${id}&t=${seconds}&grip=${grip}${withGhost ? '&ghost=1' : ''}${crashFor ? `&crash=${crashFor}` : ''}`;
+    : `/?stage=${id}&t=${seconds}&grip=${grip}${useVariant ? `&variant=${useVariant}` : ''}${
+        withGhost ? '&ghost=1' : ''
+      }${crashFor ? `&crash=${crashFor}` : ''}`;
   return {
     url,
-    label: `${id} @ ${seconds}s${withGhost ? ' + ghost' : ''}${crashFor ? ` + ${crashFor}s crash` : ''}`,
+    label: `${id}${useVariant ? ` ${useVariant}` : ''} @ ${seconds}s${withGhost ? ' + ghost' : ''}${
+      crashFor ? ` + ${crashFor}s crash` : ''
+    }`,
   };
 });
 

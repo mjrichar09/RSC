@@ -24,6 +24,9 @@ const nums = (s: string) => s.split(',').map(Number);
 const steers = nums(arg('steer', '0.15,0.3,0.5,0.75,1.0'));
 const throttles = nums(arg('throttle', '0.55'));
 const surfaces = arg('surface', 'tarmac').split(',') as SurfaceId[];
+/** `--weather=rain` measures the same corner under different conditions. */
+const weather = arg('weather', 'clear') as never;
+const timeOfDay = arg('time', 'day') as never;
 
 /**
  * `--set=maxSteerAngle=0.42,peakSlipAngle=0.2` overrides tuning for this run,
@@ -53,7 +56,7 @@ const pad = (s: string | number, n: number, left = false) =>
 
 for (const surfaceId of surfaces) {
   for (const throttle of throttles) {
-    console.log(`\nsurface=${surfaceId}  throttle=${throttle}`);
+    console.log(`\nsurface=${surfaceId}  throttle=${throttle}  weather=${weather}`);
     console.log(
       [
         pad('steer', 7),
@@ -71,7 +74,13 @@ for (const surfaceId of surfaces) {
     console.log('-'.repeat(81));
 
     for (const steer of steers) {
-      const r = await steadyState({ steer, throttle, surface: surfaceId, tuning: overrides });
+      const r = await steadyState({
+        steer,
+        throttle,
+        surface: surfaceId,
+        tuning: overrides,
+        conditions: { timeOfDay, weather },
+      });
       console.log(
         [
           pad(steer.toFixed(2), 7),

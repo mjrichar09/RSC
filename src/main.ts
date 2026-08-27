@@ -16,7 +16,8 @@ import { NEUTRAL_INPUT } from './sim/input.js';
 import { Driver } from './sim/driver.js';
 import { GhostPlayer, GhostRecorder } from './sim/replay.js';
 import { FAILURE_LABEL, type ComponentId } from './sim/damage.js';
-import { Stage } from './sim/stage.js';
+import { Stage, findVariant, type StageVariant } from './sim/stage.js';
+import { visibility } from './sim/conditions.js';
 import { TRACES, sampleTrace } from './sim/trace.js';
 import { SimWorld, initPhysics } from './sim/world.js';
 import { Mixer } from './audio/mixer.js';
@@ -82,7 +83,7 @@ async function main(): Promise<void> {
 
   const canvas = document.getElementById('view') as HTMLCanvasElement;
   const hudRoot = document.getElementById('hud') as HTMLElement;
-  const { renderer, scene, key, resize } = createScene(canvas);
+  const { renderer, scene, key, applyConditions, resize } = createScene(canvas);
   const camera = new IsoCamera();
   const carView = new CarView(scene);
   const ghostView = new CarView(scene, { ghost: true });
@@ -105,6 +106,7 @@ async function main(): Promise<void> {
   let stage: Stage | null = null;
   let race: Race | null = null;
   let stageView: StageView | null = null;
+  let variant: StageVariant | null = null;
   let tuningPanel: TuningPanel | null = null;
   let stuckFor = 0;
   let ghost: GhostPlayer | null = null;
@@ -132,11 +134,19 @@ async function main(): Promise<void> {
     ghostView.visible = ghost !== null;
   };
 
-  const loadStage = (stageId: string) => {
+  const loadStage = (stageId: string, variantId?: string) => {
     stageView?.dispose();
     if (stageView) scene.remove(stageView.group);
 
-    stage = new Stage(stageById(stageId));
+    const def = stageById(stageId);
+    variant = findVariant(def, variantId);
+    stage = new Stage(def);
+
+    // Conditions light the scene, set the fog, and decide how much the
+    // headlights matter — which is what finally gives the `lights` component
+    // something to do.
+    applyConditions(variant.conditions);
+    carView.setHeadlightWeight(visibility(variant.conditions).headlightWeight);
     stageView = buildStageView(stage);
     scene.add(stageView.group);
 
@@ -146,12 +156,13 @@ async function main(): Promise<void> {
       stage,
       tuning: career.tuning(),
       damage: { rollcage: rollcageMitigation(career.upgrades) },
+      conditions: variant.conditions,
     });
     applyCarCondition();
-    race = new Race(stage);
+    race = new Race(stage, variant.medals);
     settled = false;
     damagePanel.reset();
-    raceHud.setStage(stage);
+    raceHud.setStage(stage, variant.name, variant.medals);
     tuningPanel?.rebind(world.vehicle.tuning);
 
     camera.applyZones(stage.def.cameraZones, 0);
@@ -185,7 +196,7 @@ async function main(): Promise<void> {
   if (freeRoam) loadFreeRoam();
   else {
     sessionHealth = { ...career.profile.carHealth };
-    loadStage(params.get('stage') ?? STAGES[0]!.id);
+    loadStage(params.get('stage') ?? STAGES[0]!.id, params.get('variant') ?? undefined);
   }
 
   tuningPanel = new TuningPanel(hudRoot, world!.vehicle.tuning);
@@ -211,7 +222,7 @@ async function main(): Promise<void> {
       }
       world.vehicle.reset(stage.start.position, stage.start.heading);
       race.reset();
-      raceHud.setStage(stage);
+      raceHud.setStage(stage, variant?.name, variant?.medals);
       raceHud.setBest(save.recordFor(stage.def.id)?.time ?? null);
       raceHud.setSplitDeltas([]);
       raceHud.setDelta(null);

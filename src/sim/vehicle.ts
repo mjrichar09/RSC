@@ -12,6 +12,7 @@
 
 import type RAPIER from '@dimforge/rapier3d-compat';
 import type { VehicleTuning } from '../data/tuning.js';
+import { CLEAR_DAY, type Conditions, gripMultiplier } from './conditions.js';
 import type { DamageEffects, DamageModel } from './damage.js';
 import type { DriverInput } from './input.js';
 import { type Surface, surface } from './surfaces.js';
@@ -81,6 +82,8 @@ export interface VehicleOptions {
   surfaceAt?: (point: Vec3) => Surface;
   /** Component damage. When absent the car behaves as if factory fresh. */
   damage?: DamageModel;
+  /** Weather and time of day. Weather takes real grip away. */
+  conditions?: Conditions;
 }
 
 /** What an undamaged car looks like, so the damage-free path costs nothing. */
@@ -107,6 +110,7 @@ export class Vehicle {
   readonly tuning: VehicleTuning;
   private readonly surfaceAt: (point: Vec3) => Surface;
   readonly damage: DamageModel | null;
+  readonly conditions: Conditions;
   private effects: DamageEffects = PRISTINE;
 
   readonly wheels: WheelState[] = [];
@@ -131,6 +135,7 @@ export class Vehicle {
     this.engineRpm = tuning.idleRpm;
     this.surfaceAt = options.surfaceAt ?? (() => surface('tarmac'));
     this.damage = options.damage ?? null;
+    this.conditions = options.conditions ?? CLEAR_DAY;
 
     const h = tuning.halfExtents;
     const heading = spawn.heading ?? 0;
@@ -389,7 +394,10 @@ export class Vehicle {
       const balance = front ? t.tireGripBalance : 2 - t.tireGripBalance;
       const handbrakeLoss =
         front || input.handbrake === 0 ? 1 : 1 - input.handbrake * (1 - t.handbrakeGripLoss);
-      const mu = t.tireGrip * w.surface.grip * balance * handbrakeLoss * fx.wheelGrip[i]!;
+      // Weather multiplies in alongside the surface's own grip: a wet racing
+      // line is a different road from a dry one, and the car has to feel that.
+      const weather = gripMultiplier(this.conditions, w.surface);
+      const mu = t.tireGrip * w.surface.grip * weather * balance * handbrakeLoss * fx.wheelGrip[i]!;
 
       const f = tireForces({
         load: susp[i]!,

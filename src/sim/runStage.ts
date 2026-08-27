@@ -8,6 +8,7 @@
 
 import { Race } from '../game/race.js';
 import { Driver, type DriverOptions } from './driver.js';
+import type { Conditions } from './conditions.js';
 import { type Ghost, GhostRecorder } from './replay.js';
 import type { Stage } from './stage.js';
 import { TelemetryRecorder, type TelemetrySummary } from './telemetry.js';
@@ -34,6 +35,8 @@ export interface StageRunResult {
 
 export interface StageRunOptions {
   driver?: DriverOptions;
+  /** Race the stage under these conditions. Defaults to clear daylight. */
+  conditions?: Conditions;
   /** Give up after this many simulated seconds. */
   timeout?: number;
   /** Record a ghost of the run. Used for benchmark ghosts and for tests. */
@@ -58,7 +61,10 @@ export interface ValidationResult {
  * near its own limit, so a single run is a coin toss rather than a verdict.
  * A stage has to be completable by a careful driver *and* by a committed one.
  */
-export async function validateStage(stage: Stage): Promise<ValidationResult> {
+export async function validateStage(
+  stage: Stage,
+  conditions?: Conditions,
+): Promise<ValidationResult> {
   const budgets = [0.55, 0.75, 0.95];
   let best: number | null = null;
   let offRoad = 0;
@@ -66,7 +72,11 @@ export async function validateStage(stage: Stage): Promise<ValidationResult> {
   let finished = 0;
 
   for (const gripBudget of budgets) {
-    const result = await runStage(stage, { driver: { gripBudget }, recordGhost: false });
+    const result = await runStage(stage, {
+      driver: { gripBudget },
+      recordGhost: false,
+      ...(conditions ? { conditions } : {}),
+    });
     offRoad = Math.max(offRoad, result.offRoadFraction);
     rescues = Math.max(rescues, result.rescues);
     if (result.finished && result.time !== null) {
@@ -94,7 +104,10 @@ export async function runStage(
   options: StageRunOptions = {},
 ): Promise<StageRunResult> {
   const timeout = options.timeout ?? 300;
-  const world = await createWorld({ stage });
+  const world = await createWorld({
+    stage,
+    ...(options.conditions ? { conditions: options.conditions } : {}),
+  });
   const driver = new Driver(stage, options.driver);
   const race = new Race(stage);
   const recorder = new TelemetryRecorder();

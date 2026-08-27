@@ -12,6 +12,7 @@
  * generated rather than authored so every stage gets it for free.
  */
 
+import { CLEAR_DAY, type Conditions, describeConditions } from './conditions.js';
 import { type Vec3, add, scale, v3 } from './math.js';
 import { type ControlPoint, Spline, type SplineSample } from './spline.js';
 import type { SurfaceId } from './surfaces.js';
@@ -52,6 +53,44 @@ export interface HazardProfile {
   spacing: number;
 }
 
+/**
+ * A stage under particular conditions.
+ *
+ * Conditions are variants rather than a per-race roll, so a record always
+ * belongs to the conditions it was set in. A gold time from clear daylight
+ * would be meaningless — and quietly unreachable — in fog, and a ghost from a
+ * dry line is the wrong car to chase on a wet one.
+ */
+export interface StageVariant {
+  /** Unique within the stage. Combined with the stage id to key records. */
+  id: string;
+  /** Human label, e.g. "Night · Rain". */
+  name: string;
+  conditions: Conditions;
+  medals: MedalTimes;
+  payouts: { author: number; gold: number; silver: number; bronze: number; finish: number };
+  entryFee: number;
+  requiresMedals: number;
+}
+
+/**
+ * How a variant differs from its stage's baseline.
+ *
+ * `timeScale` is calibrated by driving the variant with the AI (`npm run
+ * stages`), which feels the grip loss directly, and then adding an allowance
+ * for visibility, which the AI does not feel at all — see
+ * `visibilityPenalty`.
+ */
+export interface VariantSpec {
+  id: string;
+  conditions: Conditions;
+  /** Multiplier on the base medal times. */
+  timeScale: number;
+  /** Multiplier on entry fee and payouts. Harder conditions pay more. */
+  rewardScale: number;
+  requiresMedals: number;
+}
+
 export interface StageDef {
   id: string;
   name: string;
@@ -77,6 +116,11 @@ export interface StageDef {
   cameraZones?: CameraZone[];
   /** Roadside hazards. Omit for a bare corridor. */
   hazards?: HazardProfile;
+  /**
+   * Extra conditions this stage can be raced in, beyond clear daylight.
+   * The baseline variant is always present and is generated, not authored.
+   */
+  variants?: VariantSpec[];
   /** Number of intermediate checkpoints. They are spaced evenly along the stage. */
   checkpoints?: number;
 }
@@ -165,6 +209,58 @@ export interface Checkpoint {
   /** Half-width of the gate, for rendering markers. */
   width: number;
   right: Vec3;
+}
+
+/** Key under which a variant's record and ghost are stored. */
+export const variantKey = (stageId: string, variantId: string): string =>
+  `${stageId}:${variantId}`;
+
+/** The always-present clear-daylight variant, built from the stage's own numbers. */
+const baselineVariant = (def: StageDef): StageVariant => ({
+  id: 'day-clear',
+  name: describeConditions(CLEAR_DAY),
+  conditions: CLEAR_DAY,
+  medals: def.medals,
+  payouts: def.payouts,
+  entryFee: def.entryFee,
+  requiresMedals: def.requiresMedals ?? 0,
+});
+
+/**
+ * Every way this stage can be raced: clear daylight first, then its variants.
+ *
+ * Variants scale off the baseline rather than repeating it, so a stage's
+ * numbers are stated once and a harder version of it stays in proportion.
+ */
+export function stageVariants(def: StageDef): StageVariant[] {
+  const base = baselineVariant(def);
+  const extras = (def.variants ?? []).map((spec): StageVariant => ({
+    id: spec.id,
+    name: describeConditions(spec.conditions),
+    conditions: spec.conditions,
+    medals: {
+      author: Math.round(def.medals.author * spec.timeScale),
+      gold: Math.round(def.medals.gold * spec.timeScale),
+      silver: Math.round(def.medals.silver * spec.timeScale),
+      bronze: Math.round(def.medals.bronze * spec.timeScale),
+    },
+    payouts: {
+      author: Math.round(def.payouts.author * spec.rewardScale),
+      gold: Math.round(def.payouts.gold * spec.rewardScale),
+      silver: Math.round(def.payouts.silver * spec.rewardScale),
+      bronze: Math.round(def.payouts.bronze * spec.rewardScale),
+      finish: Math.round(def.payouts.finish * spec.rewardScale),
+    },
+    entryFee: Math.round(def.entryFee * spec.rewardScale),
+    requiresMedals: spec.requiresMedals,
+  }));
+  return [base, ...extras];
+}
+
+/** Look up one variant, falling back to clear daylight. */
+export function findVariant(def: StageDef, variantId: string | undefined): StageVariant {
+  const all = stageVariants(def);
+  return all.find((v) => v.id === variantId) ?? all[0]!;
 }
 
 export class Stage {

@@ -12,6 +12,16 @@ import { CAMERA } from '../data/tuning.js';
 import type { Vec3 } from '../sim/math.js';
 import type { CameraZone } from '../sim/stage.js';
 
+/**
+ * How far back the orthographic camera sits, in metres.
+ *
+ * Arbitrary for an orthographic projection — it only has to clear the near
+ * plane and stay inside the shadow frustum — but everything depth-based has to
+ * know it. Fog in particular is measured from the camera, so a fog range
+ * meant to mean "60 m from the car" has to be expressed as 140 + 60.
+ */
+export const CAMERA_DISTANCE = 140;
+
 /** Signed shortest angular difference from `from` to `to`, in radians. */
 function shortestAngle(from: number, to: number): number {
   let d = (to - from) % (Math.PI * 2);
@@ -141,9 +151,7 @@ export class IsoCamera {
   }
 
   private place(): void {
-    // Orthographic distance is arbitrary; it only has to clear the far plane's
-    // near side and stay inside the shadow camera's frustum.
-    const dist = 140;
+    const dist = CAMERA_DISTANCE;
     const cp = Math.cos(this.pitch);
     const offset = new THREE.Vector3(
       Math.sin(this.yaw) * cp,

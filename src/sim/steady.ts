@@ -8,6 +8,7 @@
  */
 
 import type { VehicleTuning } from '../data/tuning.js';
+import type { Conditions } from './conditions.js';
 import type { SurfaceId } from './surfaces.js';
 import { TelemetryRecorder } from './telemetry.js';
 import { createWorld } from './world.js';
@@ -43,12 +44,13 @@ export interface SteadyStateOptions {
   /** Seconds of cornering. The last third is what gets averaged. */
   hold?: number;
   tuning?: Partial<VehicleTuning>;
+  conditions?: Conditions;
 }
 
 export async function steadyState(options: SteadyStateOptions): Promise<SteadyStateResult> {
-  const { steer, throttle = 0.55, surface = 'tarmac', runUp = 3, hold = 9, tuning } = options;
+  const { steer, throttle = 0.55, surface = 'tarmac', runUp = 3, hold = 9, tuning, conditions } = options;
 
-  const world = await createWorld({ baseSurface: surface, tuning });
+  const world = await createWorld({ baseSurface: surface, tuning, ...(conditions ? { conditions } : {}) });
   const recorder = new TelemetryRecorder();
 
   for (let i = 0; i < 60; i++) world.step({ throttle: 0, brake: 0, steer: 0, handbrake: 0 });

@@ -12,6 +12,8 @@
  */
 
 import * as THREE from 'three';
+import { CLEAR_DAY, type Conditions, type TimeOfDay, visibility } from '../sim/conditions.js';
+import { CAMERA_DISTANCE } from './camera.js';
 import type { GroundPatch } from '../sim/world.js';
 import { SURFACES } from '../sim/surfaces.js';
 
@@ -38,11 +40,78 @@ export const PALETTE = {
  */
 export const KEY_LIGHT_OFFSET = { x: -38, y: 46, z: -34 } as const;
 
+/**
+ * Lighting per time of day.
+ *
+ * The key light's *direction* is fixed for all of them — it stays opposite the
+ * camera, or the car sits on its own shadow and the only height cue in the game
+ * disappears. Only colour and intensity change with the hour.
+ */
+interface LightingPreset {
+  key: { color: number; intensity: number };
+  hemisphere: { sky: number; ground: number; intensity: number };
+  fill: { color: number; intensity: number };
+  background: number;
+  fog: number;
+  /** Shadows go soft and then vanish as the sun goes down. */
+  shadowStrength: number;
+}
+
+const LIGHTING: Record<TimeOfDay, LightingPreset> = {
+  dawn: {
+    key: { color: 0xffd9b0, intensity: 1.9 },
+    hemisphere: { sky: 0x9fb6d8, ground: 0x35281c, intensity: 0.75 },
+    fill: { color: 0xa8c8ff, intensity: 0.5 },
+    background: 0x3b3a4d,
+    fog: 0x4a4356,
+    shadowStrength: 0.7,
+  },
+  day: {
+    key: { color: 0xfff2e0, intensity: 2.6 },
+    hemisphere: { sky: 0x8fb4ff, ground: 0x2a2118, intensity: 0.6 },
+    fill: { color: 0x6fa8ff, intensity: 0.55 },
+    background: 0x20293a,
+    fog: 0x20293a,
+    shadowStrength: 1,
+  },
+  dusk: {
+    key: { color: 0xff9a5c, intensity: 1.7 },
+    hemisphere: { sky: 0x6f7fb0, ground: 0x2a1d16, intensity: 0.6 },
+    fill: { color: 0x5f7fd0, intensity: 0.45 },
+    background: 0x2e2436,
+    fog: 0x3a2c3a,
+    shadowStrength: 0.55,
+  },
+  night: {
+    // Moonlight: cold and weak, but never black. A screen you genuinely cannot
+    // read is a bug rather than a difficulty — the car's silhouette and the
+    // rough line of the road have to stay legible, and the headlights are what
+    // turn "roughly there" into "I can take this corner".
+    key: { color: 0x8fa8d8, intensity: 0.85 },
+    hemisphere: { sky: 0x2c3c60, ground: 0x11151f, intensity: 0.5 },
+    fill: { color: 0x50709f, intensity: 0.3 },
+    background: 0x0b0f18,
+    fog: 0x0b0f18,
+    shadowStrength: 0.25,
+  },
+};
+
+/** Weather dims and desaturates on top of the hour. */
+const WEATHER_DIM: Record<Conditions['weather'], number> = {
+  clear: 1,
+  overcast: 0.72,
+  rain: 0.62,
+  fog: 0.6,
+  snowfall: 0.78,
+};
+
 export interface SceneBundle {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
   /** Key light; its shadow frustum has to be kept over the car as it drives. */
   key: THREE.DirectionalLight;
+  /** Re-light the scene for a set of conditions. Safe to call on every stage load. */
+  applyConditions: (conditions: Conditions) => void;
   resize: (width: number, height: number) => void;
 }
 
@@ -81,7 +150,8 @@ export function createScene(canvas: HTMLCanvasElement): SceneBundle {
   scene.add(key);
   scene.add(key.target);
 
-  scene.add(new THREE.HemisphereLight(0x8fb4ff, 0x2a2118, 0.6));
+  const hemisphere = new THREE.HemisphereLight(0x8fb4ff, 0x2a2118, 0.6);
+  scene.add(hemisphere);
 
   // Cool fill from the camera side, low and weak: lifts the shadowed faces just
   // enough to keep the silhouette readable without washing the shadow out.
@@ -89,11 +159,43 @@ export function createScene(canvas: HTMLCanvasElement): SceneBundle {
   fill.position.set(34, 16, 30);
   scene.add(fill);
 
+  const applyConditions = (conditions: Conditions) => {
+    const preset = LIGHTING[conditions.timeOfDay];
+    const dim = WEATHER_DIM[conditions.weather];
+    const view = visibility(conditions);
+
+    key.color.setHex(preset.key.color);
+    key.intensity = preset.key.intensity * dim;
+    // A shadow needs a sun. Under moonlight or heavy cloud there is barely one,
+    // and a hard shadow at midnight looks wrong immediately.
+    key.castShadow = preset.shadowStrength * dim > 0.25;
+
+    hemisphere.color.setHex(preset.hemisphere.sky);
+    hemisphere.groundColor.setHex(preset.hemisphere.ground);
+    hemisphere.intensity = preset.hemisphere.intensity * dim;
+
+    fill.color.setHex(preset.fill.color);
+    fill.intensity = preset.fill.intensity * dim;
+
+    scene.background = new THREE.Color(preset.background);
+    // Fog is measured from the camera, which sits a fixed distance back, so a
+    // range meaning "visible for 60 m around the car" has to be offset by it.
+    // Without the offset the entire world is past the far plane and every
+    // frame renders as flat fog colour.
+    scene.fog = new THREE.Fog(
+      preset.fog,
+      CAMERA_DISTANCE + view.fogNear,
+      CAMERA_DISTANCE + view.fogFar,
+    );
+  };
+
+  applyConditions(CLEAR_DAY);
+
   const resize = (width: number, height: number) => {
     renderer.setSize(width, height, false);
   };
 
-  return { renderer, scene, key, resize };
+  return { renderer, scene, key, applyConditions, resize };
 }
 
 /**

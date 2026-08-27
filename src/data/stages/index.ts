@@ -7,9 +7,29 @@
  * a stage costs a few dozen lines rather than an afternoon in an editor.
  */
 
-import type { StageDef } from '../../sim/stage.js';
+import type { StageDef, VariantSpec } from '../../sim/stage.js';
 import type { ControlPoint } from '../../sim/spline.js';
 import type { SurfaceId } from '../../sim/surfaces.js';
+
+/**
+ * Variant helper. `timeScale` and `rewardScale` are calibrated by measurement:
+ * `npm run stages` drives every variant with the AI, which feels the grip loss
+ * directly, and the visibility allowance is added on top.
+ */
+const variant = (
+  id: string,
+  timeOfDay: VariantSpec['conditions']['timeOfDay'],
+  weather: VariantSpec['conditions']['weather'],
+  timeScale: number,
+  rewardScale: number,
+  requiresMedals: number,
+): VariantSpec => ({
+  id,
+  conditions: { timeOfDay, weather },
+  timeScale,
+  rewardScale,
+  requiresMedals,
+});
 
 /** Terse control-point helper: [x, z, y, width, surface]. */
 const cp = (
@@ -63,6 +83,10 @@ const pineLoop: StageDef = {
     cp(-55, 15, 0, 5.6, 'gravel'),
     cp(-40, 60, 0, 6.0, 'gravel'),
   ],
+  variants: [
+    variant('dusk', 'dusk', 'clear', 1.05, 1.35, 2),
+    variant('night-rain', 'night', 'rain', 1.41, 2.1, 5),
+  ],
   cameraZones: [
     { from: 0, yaw: Math.PI * 0.25, zoom: 13 },
     // Tightens through the fast right-hander so the exit stays in frame.
@@ -110,6 +134,10 @@ const quarryRun: StageDef = {
     cp(20, 165, 0, 5.4, 'tarmac'),
     cp(75, 175, 0, 5.6, 'tarmac'),
   ],
+  variants: [
+    variant('rain', 'day', 'rain', 1.19, 1.4, 3),
+    variant('night', 'night', 'clear', 1.1, 1.8, 6),
+  ],
   cameraZones: [
     { from: 0, yaw: Math.PI * 0.25, zoom: 12 },
     { from: 260, yaw: -Math.PI * 0.1, zoom: 13 },
@@ -149,6 +177,10 @@ const northPass: StageDef = {
     cp(60, -20, 0, 6.2, 'snow'),
     cp(80, 35, 0, 6.4, 'snow'),
     cp(70, 95, 0, 6.4, 'snow'),
+  ],
+  variants: [
+    variant('fog', 'day', 'fog', 1.09, 1.6, 4),
+    variant('night-snow', 'night', 'snowfall', 1.57, 2.3, 7),
   ],
   cameraZones: [
     { from: 0, yaw: -Math.PI * 0.25, zoom: 14 },

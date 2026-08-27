@@ -48,6 +48,11 @@ export class CarView {
   /** Undamaged pose of each deformable part, to deform away from. */
   private readonly restPose = new Map<THREE.Mesh, { position: THREE.Vector3; scale: THREE.Vector3; color: THREE.Color }>();
   private nose!: THREE.Mesh;
+  /** Headlight beams, and the glowing lamp faces that go with them. */
+  private readonly headlights: THREE.SpotLight[] = [];
+  private readonly lamps: THREE.Mesh[] = [];
+  /** How much headlights matter here: 0 in daylight, 1 at night. */
+  private headlightWeight = 0;
   private cabin!: THREE.Mesh;
   private body!: THREE.Mesh;
   private wing!: THREE.Mesh;
@@ -123,6 +128,8 @@ export class CarView {
 
     parent.add(this.group);
 
+    if (!isGhost) this.buildHeadlights(h);
+
     this.body = body;
     this.cabin = cabin;
     this.nose = nose;
@@ -134,6 +141,46 @@ export class CarView {
         color: (mesh.material as THREE.MeshStandardMaterial).color.clone(),
       });
     }
+  }
+
+  /**
+   * Headlights.
+   *
+   * Two spotlights down the nose, plus the lamp faces that show they are lit.
+   * Their intensity and reach come from the `lights` component, which until now
+   * was a repair line with nothing behind it — 260 to fix something that had
+   * never once mattered. On a night variant it decides whether you can see the
+   * next corner.
+   */
+  private buildHeadlights(h: { x: number; y: number; z: number }): void {
+    const lampGeo = new THREE.BoxGeometry(0.3, 0.16, 0.1);
+
+    for (const side of [-1, 1]) {
+      // Decay 0: this is an arcade light meant to reach 90 m of road, not a
+      // physically-falling-off lamp. With realistic decay the beam dies a few
+      // metres from the bumper and lights nothing you need to see.
+      const beam = new THREE.SpotLight(0xfff0d0, 0, 95, 0.55, 0.45, 0);
+      beam.position.set(side * h.x * 0.62, h.y * 0.35, h.z * 0.95);
+      // The target has to be parented to the car too, or the beam stays
+      // pointing at wherever the car happened to be when the scene was built.
+      beam.target.position.set(side * h.x * 0.62, -h.y * 0.6, h.z * 0.95 + 18);
+      this.chassis.add(beam);
+      this.chassis.add(beam.target);
+      this.headlights.push(beam);
+
+      const lamp = new THREE.Mesh(
+        lampGeo,
+        new THREE.MeshBasicMaterial({ color: 0xfff0d0, transparent: true, opacity: 0 }),
+      );
+      lamp.position.set(side * h.x * 0.55, h.y * 0.35, h.z * 0.99);
+      this.chassis.add(lamp);
+      this.lamps.push(lamp);
+    }
+  }
+
+  /** Tell the car how much the headlights matter here. */
+  setHeadlightWeight(weight: number): void {
+    this.headlightWeight = weight;
   }
 
   /**
@@ -181,6 +228,21 @@ export class CarView {
       'x',
       0,
     );
+
+    // Headlights: below half health one side dies outright, so the beam goes
+    // lopsided before it goes dark. That is a far more useful warning than a
+    // dimmer being turned down evenly.
+    const lightsHealth = damage.get('lights');
+    for (let i = 0; i < this.headlights.length; i++) {
+      const sideAlive = i === 0 || lightsHealth > 0.5;
+      const strength = sideAlive ? lightsHealth : 0;
+      const beam = this.headlights[i]!;
+      beam.intensity = strength * this.headlightWeight * 30;
+      beam.distance = 40 + strength * 65;
+      beam.angle = 0.4 + strength * 0.18;
+      const lamp = this.lamps[i]!.material as THREE.MeshBasicMaterial;
+      lamp.opacity = strength * this.headlightWeight;
+    }
 
     for (let i = 0; i < 4; i++) {
       const key = ['FL', 'FR', 'RL', 'RR'][i]!;

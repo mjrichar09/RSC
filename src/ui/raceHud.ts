@@ -40,6 +40,8 @@ export class RaceHud {
   private lastPhase = '';
   private ghostTime: number | null = null;
   private ledger: SettleResult | null = null;
+  /** Medals in force, which on a variant are not the stage's own. */
+  private medals: Stage['def']['medals'] | null = null;
   private splitDeltas: (number | null)[] = [];
 
   constructor(parent: HTMLElement) {
@@ -105,8 +107,11 @@ export class RaceHud {
     this.ledger = ledger;
   }
 
-  setStage(stage: Stage): void {
-    this.stageName.textContent = `${stage.def.name.toUpperCase()} · ${(stage.length / 1000).toFixed(2)} km`;
+  setStage(stage: Stage, variantName?: string, medals?: Stage['def']['medals']): void {
+    this.medals = medals ?? null;
+    const suffix = variantName && variantName !== 'Day' ? ` · ${variantName.toUpperCase()}` : '';
+    this.stageName.textContent =
+      `${stage.def.name.toUpperCase()}${suffix} · ${(stage.length / 1000).toFixed(2)} km`;
     this.lastSplitCount = -1;
     this.lastPhase = '';
     this.panel.className = 'race-panel';
@@ -209,7 +214,7 @@ export class RaceHud {
   }
 
   private showFinish(medal: Medal, time: number, stage: Stage, damage: DamageModel | null): void {
-    const m = stage.def.medals;
+    const m = this.medals ?? stage.def.medals;
     const rows = (
       [
         ['author', m.author],
