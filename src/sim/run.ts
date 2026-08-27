@@ -15,6 +15,12 @@ export interface RunResult {
 
 export async function runTrace(trace: Trace, options: WorldOptions = {}): Promise<RunResult> {
   const world = await createWorld(options);
+  if (options.damageTo && world.damage) {
+    for (const [id, health] of Object.entries(options.damageTo)) {
+      world.damage.health.set(id as never, health);
+    }
+    world.damage.refreshFailures();
+  }
   const recorder = new TelemetryRecorder();
   const total = traceDuration(trace);
 

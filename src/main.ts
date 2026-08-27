@@ -196,7 +196,13 @@ async function main(): Promise<void> {
       // Each attempt on a paid stage costs its fee again: that is what makes a
       // committed run different from an idle retry. The free stage stays freely
       // retryable, so the Trackmania practice loop survives intact.
-      if (stage.def.entryFee > 0 && settled) {
+      //
+      // Any attempt that actually started counts, not just one that was settled.
+      // Charging only on settled runs let a player crash at nine tenths
+      // distance, restart for nothing, and discard the damage with it — which
+      // costs the damage economy most of its meaning.
+      const attemptUsed = race.phase !== 'staging';
+      if (stage.def.entryFee > 0 && attemptUsed) {
         if (!career.canEnter(stage.def).allowed) {
           openGarage();
           return;

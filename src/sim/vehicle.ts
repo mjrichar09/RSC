@@ -570,7 +570,10 @@ export class Vehicle {
     const frac = this.engineRpm / t.maxRpm;
     if (frac > t.upshiftAt && this.gearIndex < t.gearRatios.length - 1) {
       // A damaged gearbox sometimes refuses the shift and sits on the limiter.
-      if (this.effects.shiftFailure > 0 && Math.random() < this.effects.shiftFailure) {
+      // Drawn from the damage model's stream rather than Math.random, so a
+      // headless run stays reproducible with a damaged car.
+      const roll = this.damage?.nextRandom() ?? Math.random();
+      if (this.effects.shiftFailure > 0 && roll < this.effects.shiftFailure) {
         this.shiftTimer = t.shiftTime * 2;
         return;
       }

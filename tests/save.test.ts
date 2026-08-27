@@ -8,7 +8,7 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { STARTING_MONEY, SaveStore, emptyProfile } from '../src/game/save.js';
+import { STARTING_MONEY, SaveStore, emptyProfile, migrateProfile } from '../src/game/save.js';
 import { GHOST_STRIDE, type Ghost } from '../src/sim/replay.js';
 
 const ghostOf = (time: number): Ghost => ({
@@ -86,5 +86,63 @@ describe('SaveStore', () => {
     expect(profile.upgrades).toEqual({});
     expect(profile.carHealth).toEqual({});
     expect(profile.version).toBeGreaterThan(0);
+  });
+});
+
+describe('profile migration', () => {
+  it('accepts a current profile unchanged', () => {
+    const current = { ...emptyProfile(), money: 4200, upgrades: { engine: 2 } };
+    const out = migrateProfile(current);
+    expect(out.money).toBe(4200);
+    expect(out.upgrades).toEqual({ engine: 2 });
+  });
+
+  it('brings a v1 profile forward, giving it a real starting balance', () => {
+    const v1 = { version: 1, records: { 'pine-loop': { time: 50, medal: 'gold', setAt: 0 } }, money: 0, upgrades: {} };
+    const out = migrateProfile(v1);
+    expect(out.version).toBeGreaterThanOrEqual(2);
+    expect(out.money).toBe(STARTING_MONEY);
+    expect(out.records['pine-loop']?.time).toBe(50);
+    expect(out.carHealth).toEqual({});
+    expect(out.totals.earned).toBe(0);
+  });
+
+  it('keeps a v1 profile that already had money', () => {
+    expect(migrateProfile({ version: 1, money: 9000 }).money).toBe(9000);
+  });
+
+  it('survives a profile that is damaged rather than merely old', () => {
+    // A save that bricks the game on load is worse than a lost one, because
+    // there is no way past it.
+    for (const junk of [null, undefined, 42, 'nonsense', [], { version: 'x' }]) {
+      const out = migrateProfile(junk);
+      expect(typeof out.money).toBe('number');
+      expect(out.upgrades).toBeTypeOf('object');
+      expect(out.carHealth).toBeTypeOf('object');
+    }
+  });
+
+  it('replaces nulls where objects belong', () => {
+    // The spread that used to do this left `upgrades: null` intact, and the
+    // first purchase then threw.
+    const out = migrateProfile({ version: 2, upgrades: null, carHealth: null, records: null, totals: null });
+    expect(out.upgrades).toEqual({});
+    expect(out.carHealth).toEqual({});
+    expect(out.records).toEqual({});
+    expect(out.totals.earned).toBe(0);
+  });
+
+  it('rejects impossible money and clamps impossible damage', () => {
+    expect(migrateProfile({ version: 2, money: -500 }).money).toBe(0);
+    expect(migrateProfile({ version: 2, money: Number.NaN }).money).toBe(STARTING_MONEY);
+
+    const out = migrateProfile({
+      version: 2,
+      carHealth: { engine: 5, cooling: -3, turbo: Number.NaN, tyreFL: 0.4 },
+    });
+    expect(out.carHealth.engine).toBe(1);
+    expect(out.carHealth.cooling).toBe(0);
+    expect(out.carHealth.turbo).toBeUndefined();
+    expect(out.carHealth.tyreFL).toBe(0.4);
   });
 });

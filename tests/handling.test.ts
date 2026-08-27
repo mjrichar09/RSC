@@ -169,3 +169,41 @@ describe('simulation integrity', () => {
     expect(b.summary.finalPosition.x).toBeCloseTo(a.summary.finalPosition.x, 3);
   });
 });
+
+describe('determinism with a damaged car', () => {
+  /** A seeded stream, so "reproducible" means the same numbers, not luck. */
+  const seeded = () => {
+    let a = 12345;
+    return () => {
+      a = (a * 1664525 + 1013904223) >>> 0;
+      return a / 4294967296;
+    };
+  };
+
+  it('gives the same run twice with a failing gearbox', async () => {
+    // A damaged gearbox refuses shifts at random. Drawing that from
+    // `Math.random` rather than the model's injected stream made headless runs
+    // silently irreproducible — and only for a damaged car, so every existing
+    // determinism test still passed.
+    const options = {
+      damage: { random: seeded() },
+      damageTo: { transmission: 0.35, engine: 0.4 },
+    };
+
+    const a = await runTrace(TRACES.launch!, { ...options, damage: { random: seeded() } });
+    const b = await runTrace(TRACES.launch!, { ...options, damage: { random: seeded() } });
+
+    expect(b.summary.distance).toBeCloseTo(a.summary.distance, 6);
+    expect(b.summary.topSpeedKph).toBeCloseTo(a.summary.topSpeedKph, 6);
+    expect(b.summary.finalPosition.z).toBeCloseTo(a.summary.finalPosition.z, 6);
+  });
+
+  it('is meaningfully slower with a damaged engine and gearbox', async () => {
+    const healthy = await runTrace(TRACES.launch!);
+    const sick = await runTrace(TRACES.launch!, {
+      damage: { random: seeded() },
+      damageTo: { transmission: 0.35, engine: 0.4 },
+    });
+    expect(sick.summary.distance).toBeLessThan(healthy.summary.distance * 0.95);
+  });
+});

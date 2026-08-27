@@ -59,6 +59,8 @@ export interface WorldOptions {
    * sweep want, since they are measuring the car, not the crashing.
    */
   damage?: DamageOptions | boolean;
+  /** Start the car with these components already damaged. For tests. */
+  damageTo?: Record<string, number>;
 }
 
 /** Merge overrides over the baseline car setup. */

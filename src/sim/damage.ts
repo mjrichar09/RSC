@@ -239,6 +239,17 @@ export class DamageModel {
     return total / COMPONENTS.length;
   }
 
+  /**
+   * The model's random source.
+   *
+   * Exposed so everything stochastic about a damaged car draws from the same
+   * injectable stream. A headless run has to be reproducible, and reaching for
+   * `Math.random` anywhere in the simulation quietly breaks that.
+   */
+  nextRandom(): number {
+    return this.random();
+  }
+
   drainEvents(): DamageEvent[] {
     const out = this.pending;
     this.pending = [];

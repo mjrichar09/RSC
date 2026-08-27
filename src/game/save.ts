@@ -44,6 +44,9 @@ export interface Profile {
   totals: { earned: number; spentOnRepairs: number; spentOnUpgrades: number; retirements: number };
 }
 
+/** Exposed for tests: bringing a stored profile up to date and making it safe. */
+export { migrate as migrateProfile };
+
 export const emptyProfile = (): Profile => ({
   version: DB_VERSION,
   records: {},
@@ -53,22 +56,55 @@ export const emptyProfile = (): Profile => ({
   totals: { earned: 0, spentOnRepairs: 0, spentOnUpgrades: 0, retirements: 0 },
 });
 
+const isObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
 /**
- * Applies migrations to bring an older profile up to the current version.
- * Each step is deliberately small and additive.
+ * Bring a stored profile up to the current version, and make it safe to use.
+ *
+ * Migrations are deliberately small and additive, but this also has to survive
+ * a profile that is damaged rather than merely old — a half-written record, a
+ * field someone edited by hand, a null where an object should be. Spreading
+ * defaults is not enough on its own: a stored `upgrades: null` survives the
+ * spread intact and then throws on first write. Losing a save is bad; a save
+ * that bricks the game on load is worse, because there is no way past it.
  */
-function migrate(profile: Profile): Profile {
-  const out = { ...emptyProfile(), ...profile };
+function migrate(stored: unknown): Profile {
+  const base = emptyProfile();
+  if (!isObject(stored)) return base;
+
+  const version = typeof stored.version === 'number' ? stored.version : 1;
+  const number = (value: unknown, fallback: number) =>
+    typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+
+  const out: Profile = {
+    version: DB_VERSION,
+    records: isObject(stored.records) ? (stored.records as Profile['records']) : base.records,
+    money: Math.max(0, number(stored.money, base.money)),
+    upgrades: isObject(stored.upgrades) ? (stored.upgrades as Profile['upgrades']) : base.upgrades,
+    carHealth: isObject(stored.carHealth) ? (stored.carHealth as Profile['carHealth']) : base.carHealth,
+    totals: isObject(stored.totals)
+      ? {
+          earned: number(stored.totals.earned, 0),
+          spentOnRepairs: number(stored.totals.spentOnRepairs, 0),
+          spentOnUpgrades: number(stored.totals.spentOnUpgrades, 0),
+          retirements: number(stored.totals.retirements, 0),
+        }
+      : base.totals,
+  };
+
+  // Component health outside 0..1 would corrupt every damage calculation
+  // downstream, so it is clamped rather than trusted.
+  const health = out.carHealth as Record<string, number>;
+  for (const [id, value] of Object.entries(health)) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) delete health[id];
+    else health[id] = Math.min(Math.max(value, 0), 1);
+  }
 
   // v1 -> v2: carried damage and lifetime totals were added, and money went
   // from a placeholder zero to a real starting balance.
-  if ((profile.version ?? 1) < 2) {
-    out.carHealth = {};
-    out.totals = emptyProfile().totals;
-    if (!profile.money) out.money = STARTING_MONEY;
-  }
+  if (version < 2 && !stored.money) out.money = STARTING_MONEY;
 
-  out.version = DB_VERSION;
   return out;
 }
 
@@ -140,7 +176,7 @@ export class SaveStore {
     if (this.ready) return;
     this.db = await openDb();
     if (this.db) {
-      const stored = await get<Profile>(this.db, 'profile', PROFILE_KEY);
+      const stored = await get<unknown>(this.db, 'profile', PROFILE_KEY);
       if (stored) this.profile = migrate(stored);
     }
     this.ready = true;
