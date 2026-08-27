@@ -33,6 +33,9 @@ const pineLoop: StageDef = {
   bank: 'dirt',
   hazards: { kinds: ['tree', 'rock'], spacing: 15 },
   entryFee: 0,
+  // The free stage. Modest money, but it is always available and always pays,
+  // so no amount of bad luck can strand a player without a way back.
+  payouts: { author: 2600, gold: 1600, silver: 900, bronze: 500, finish: 300 },
   checkpoints: 3,
   medals: { author: 36, gold: 41, silver: 52, bronze: 68 },
   controlPoints: [
@@ -72,6 +75,7 @@ const quarryRun: StageDef = {
   bank: 'dirt',
   hazards: { kinds: ['rock', 'bale', 'pole'], spacing: 12 },
   entryFee: 250,
+  payouts: { author: 5200, gold: 3200, silver: 1800, bronze: 1000, finish: 600 },
   checkpoints: 4,
   medals: { author: 34, gold: 39, silver: 46, bronze: 55 },
   controlPoints: [
@@ -112,6 +116,7 @@ const northPass: StageDef = {
   bank: 'snow',
   hazards: { kinds: ['pole', 'tree', 'rock'], spacing: 17 },
   entryFee: 500,
+  payouts: { author: 8600, gold: 5400, silver: 3000, bronze: 1700, finish: 1000 },
   checkpoints: 4,
   medals: { author: 45, gold: 53, silver: 66, bronze: 85 },
   controlPoints: [

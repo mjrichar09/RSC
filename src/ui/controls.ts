@@ -27,6 +27,8 @@ export class Controls {
   onSelectStage: ((index: number) => void) | null = null;
   /** Fires on the manual rescue key. */
   onRescue: (() => void) | null = null;
+  /** Fires on the garage toggle key. */
+  onGarage: (() => void) | null = null;
 
   constructor(target: EventTarget = window) {
     target.addEventListener('keydown', (e) => {
@@ -36,6 +38,10 @@ export class Controls {
       if (ev.code === 'KeyR' || ev.code === 'Enter') this.onReset?.();
       if (ev.code === 'KeyT') this.onToggleTuning?.();
       if (ev.code === 'KeyQ') this.onRescue?.();
+      if (ev.code === 'Escape' || ev.code === 'Tab') {
+        ev.preventDefault();
+        this.onGarage?.();
+      }
       if (/^Digit[1-9]$/.test(ev.code)) this.onSelectStage?.(Number(ev.code.slice(5)) - 1);
       if (ev.code === 'Space' || ev.code.startsWith('Arrow')) ev.preventDefault();
     });

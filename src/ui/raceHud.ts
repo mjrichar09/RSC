@@ -7,6 +7,7 @@
  * the other car".
  */
 
+import type { SettleResult } from '../game/career.js';
 import type { Medal, Race } from '../game/race.js';
 import type { DamageModel } from '../sim/damage.js';
 import type { Stage } from '../sim/stage.js';
@@ -37,6 +38,7 @@ export class RaceHud {
   private lastSplitCount = -1;
   private lastPhase = '';
   private ghostTime: number | null = null;
+  private ledger: SettleResult | null = null;
   private splitDeltas: (number | null)[] = [];
 
   constructor(parent: HTMLElement) {
@@ -91,6 +93,15 @@ export class RaceHud {
     this.lastSplitCount = -1;
   }
 
+  /**
+   * The money side of the result, set before the panel is shown.
+   * Null while the run has not been settled — the panel then omits it rather
+   * than showing zeroes.
+   */
+  setLedger(ledger: SettleResult | null): void {
+    this.ledger = ledger;
+  }
+
   setStage(stage: Stage): void {
     this.stageName.textContent = `${stage.def.name.toUpperCase()} · ${(stage.length / 1000).toFixed(2)} km`;
     this.lastSplitCount = -1;
@@ -100,6 +111,23 @@ export class RaceHud {
   }
 
   /** Repair bill appended to the finish panel — the cost of how you drove. */
+  /** Entry fee, payout and outstanding repairs for the attempt just finished. */
+  private ledgerMarkup(): string {
+    const l = this.ledger;
+    if (!l) return '';
+    const row = (label: string, value: number, tone = '') =>
+      `<div class="ledger-row ${tone}"><span>${label}</span><b>${value < 0 ? '−' : ''}${Math.abs(value).toLocaleString('en-GB')}</b></div>`;
+
+    return `
+      <div class="finish-ledger">
+        ${l.entryFee > 0 ? row('Entry fee', -l.entryFee, 'loss') : ''}
+        ${row('Payout', l.payout, l.payout > 0 ? 'gain' : '')}
+        ${l.floored ? '<div class="ledger-row"><span class="dim">recovery minimum applied</span></div>' : ''}
+        ${row('Repairs outstanding', -l.repairs, l.repairs > 0 ? 'loss' : '')}
+        <div class="ledger-net"><span>NET</span><b style="color:${l.net >= 0 ? '#4fd6a0' : 'var(--hot)'}">${l.net >= 0 ? '+' : '−'}${Math.abs(l.net).toLocaleString('en-GB')}</b></div>
+      </div>`;
+  }
+
   private billMarkup(damage: DamageModel | null): string {
     if (!damage) return '';
     const bill = damage.repairBill();
@@ -161,7 +189,8 @@ export class RaceHud {
       <div class="finish-reason">${reason}</div>
       <div class="finish-time">${formatTime(time)}</div>
       ${this.billMarkup(damage)}
-      <div class="finish-hint"><b>R</b> to restart</div>`;
+      ${this.ledgerMarkup()}
+      <div class="finish-hint"><b>R</b> retry · <b>Esc</b> garage</div>`;
   }
 
   private showFinish(medal: Medal, time: number, stage: Stage, damage: DamageModel | null): void {
@@ -189,6 +218,7 @@ export class RaceHud {
       <div class="finish-time">${formatTime(time)}</div>
       <div class="finish-medals">${rows}</div>
       ${this.billMarkup(damage)}
-      <div class="finish-hint"><b>R</b> to restart</div>`;
+      ${this.ledgerMarkup()}
+      <div class="finish-hint"><b>R</b> retry · <b>Esc</b> garage</div>`;
   }
 }

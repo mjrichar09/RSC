@@ -9,12 +9,17 @@
  * evolve strands every player's progress the first time it changes.
  */
 
+import type { UpgradeLevels } from './garage.js';
 import type { Medal } from './race.js';
+import type { ComponentId } from '../sim/damage.js';
 import type { Ghost } from '../sim/replay.js';
 
 const DB_NAME = 'rsc';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const PROFILE_KEY = 'profile';
+
+/** Enough to enter the second stage and still afford a mistake. */
+export const STARTING_MONEY = 1500;
 
 export interface StageRecord {
   time: number;
@@ -26,16 +31,26 @@ export interface Profile {
   version: number;
   /** Best time per stage id. */
   records: Record<string, StageRecord>;
-  /** Reserved for P5. Present from the start so the schema does not churn. */
   money: number;
-  upgrades: Record<string, number>;
+  upgrades: UpgradeLevels;
+  /**
+   * Component health carried between races.
+   *
+   * This is what makes declining a repair a real decision: damage is the car's
+   * state, not the run's, so it follows you to the start line of the next one.
+   */
+  carHealth: Partial<Record<ComponentId, number>>;
+  /** Lifetime totals, for the garage summary. */
+  totals: { earned: number; spentOnRepairs: number; spentOnUpgrades: number; retirements: number };
 }
 
 export const emptyProfile = (): Profile => ({
   version: DB_VERSION,
   records: {},
-  money: 0,
+  money: STARTING_MONEY,
   upgrades: {},
+  carHealth: {},
+  totals: { earned: 0, spentOnRepairs: 0, spentOnUpgrades: 0, retirements: 0 },
 });
 
 /**
@@ -44,6 +59,15 @@ export const emptyProfile = (): Profile => ({
  */
 function migrate(profile: Profile): Profile {
   const out = { ...emptyProfile(), ...profile };
+
+  // v1 -> v2: carried damage and lifetime totals were added, and money went
+  // from a placeholder zero to a real starting balance.
+  if ((profile.version ?? 1) < 2) {
+    out.carHealth = {};
+    out.totals = emptyProfile().totals;
+    if (!profile.money) out.money = STARTING_MONEY;
+  }
+
   out.version = DB_VERSION;
   return out;
 }
@@ -128,6 +152,17 @@ export class SaveStore {
 
   getProfile(): Profile {
     return this.profile;
+  }
+
+  /** Persist the profile as it currently stands. */
+  async save(): Promise<void> {
+    if (this.db) await put(this.db, 'profile', PROFILE_KEY, this.profile);
+  }
+
+  /** Mutate the profile and persist it. */
+  async update(change: (profile: Profile) => void): Promise<void> {
+    change(this.profile);
+    await this.save();
   }
 
   recordFor(stageId: string): StageRecord | null {

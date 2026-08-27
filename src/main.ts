@@ -8,12 +8,14 @@
 
 import { STAGES, stageById } from './data/stages/index.js';
 import { TEST_PATCHES } from './data/testGround.js';
+import { Career } from './game/career.js';
+import { rollcageMitigation } from './game/garage.js';
 import { Race } from './game/race.js';
 import { SaveStore } from './game/save.js';
 import { NEUTRAL_INPUT } from './sim/input.js';
 import { Driver } from './sim/driver.js';
 import { GhostPlayer, GhostRecorder } from './sim/replay.js';
-import type { FailureId } from './sim/damage.js';
+import type { ComponentId, FailureId } from './sim/damage.js';
 import { Stage } from './sim/stage.js';
 import { TRACES, sampleTrace } from './sim/trace.js';
 import { SimWorld, initPhysics } from './sim/world.js';
@@ -30,6 +32,7 @@ import { Controls } from './ui/controls.js';
 import { Hud } from './ui/hud.js';
 import { RaceHud } from './ui/raceHud.js';
 import { DamagePanel } from './ui/damagePanel.js';
+import { Garage } from './ui/garage.js';
 import { TuningPanel } from './ui/tuningPanel.js';
 
 /**
@@ -95,6 +98,7 @@ async function main(): Promise<void> {
   const controls = new Controls();
   const save = new SaveStore();
   await save.open();
+  const career = new Career(save, STAGES);
 
   const params = new URLSearchParams(location.search);
   const freeRoam = params.has('free') || params.has('trace');
@@ -107,6 +111,16 @@ async function main(): Promise<void> {
   let stuckFor = 0;
   let ghost: GhostPlayer | null = null;
   const recorder = new GhostRecorder();
+
+  /**
+   * The car's condition when this stage session began.
+   *
+   * A restart re-runs the attempt from the condition you arrived in, not from
+   * a factory-fresh car — otherwise a bad crash could be undone for nothing and
+   * the damage economy would mean nothing.
+   */
+  let sessionHealth: Partial<Record<ComponentId, number>> = {};
+  let settled = false;
 
   /** Show the stored best for this stage, and start chasing its ghost. */
   const attachGhost = async (stageId: string) => {
@@ -130,8 +144,14 @@ async function main(): Promise<void> {
 
     // Damage is on for stages and off for the proving ground: the handling
     // tests and the tuning sweep are measuring the car, not the crashing.
-    world = new SimWorld({ stage, damage: true });
+    world = new SimWorld({
+      stage,
+      tuning: career.tuning(),
+      damage: { rollcage: rollcageMitigation(career.upgrades) },
+    });
+    applyCarCondition();
     race = new Race(stage);
+    settled = false;
     damagePanel.reset();
     raceHud.setStage(stage);
     tuningPanel?.rebind(world.vehicle.tuning);
@@ -146,6 +166,15 @@ async function main(): Promise<void> {
     void attachGhost(stage.def.id);
   };
 
+  /** Seed the world's damage model with the condition the car is actually in. */
+  const applyCarCondition = () => {
+    if (!world.damage) return;
+    for (const [id, health] of Object.entries(sessionHealth)) {
+      if (typeof health === 'number') world.damage.health.set(id as ComponentId, health);
+    }
+    world.damage.refreshFailures();
+  };
+
   const loadFreeRoam = () => {
     addProvingGround(scene);
     addSurfacePatches(scene, TEST_PATCHES);
@@ -154,13 +183,26 @@ async function main(): Promise<void> {
   };
 
   if (freeRoam) loadFreeRoam();
-  else loadStage(params.get('stage') ?? STAGES[0]!.id);
+  else {
+    sessionHealth = { ...career.profile.carHealth };
+    loadStage(params.get('stage') ?? STAGES[0]!.id);
+  }
 
   tuningPanel = new TuningPanel(hudRoot, world!.vehicle.tuning);
   controls.onToggleTuning = () => tuningPanel!.toggle();
 
   const restart = () => {
     if (stage && race) {
+      // Each attempt on a paid stage costs its fee again: that is what makes a
+      // committed run different from an idle retry. The free stage stays freely
+      // retryable, so the Trackmania practice loop survives intact.
+      if (stage.def.entryFee > 0 && settled) {
+        if (!career.canEnter(stage.def).allowed) {
+          openGarage();
+          return;
+        }
+        void career.enter(stage.def);
+      }
       world.vehicle.reset(stage.start.position, stage.start.heading);
       race.reset();
       raceHud.setStage(stage);
@@ -169,6 +211,9 @@ async function main(): Promise<void> {
       raceHud.setDelta(null);
       recorder.reset();
       world.damage?.reset();
+      applyCarCondition();
+      settled = false;
+      raceHud.setLedger(null);
       damagePanel.reset();
       camera.applyZones(stage.def.cameraZones, 0);
     } else {
@@ -183,25 +228,57 @@ async function main(): Promise<void> {
     world.rescue(race?.furthest);
     stuckFor = 0;
   };
-  controls.onSelectStage = (index) => {
-    const def = STAGES[index];
-    if (def && !freeRoam) loadStage(def.id);
+  const garage = new Garage(hudRoot, career, STAGES);
+  garage.onEnter = (def) => {
+    // The fee is taken by the garage; this is the condition the attempt starts
+    // from, and the one a restart returns to.
+    sessionHealth = { ...career.profile.carHealth };
+    loadStage(def.id);
   };
 
-  /** Store a completed run if it beats the stored best, then chase the new ghost. */
-  const finishRun = async (time: number, medal: NonNullable<Race['medal']>) => {
-    if (!stage) return;
+  const openGarage = () => {
+    if (freeRoam) return;
+    // Bank whatever happened before leaving, so damage is never lost by walking
+    // away from a half-finished run.
+    if (race && race.phase === 'running') void settleRun(true);
+    garage.setOpen(true);
+  };
+
+  controls.onGarage = () => {
+    if (freeRoam) return;
+    if (garage.isOpen) garage.setOpen(false);
+    else openGarage();
+  };
+  controls.onSelectStage = (index) => {
+    if (freeRoam) return;
+    if (garage.isOpen) void garage.enterByIndex(index);
+  };
+
+  /**
+   * Settle a finished or retired attempt: pay out, carry the damage forward,
+   * and store the ghost if it was a new best.
+   */
+  const settleRun = async (retired: boolean) => {
+    if (!stage || !race || settled || !world.damage) return;
+    settled = true;
+
+    const time = race.finishTime;
     const previous = save.recordFor(stage.def.id)?.time ?? null;
-    const isRecord = await save.submitRun(
-      stage.def.id,
+
+    const result = await career.settle(stage.def, {
+      medal: race.medal,
       time,
-      medal,
-      recorder.finish(stage.def.id, time),
-    );
-    if (!isRecord) return;
-    raceHud.setBest(time);
-    raceHud.markRecord(previous);
-    await attachGhost(stage.def.id);
+      retired,
+      damage: world.damage,
+      ...(retired || time === null ? {} : { ghost: recorder.finish(stage.def.id, time) }),
+    });
+
+    raceHud.setLedger(result);
+    if (result.newRecord && time !== null) {
+      raceHud.setBest(time);
+      raceHud.markRecord(previous);
+      await attachGhost(stage.def.id);
+    }
   };
 
   const onResize = () => {
@@ -302,7 +379,7 @@ async function main(): Promise<void> {
         }
       }
       if (race!.phase === 'finished' && race!.medal) {
-        await finishRun(race!.finishTime ?? 0, race!.medal);
+        await settleRun(false);
       }
 
       restart();
@@ -357,6 +434,10 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Start in the garage: the first decision the game asks for is which stage to
+  // spend money on, not which corner to take.
+  if (!freeRoam) garage.setOpen(true);
+
   let last = performance.now();
   let fps = 60;
 
@@ -365,7 +446,9 @@ async function main(): Promise<void> {
     last = now;
     fps += (1 / Math.max(dt, 1e-4) - fps) * 0.08;
 
-    const input = controls.sample(dt);
+    // The world keeps stepping behind the garage so the scene stays alive, but
+    // it takes no input while a menu is up.
+    const input = garage.isOpen ? NEUTRAL_INPUT : controls.sample(dt);
     const alpha = world.advance(dt, input);
 
     const state = world.state();
@@ -400,8 +483,8 @@ async function main(): Promise<void> {
         );
       }
 
-      if (wasRunning && race.phase === 'finished' && race.medal) {
-        void finishRun(race.finishTime ?? 0, race.medal);
+      if (wasRunning && (race.phase === 'finished' || race.phase === 'retired')) {
+        void settleRun(race.phase === 'retired');
       }
 
       raceHud.update(race);

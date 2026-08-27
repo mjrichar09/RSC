@@ -8,7 +8,7 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { SaveStore, emptyProfile } from '../src/game/save.js';
+import { STARTING_MONEY, SaveStore, emptyProfile } from '../src/game/save.js';
 import { GHOST_STRIDE, type Ghost } from '../src/sim/replay.js';
 
 const ghostOf = (time: number): Ghost => ({
@@ -80,10 +80,11 @@ describe('SaveStore', () => {
     expect(await save.loadGhost('pine-loop')).toBeNull();
   });
 
-  it('carries the fields P5 will need', () => {
+  it('starts a new profile with money, no upgrades and an undamaged car', () => {
     const profile = save.getProfile();
-    expect(profile.money).toBe(0);
+    expect(profile.money).toBe(STARTING_MONEY);
     expect(profile.upgrades).toEqual({});
+    expect(profile.carHealth).toEqual({});
     expect(profile.version).toBeGreaterThan(0);
   });
 });

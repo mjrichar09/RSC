@@ -64,6 +64,8 @@ export interface StageDef {
   medals: MedalTimes;
   /** Cost to enter. Zero means the stage is always free to attempt. */
   entryFee: number;
+  /** What each medal pays on a finish. */
+  payouts: { author: number; gold: number; silver: number; bronze: number; finish: number };
   cameraZones?: CameraZone[];
   /** Roadside hazards. Omit for a bare corridor. */
   hazards?: HazardProfile;

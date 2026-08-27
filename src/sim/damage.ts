@@ -263,6 +263,20 @@ export class DamageModel {
     }
   }
 
+  /**
+   * Re-derive failures from current component health.
+   *
+   * Failures are discovered as components are destroyed, but health is what
+   * gets persisted between races — so a car loaded with a destroyed engine
+   * would otherwise come back with an empty failure set and be treated as
+   * perfectly driveable. Anything that writes health directly must call this.
+   */
+  refreshFailures(): void {
+    for (const def of COMPONENTS) {
+      if (this.get(def.id) <= 0) this.registerFailure(def.id);
+    }
+  }
+
   private registerFailure(id: ComponentId): void {
     if (id === 'engine') this.failures.add('engine-seized');
     if (id === 'driveshaft') this.failures.add('driveshaft-snapped');

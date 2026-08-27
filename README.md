@@ -22,7 +22,8 @@ npm run dev        # http://localhost:5173
 ```
 
 **Controls** — `WASD` / arrows to drive, `Space` handbrake, `R` restart,
-`Q` rescue, `1`–`3` to pick a stage, `T` for the live tuning panel.
+`Q` rescue, `Esc` for the garage (`1`–`3` picks a stage there), `T` for the live
+tuning panel.
 `?free` opens the flat proving ground instead of a stage. Gamepads work too (triggers for throttle/brake,
 `A` for handbrake).
 
@@ -111,6 +112,30 @@ model has nothing to act on: the embankments are shallow ramps, so a car that
 runs wide climbs one and slides back with far too little force to hurt anything.
 The hazards are what make running wide a decision rather than an inconvenience.
 
+### Economy
+
+The economy exists to give damage a consequence. Repairs are the cost of how you
+drove, entry fees the cost of where you race, payouts what you earn back. The
+tension is that a good run on an expensive stage pays less than a bad crash
+costs, so pace has to be weighed against risk rather than simply maximised.
+
+**Damage belongs to the car, not the run.** It follows you to the next start
+line unless you pay to put it right, and a failed component stops you entering
+at all — which is what makes declining a repair a real gamble rather than free
+money. When funds are short the interesting move is partial: fix the radiator so
+the car can finish, and live with the bent panels.
+
+Restarting a paid stage charges the entry fee again, so a committed run is
+different from an idle retry. The free stage stays freely retryable, which keeps
+the Trackmania practice loop intact, and its payout always covers the cheapest
+paid entry — being broke is a setback, never a dead end.
+
+Every upgrade is a trade rather than a straight gain: grippier tyres let go later
+but more abruptly, a rollcage costs weight and protects nothing cosmetic, weight
+reduction makes the car better in every direction and less forgiving of impacts.
+An upgrade tree where every purchase is strictly better turns money into a
+formality.
+
 ### Ghosts
 
 Ghosts store sampled transforms, not inputs. Replaying inputs would be smaller,
@@ -151,6 +176,8 @@ buried in an embankment belonging to a section it has not reached yet.
 - **P4 — Damage** ✅ 31 components with their own toughness and repair cost,
   impacts resolved to where they actually landed, continuous handling effects,
   heat and fuel, race-ending failures, and a damage HUD that names what broke.
-- **P5 — Economy.** Entry fees, payouts, repair bills, upgrades, career.
+- **P5 — Economy** ✅ money, entry fees, medal payouts, damage that carries
+  between races, itemised repairs you can decline, eight upgrades that are each
+  a trade, and a garage to weigh it all up in.
 - **P6 — Juice.** Particles, skids, audio, stylized shading, replay cam.
 - **P7 — Scale & ship.** Procedural stage generation, Tauri desktop build.
