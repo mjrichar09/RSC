@@ -9,6 +9,7 @@
  */
 
 import * as THREE from 'three';
+import type { Weather } from '../sim/conditions.js';
 import type { Vec3 } from '../sim/math.js';
 import type { WheelState } from '../sim/vehicle.js';
 
@@ -236,6 +237,123 @@ export class SkidMarks {
     this.previous.fill(null);
     this.geometry.getAttribute('position').needsUpdate = true;
     this.geometry.getAttribute('aOpacity').needsUpdate = true;
+  }
+}
+
+/**
+ * Rain and snow.
+ *
+ * A separate system from the wheel spray rather than a reuse of it: spray is
+ * emitted, arcs and dies, while precipitation is a permanent volume that falls
+ * and wraps. Sharing one pool would mean a heavy shower starving the spray of
+ * particles exactly when a slide most needs to be visible.
+ */
+export class Precipitation {
+  readonly points: THREE.Points;
+
+  private readonly count = 1400;
+  private readonly positions: Float32Array;
+  private readonly speeds: Float32Array;
+  private readonly geometry = new THREE.BufferGeometry();
+  private readonly material: THREE.ShaderMaterial;
+  /** Side of the cube the particles live in, centred on the camera's focus. */
+  private readonly extent = 90;
+  private mode: 'none' | 'rain' | 'snow' = 'none';
+
+  constructor(parent: THREE.Object3D) {
+    this.positions = new Float32Array(this.count * 3);
+    this.speeds = new Float32Array(this.count);
+    for (let i = 0; i < this.count; i++) {
+      this.positions[i * 3] = (Math.random() - 0.5) * this.extent;
+      this.positions[i * 3 + 1] = Math.random() * 60;
+      this.positions[i * 3 + 2] = (Math.random() - 0.5) * this.extent;
+      this.speeds[i] = 0.6 + Math.random() * 0.8;
+    }
+    this.geometry.setAttribute('position', new THREE.BufferAttribute(this.positions, 3));
+
+    this.material = new THREE.ShaderMaterial({
+      uniforms: {
+        uScale: { value: 30 },
+        uSize: { value: 0.06 },
+        uColor: { value: new THREE.Color(0xaecbe8) },
+        uOpacity: { value: 0 },
+        uStretch: { value: 3.5 },
+      },
+      vertexShader: `
+        uniform float uScale;
+        uniform float uSize;
+        uniform float uStretch;
+        void main() {
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_PointSize = max(uSize * uScale * uStretch, 1.0);
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: `
+        uniform vec3 uColor;
+        uniform float uOpacity;
+        void main() {
+          vec2 d = gl_PointCoord - vec2(0.5);
+          if (dot(d, d) > 0.25) discard;
+          gl_FragColor = vec4(uColor, uOpacity);
+        }`,
+      transparent: true,
+      depthWrite: false,
+    });
+
+    this.points = new THREE.Points(this.geometry, this.material);
+    this.points.frustumCulled = false;
+    this.points.visible = false;
+    parent.add(this.points);
+  }
+
+  /** Match the weather. Anything without falling water simply turns it off. */
+  setWeather(weather: Weather): void {
+    this.mode = weather === 'rain' ? 'rain' : weather === 'snowfall' ? 'snow' : 'none';
+    this.points.visible = this.mode !== 'none';
+
+    const u = this.material.uniforms;
+    if (this.mode === 'rain') {
+      (u.uColor!.value as THREE.Color).setHex(0xaecbe8);
+      u.uSize!.value = 0.05;
+      u.uStretch!.value = 4.5;
+      u.uOpacity!.value = 0.5;
+    } else if (this.mode === 'snow') {
+      (u.uColor!.value as THREE.Color).setHex(0xf2f6fb);
+      u.uSize!.value = 0.16;
+      u.uStretch!.value = 1;
+      u.uOpacity!.value = 0.75;
+    }
+  }
+
+  /** Keep the volume over the car and let it fall. */
+  update(dt: number, focus: THREE.Vector3, pixelsPerMetre: number): void {
+    if (this.mode === 'none') return;
+    this.material.uniforms.uScale!.value = pixelsPerMetre;
+
+    const fall = this.mode === 'rain' ? 34 : 5;
+    const drift = this.mode === 'rain' ? 4 : 2.2;
+    const half = this.extent / 2;
+
+    for (let i = 0; i < this.count; i++) {
+      const y = i * 3 + 1;
+      this.positions[y]! -= fall * this.speeds[i]! * dt;
+      this.positions[i * 3]! += drift * dt;
+
+      // Wrap rather than respawn: the volume follows the car, so a particle
+      // that falls out of the bottom belongs back at the top of it.
+      if (this.positions[y]! < focus.y - 4) {
+        this.positions[y] = focus.y + 55;
+        this.positions[i * 3] = focus.x + (Math.random() - 0.5) * this.extent;
+        this.positions[i * 3 + 2] = focus.z + (Math.random() - 0.5) * this.extent;
+      }
+      if (Math.abs(this.positions[i * 3]! - focus.x) > half) {
+        this.positions[i * 3] = focus.x + (Math.random() - 0.5) * this.extent;
+      }
+      if (Math.abs(this.positions[i * 3 + 2]! - focus.z) > half) {
+        this.positions[i * 3 + 2] = focus.z + (Math.random() - 0.5) * this.extent;
+      }
+    }
+    this.geometry.getAttribute('position').needsUpdate = true;
   }
 }
 

@@ -22,7 +22,7 @@ import { TRACES, sampleTrace } from './sim/trace.js';
 import { SimWorld, initPhysics } from './sim/world.js';
 import { Mixer } from './audio/mixer.js';
 import { CarView } from './render/carView.js';
-import { ParticleField, SkidMarks, updateWheelEffects } from './render/fx.js';
+import { ParticleField, Precipitation, SkidMarks, updateWheelEffects } from './render/fx.js';
 import { IsoCamera } from './render/camera.js';
 import {
   KEY_LIGHT_OFFSET,
@@ -90,6 +90,7 @@ async function main(): Promise<void> {
   ghostView.visible = false;
   const particles = new ParticleField(scene);
   const skids = new SkidMarks(scene);
+  const precipitation = new Precipitation(scene);
   const mixer = new Mixer();
   const hud = new Hud(hudRoot);
   const raceHud = new RaceHud(hudRoot);
@@ -146,6 +147,7 @@ async function main(): Promise<void> {
     // headlights matter — which is what finally gives the `lights` component
     // something to do.
     applyConditions(variant.conditions);
+    precipitation.setWeather(variant.conditions.weather);
     carView.setHeadlightWeight(visibility(variant.conditions).headlightWeight);
     stageView = buildStageView(stage);
     scene.add(stageView.group);
@@ -435,6 +437,7 @@ async function main(): Promise<void> {
     },
     draw() {
       updateParticleScale();
+      precipitation.update(1 / 60, camera.focus, window.innerHeight / (2 * camera.effectiveViewSize));
       drawOnce(1, 1 / 60);
       window.RSC!.rendered = true;
     },
@@ -603,6 +606,7 @@ async function main(): Promise<void> {
     }
     particles.update(dt);
     updateParticleScale();
+    precipitation.update(dt, camera.focus, window.innerHeight / (2 * camera.effectiveViewSize));
 
     drawOnce(alpha, dt);
     hud.update(state, fps);
