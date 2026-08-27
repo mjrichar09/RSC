@@ -19,7 +19,9 @@ import type { ComponentId, FailureId } from './sim/damage.js';
 import { Stage } from './sim/stage.js';
 import { TRACES, sampleTrace } from './sim/trace.js';
 import { SimWorld, initPhysics } from './sim/world.js';
+import { Mixer } from './audio/mixer.js';
 import { CarView } from './render/carView.js';
+import { ParticleField, SkidMarks, updateWheelEffects } from './render/fx.js';
 import { IsoCamera } from './render/camera.js';
 import {
   KEY_LIGHT_OFFSET,
@@ -92,6 +94,9 @@ async function main(): Promise<void> {
   const carView = new CarView(scene);
   const ghostView = new CarView(scene, { ghost: true });
   ghostView.visible = false;
+  const particles = new ParticleField(scene);
+  const skids = new SkidMarks(scene);
+  const mixer = new Mixer();
   const hud = new Hud(hudRoot);
   const raceHud = new RaceHud(hudRoot);
   const damagePanel = new DamagePanel(hudRoot);
@@ -159,6 +164,8 @@ async function main(): Promise<void> {
     camera.applyZones(stage.def.cameraZones, 0);
     camera.jumpTo(world.state().position);
     stuckFor = 0;
+    particles.clear();
+    skids.clear();
 
     ghost = null;
     ghostView.visible = false;
@@ -212,6 +219,8 @@ async function main(): Promise<void> {
       recorder.reset();
       world.damage?.reset();
       applyCarCondition();
+      particles.clear();
+      skids.clear();
       settled = false;
       raceHud.setLedger(null);
       damagePanel.reset();
@@ -243,6 +252,14 @@ async function main(): Promise<void> {
     if (race && race.phase === 'running') void settleRun(true);
     garage.setOpen(true);
   };
+
+  // Browsers refuse to start audio without a gesture, so the graph is built on
+  // the first interaction and the game is silent but playable until then.
+  const startAudio = () => mixer.start();
+  window.addEventListener('keydown', startAudio, { once: true });
+  window.addEventListener('pointerdown', startAudio, { once: true });
+
+  controls.onMute = () => mixer.toggleMute();
 
   controls.onGarage = () => {
     if (freeRoam) return;
@@ -286,6 +303,11 @@ async function main(): Promise<void> {
     const h = window.innerHeight;
     resize(w, h);
     camera.resize(w, h);
+  };
+
+  /** Screen pixels per world metre under the orthographic camera. */
+  const updateParticleScale = () => {
+    particles.setScale(window.innerHeight / (2 * camera.effectiveViewSize));
   };
   window.addEventListener('resize', onResize);
   onResize();
@@ -332,12 +354,18 @@ async function main(): Promise<void> {
       while (world.time < seconds) {
         world.step(driver.input(world.state(), world.dt));
         race!.update(world.state(), world.dt);
+        // Accumulate spray and marks so a harness frame shows the same effects
+        // a player would see, rather than a suspiciously clean road.
+        updateWheelEffects(particles, skids, world.state().wheels, world.state().velocity, world.dt);
+        particles.update(world.dt);
       }
       if (crashFor > 0) {
         const until = world.time + crashFor;
         while (world.time < until) {
           world.step({ throttle: 1, brake: 0, steer: 1, handbrake: 0 });
           race!.update(world.state(), world.dt);
+          updateWheelEffects(particles, skids, world.state().wheels, world.state().velocity, world.dt);
+          particles.update(world.dt);
           const failure = [...(world.damage?.failures ?? [])][0];
           if (failure) race!.retire(FAILURE_REASON[failure]);
         }
@@ -396,6 +424,7 @@ async function main(): Promise<void> {
       hud.update(world.state(), 60);
     },
     draw() {
+      updateParticleScale();
       drawOnce(1, 1 / 60);
       window.RSC!.rendered = true;
     },
@@ -457,6 +486,14 @@ async function main(): Promise<void> {
       const splitsBefore = race.splits.length;
       race.update(state, dt);
 
+      // A bump the car shrugs off should still be felt and heard, so this reads
+      // the raw impulse rather than waiting for a damage event.
+      if (world.lastImpact > 1200) {
+        const severity = Math.min((world.lastImpact - 1200) / 26_000, 1);
+        camera.shake(severity);
+        mixer.impact(severity);
+      }
+
       // Surface what just broke while the impact is still on screen.
       if (world.damage) {
         damagePanel.report(world.damage.drainEvents());
@@ -501,6 +538,22 @@ async function main(): Promise<void> {
         stuckFor = 0;
       }
     }
+
+    // Spray, marks and sound all read straight off tyre saturation — the same
+    // number the physics uses — so what you see and hear is what is happening.
+    if (!garage.isOpen) {
+      updateWheelEffects(particles, skids, state.wheels, state.velocity, dt);
+      mixer.update(state, {
+        maxRpm: world.vehicle.tuning.maxRpm,
+        throttle: input.throttle,
+        engineHealth: world.damage?.get('engine') ?? 1,
+        misfiring: world.damage?.effects().misfiring ?? false,
+      });
+    } else {
+      mixer.quiet();
+    }
+    particles.update(dt);
+    updateParticleScale();
 
     drawOnce(alpha, dt);
     hud.update(state, fps);

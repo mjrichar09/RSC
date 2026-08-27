@@ -23,7 +23,7 @@ npm run dev        # http://localhost:5173
 
 **Controls** — `WASD` / arrows to drive, `Space` handbrake, `R` restart,
 `Q` rescue, `Esc` for the garage (`1`–`3` picks a stage there), `T` for the live
-tuning panel.
+tuning panel, `M` to mute.
 `?free` opens the flat proving ground instead of a stage. Gamepads work too (triggers for throttle/brake,
 `A` for handbrake).
 
@@ -112,6 +112,20 @@ model has nothing to act on: the embankments are shallow ramps, so a car that
 runs wide climbs one and slides back with far too little force to hurt anything.
 The hazards are what make running wide a decision rather than an inconvenience.
 
+### Sound
+
+The engine is synthesised, not sampled. A four-stroke four-cylinder fires twice
+per revolution, so the fundamental is rpm/30 Hz, and everything is built on
+that: a sawtooth for the body, an octave up for the bark, an octave down for the
+rumble, and filtered noise for induction. A low-pass that opens with throttle is
+what makes on-power and off-power audible — the single most useful thing engine
+audio can tell a driver.
+
+Synthesis because it tracks rpm continuously with no crossfade seams, costs
+nothing to ship, and responds instantly to a misfire or a dying engine. Tyre
+roll and skid are noise shaped per surface, so gravel rattles and ice whines,
+and both vanish the moment the car leaves the ground.
+
 ### Economy
 
 The economy exists to give damage a consequence. Repairs are the cost of how you
@@ -179,5 +193,7 @@ buried in an embankment belonging to a section it has not reached yet.
 - **P5 — Economy** ✅ money, entry fees, medal payouts, damage that carries
   between races, itemised repairs you can decline, eight upgrades that are each
   a trade, and a garage to weigh it all up in.
-- **P6 — Juice.** Particles, skids, audio, stylized shading, replay cam.
+- **P6 — Juice** ✅ surface-coloured wheel spray, skid marks, camera shake and
+  speed-linked zoom, and a fully synthesised engine that tracks rpm, throttle
+  and engine condition.
 - **P7 — Scale & ship.** Procedural stage generation, Tauri desktop build.

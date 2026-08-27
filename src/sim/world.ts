@@ -87,6 +87,15 @@ export class SimWorld {
   private splineHint: number | undefined;
   /** Collects contact-force events so impacts can be turned into damage. */
   private readonly events: RAPIER.EventQueue | null;
+
+  /**
+   * Largest impact impulse in the step just simulated, newton-seconds.
+   *
+   * Damage has a threshold, but a bump the car shrugs off should still be felt
+   * and heard, so the presentation layer reads the raw impulse rather than the
+   * damage events.
+   */
+  lastImpact = 0;
   /** Transform at the start of the last fixed step, for render interpolation. */
   private previous: { position: Vec3; rotation: Quat } = {
     position: v3(),
@@ -183,6 +192,7 @@ export class SimWorld {
   private processImpacts(): void {
     if (!this.events || !this.damage) return;
 
+    this.lastImpact = 0;
     const carHandle = this.vehicle.collider.handle;
     const rotation = this.vehicle.body.rotation() as Quat;
 
@@ -192,6 +202,7 @@ export class SimWorld {
 
       const impulse = event.totalForceMagnitude() * this.dt;
       if (impulse <= 0) return;
+      this.lastImpact = Math.max(this.lastImpact, impulse);
 
       const worldDirection = event.maxForceDirection() as Vec3;
       // Rapier's force direction points from collider1 toward collider2. When

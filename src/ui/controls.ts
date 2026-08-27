@@ -29,6 +29,8 @@ export class Controls {
   onRescue: (() => void) | null = null;
   /** Fires on the garage toggle key. */
   onGarage: (() => void) | null = null;
+  /** Fires on the mute key. */
+  onMute: (() => void) | null = null;
 
   constructor(target: EventTarget = window) {
     target.addEventListener('keydown', (e) => {
@@ -38,6 +40,7 @@ export class Controls {
       if (ev.code === 'KeyR' || ev.code === 'Enter') this.onReset?.();
       if (ev.code === 'KeyT') this.onToggleTuning?.();
       if (ev.code === 'KeyQ') this.onRescue?.();
+      if (ev.code === 'KeyM') this.onMute?.();
       if (ev.code === 'Escape' || ev.code === 'Tab') {
         ev.preventDefault();
         this.onGarage?.();

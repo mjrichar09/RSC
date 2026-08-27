@@ -35,6 +35,12 @@ export class IsoCamera {
   private desiredPitch: number = CAMERA.pitch;
   private desiredZoom: number = CAMERA.viewSize;
 
+  /** Current shake magnitude in metres, decaying every frame. */
+  private shakeAmount = 0;
+  private shakeSeed = Math.random() * 1000;
+  /** Extra zoom-out from speed, multiplied onto the zone's view size. */
+  private speedZoom = 1;
+
   constructor() {
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 1000);
     this.applyProjection();
@@ -46,7 +52,7 @@ export class IsoCamera {
   }
 
   private applyProjection(): void {
-    const h = this.viewSize;
+    const h = this.viewSize * this.speedZoom;
     const w = h * this.aspect;
     const c = this.camera;
     c.left = -w;
@@ -75,6 +81,14 @@ export class IsoCamera {
     if (active.yaw !== undefined) this.desiredYaw = active.yaw;
     if (active.pitch !== undefined) this.desiredPitch = active.pitch;
     if (active.zoom !== undefined) this.desiredZoom = active.zoom;
+  }
+
+  /**
+   * Knock the camera. `severity` is 0..1; anything above a light bump reads as
+   * an impact you felt rather than merely saw.
+   */
+  shake(severity: number): void {
+    this.shakeAmount = Math.min(Math.max(this.shakeAmount, severity * 1.5), 2.2);
   }
 
   /** Snap straight to the subject, with no smoothing. */
@@ -113,6 +127,15 @@ export class IsoCamera {
     this.target.y += (position.y - this.target.y) * k;
     this.target.z += (desiredZ - this.target.z) * k;
 
+    // Pull back a little at speed: it buys lookahead exactly when the car needs
+    // it, and reads as the world opening up rather than as a zoom. Kept as a
+    // separate multiplier so it does not fight the camera-zone easing.
+    const wanted = 1 + Math.min(speed / 60, 0.35);
+    this.speedZoom += (wanted - this.speedZoom) * (1 - Math.pow(0.5, dt / 0.4));
+
+    this.shakeAmount *= Math.pow(0.02, dt);
+    if (this.shakeAmount < 0.001) this.shakeAmount = 0;
+
     this.applyProjection();
     this.place();
   }
@@ -130,6 +153,20 @@ export class IsoCamera {
 
     this.camera.position.copy(this.target).add(offset);
     this.camera.lookAt(this.target);
+
+    if (this.shakeAmount > 0) {
+      // Two out-of-phase sines rather than random noise: random jitter reads as
+      // a dropped frame, a wobble reads as an impact.
+      const t = performance.now() * 0.001 + this.shakeSeed;
+      this.camera.position.x += Math.sin(t * 47) * this.shakeAmount;
+      this.camera.position.y += Math.sin(t * 61 + 1.7) * this.shakeAmount * 0.6;
+      this.camera.position.z += Math.cos(t * 53 + 0.4) * this.shakeAmount;
+    }
+  }
+
+  /** Orthographic half-height actually in use, including the speed zoom. */
+  get effectiveViewSize(): number {
+    return this.viewSize * this.speedZoom;
   }
 
   get focus(): THREE.Vector3 {
