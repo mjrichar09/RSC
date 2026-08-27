@@ -56,6 +56,14 @@ export interface TelemetrySummary {
   maxDriftDeg: number;
   /** Seconds spent with any tire past its grip peak. */
   timeSliding: number;
+  /**
+   * Seconds genuinely in flight.
+   *
+   * Requires the car to still be travelling, not merely to have no wheel
+   * touching: a car beached across a verge with all four wheels dangling
+   * satisfies the naive test indefinitely, and counting that as airtime made a
+   * 45-second beaching read as a 45-second jump.
+   */
   timeAirborne: number;
   finalPosition: { x: number; y: number; z: number };
 }
@@ -121,7 +129,7 @@ export class TelemetryRecorder {
         const dt = s.t - prev.t;
         distance += length({ x: s.x - prev.x, y: s.y - prev.y, z: s.z - prev.z });
         if (s.saturation > 1) sliding += dt;
-        if (s.wheelsGrounded === 0) airborne += dt;
+        if (s.wheelsGrounded === 0 && Math.abs(s.speed) > 6) airborne += dt;
       }
       const kph = Math.abs(s.speed) * 3.6;
       if (kph > top) top = kph;

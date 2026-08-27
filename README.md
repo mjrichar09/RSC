@@ -113,6 +113,18 @@ model has nothing to act on: the embankments are shallow ramps, so a car that
 runs wide climbs one and slides back with far too little force to hurt anything.
 The hazards are what make running wide a decision rather than an inconvenience.
 
+### Crests
+
+Stages carry crests: short convex rises sized so the car only leaves the ground
+above roughly 90 km/h. A car leaves a crest when its radius of curvature is
+smaller than v²/g, so the geometry is chosen to sit just above that at committed
+pace and comfortably below it at careful pace — a jump is a reward for
+commitment rather than something that happens to everyone equally.
+
+Under a fixed isometric camera the gap between the car and its shadow is what
+reads the height, which is why the key light is deliberately on the opposite
+azimuth from the camera.
+
 ### Generated stages
 
 A stage is only a centreline, so generating one is a walk: pick a heading, step

@@ -30,6 +30,7 @@ const write = process.argv.includes('--write');
 const maxAttempts = wanted * 12;
 
 const accepted: StageDef[] = [];
+const usedNames = new Set<string>();
 const rejections = new Map<string, number>();
 let attempts = 0;
 let seed = firstSeed;
@@ -55,6 +56,14 @@ while (accepted.length < wanted && attempts < maxAttempts) {
     console.log(`  ✗ ${candidate.def.name.padEnd(28)} ${result.reason}`);
     continue;
   }
+
+  // Names come from a small word list, so collisions happen. A set of stages
+  // with two "Wind Cove Stage"s is confusing in the garage for no good reason.
+  if (usedNames.has(candidate.def.name)) {
+    rejections.set('duplicate name', (rejections.get('duplicate name') ?? 0) + 1);
+    continue;
+  }
+  usedNames.add(candidate.def.name);
 
   const tuned = calibrate(candidate.def, result.time!, candidate.stage.length);
   accepted.push(tuned);

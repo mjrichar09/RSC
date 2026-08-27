@@ -88,7 +88,22 @@ export interface GenerateOptions {
   length?: number;
   /** 0 = flowing and open, 1 = tight and technical. */
   technicality?: number;
+  /** Roughly one crest per this many metres. Zero for a flat stage. */
+  crestSpacing?: number;
 }
+
+/**
+ * A crest is a short convex rise: half-length `CREST_HALF` metres, `CREST_RISE`
+ * high.
+ *
+ * The car leaves the ground when the crest's radius of curvature is smaller
+ * than v²/g, and for a parabolic crest that radius is L²/2h. These numbers give
+ * about 65 m, so the car flies over at roughly 90 km/h and stays planted below
+ * it — a crest that only rewards commitment, rather than one that launches
+ * everybody equally.
+ */
+const CREST_HALF = 18;
+const CREST_RISE = 2.5;
 
 /**
  * Deterministic RNG — a seed must always produce the same stage.
@@ -198,6 +213,57 @@ function walk(random: () => number, biome: BiomePreset, targetLength: number, te
   });
 }
 
+/**
+ * Insert crests into a finished centreline.
+ *
+ * Each one replaces a slice of a straight-ish segment with a rise and a fall,
+ * so the road still goes where it went — only now it goes over something. They
+ * are only placed on segments long and straight enough to take one: a crest in
+ * the middle of a corner is a launch into an embankment, not a jump.
+ */
+function addCrests(
+  points: ControlPoint[],
+  random: () => number,
+  spacing: number,
+): ControlPoint[] {
+  const out: ControlPoint[] = [points[0]!];
+  let sinceLast = Infinity;
+
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1]!;
+    const b = points[i]!;
+    const span = Math.hypot(b.pos.x - a.pos.x, b.pos.z - a.pos.z);
+    sinceLast += span;
+
+    // Needs room for the rise, the peak and the fall, plus approach and exit —
+    // and enough clear road since the last one. Back-to-back crests make a
+    // washboard the car is never off long enough to fly over, rather than a
+    // sequence of jumps.
+    const roomy = span > CREST_HALF * 4 && sinceLast > spacing * 0.8;
+    if (roomy && random() < span / spacing) {
+      sinceLast = 0;
+      const t = 0.5;
+      const at = (k: number) => ({
+        x: a.pos.x + (b.pos.x - a.pos.x) * k,
+        y: a.pos.y + (b.pos.y - a.pos.y) * k,
+        z: a.pos.z + (b.pos.z - a.pos.z) * k,
+      });
+      const half = CREST_HALF / span;
+
+      for (const [k, lift] of [
+        [t - half, 0],
+        [t, CREST_RISE],
+        [t + half, 0],
+      ] as const) {
+        const pos = at(k);
+        out.push({ ...b, pos: { ...pos, y: pos.y + lift } });
+      }
+    }
+    out.push(b);
+  }
+  return out;
+}
+
 /** Camera zones spaced along the stage, following the direction of travel. */
 function cameraZones(stage: Stage, random: () => number): StageDef['cameraZones'] {
   const zones: NonNullable<StageDef['cameraZones']> = [];
@@ -235,8 +301,11 @@ export function generateStage(options: GenerateOptions): GeneratedStage | null {
   const targetLength = options.length ?? 700 + random() * 500;
   const technicality = options.technicality ?? random();
 
-  const controlPoints = walk(random, biome, targetLength, technicality);
+  let controlPoints = walk(random, biome, targetLength, technicality);
   if (!controlPoints) return null;
+
+  const crestSpacing = options.crestSpacing ?? 150 + random() * 130;
+  if (crestSpacing > 0) controlPoints = addCrests(controlPoints, random, crestSpacing);
 
   const id = `gen-${biome.id}-${options.seed}`;
   const def: StageDef = {

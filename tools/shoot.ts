@@ -29,6 +29,8 @@ const [CELL_W, CELL_H] = arg('size', '640x360').split('x').map(Number) as [numbe
 // A cell is `<stage-id>@<seconds>`, or `trace:<name>@<seconds>` for the
 // proving ground. Stage cells are driven by the AI so the frame is repeatable.
 const cellSpec = arg('cells', 'pine-loop@22,quarry-run@26,north-pass@30,pine-loop@44');
+/** Driver commitment for stage cells, so a frame can catch the car at real pace. */
+const grip = arg('grip', '0.6');
 const [gridCols, gridRows] = arg('grid', '2x2').split('x').map(Number) as [number, number];
 const outName = arg('out', 'composite');
 
@@ -45,7 +47,7 @@ const cells = cellSpec.split(',').map((spec) => {
   const id = isTrace || withGhost ? name!.slice(6) : (crashMatch?.[2] ?? name!);
   const url = isTrace
     ? `/?trace=${id}&t=${seconds}`
-    : `/?stage=${id}&t=${seconds}${withGhost ? '&ghost=1' : ''}${crashFor ? `&crash=${crashFor}` : ''}`;
+    : `/?stage=${id}&t=${seconds}&grip=${grip}${withGhost ? '&ghost=1' : ''}${crashFor ? `&crash=${crashFor}` : ''}`;
   return {
     url,
     label: `${id} @ ${seconds}s${withGhost ? ' + ghost' : ''}${crashFor ? ` + ${crashFor}s crash` : ''}`,

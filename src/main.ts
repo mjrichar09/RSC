@@ -50,7 +50,7 @@ interface HarnessHooks {
    * frame can show real damage produced by the real impact pipeline rather
    * than by poking numbers into the model.
    */
-  seekStage: (stageId: string, seconds: number, crashFor?: number) => void;
+  seekStage: (stageId: string, seconds: number, crashFor?: number, grip?: number) => void;
   /**
    * Drive a full AI lap, store it as the ghost, then replay a fresh run to
    * `seconds` so both cars are on screen. Used by the screenshot harness.
@@ -336,12 +336,12 @@ async function main(): Promise<void> {
   window.RSC = {
     ready: true,
     rendered: false,
-    seekStage(stageId, seconds, crashFor = 0) {
+    seekStage(stageId, seconds, crashFor = 0, grip = 0.6) {
       // Reuse the loaded stage when possible: reloading would drop the ghost
       // that seedGhostAndSeek has just attached.
       if (!stage || stage.def.id !== stageId) loadStage(stageId);
       else restart();
-      const driver = new Driver(stage!);
+      const driver = new Driver(stage!, { gripBudget: grip });
       for (let i = 0; i < 60; i++) world.step(NEUTRAL_INPUT);
       world.time = 0;
       while (world.time < seconds) {
@@ -483,7 +483,14 @@ async function main(): Promise<void> {
   if (harnessSeek) {
     const id = params.get('stage') ?? STAGES[0]!.id;
     if (params.has('ghost')) await window.RSC.seedGhostAndSeek(id, Number(harnessSeek));
-    else window.RSC.seekStage(id, Number(harnessSeek), Number(params.get('crash') ?? '0'));
+    else {
+      window.RSC.seekStage(
+        id,
+        Number(harnessSeek),
+        Number(params.get('crash') ?? '0'),
+        Number(params.get('grip') ?? '0.6'),
+      );
+    }
     window.RSC.draw();
     return;
   }

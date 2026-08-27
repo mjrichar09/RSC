@@ -40,7 +40,12 @@ const pineLoop: StageDef = {
   medals: { author: 36, gold: 41, silver: 52, bronze: 68 },
   controlPoints: [
     cp(0, 0, 0, 6.0, 'gravel'),
-    cp(0, 70, 0, 6.0, 'gravel'),
+    // A crest on the opening straight. Sized so it only launches the car above
+    // roughly 90 km/h: reward for committing, nothing for arriving carefully.
+    cp(0, 22, 0, 6.0, 'gravel'),
+    cp(0, 40, 2.6, 5.8, 'gravel'),
+    cp(0, 58, 0, 6.0, 'gravel'),
+    cp(0, 90, 0, 6.0, 'gravel'),
     cp(6, 130, 1.5, 5.6, 'gravel'),
     cp(40, 175, 3.0, 5.4, 'gravel'),
     cp(95, 190, 3.0, 5.6, 'gravel'),
@@ -49,7 +54,11 @@ const pineLoop: StageDef = {
     cp(165, 55, 0, 5.6, 'dirt'),
     cp(130, 10, 0, 6.0, 'dirt'),
     cp(75, -10, 0, 6.4, 'gravel'),
-    cp(20, -30, 0, 6.0, 'gravel'),
+    // Second crest, taken blind on the way back down the valley.
+    cp(58, -16, 0, 6.2, 'gravel'),
+    cp(41, -22, 2.4, 6.0, 'gravel'),
+    cp(24, -28, 0, 6.0, 'gravel'),
+    cp(-6, -32, 0, 6.0, 'gravel'),
     cp(-30, -25, 0, 5.8, 'gravel'),
     cp(-55, 15, 0, 5.6, 'gravel'),
     cp(-40, 60, 0, 6.0, 'gravel'),
@@ -80,8 +89,12 @@ const quarryRun: StageDef = {
   medals: { author: 34, gold: 39, silver: 46, bronze: 55 },
   controlPoints: [
     cp(0, 0, 0, 5.4, 'tarmac'),
-    cp(4, 60, 0, 5.4, 'tarmac'),
-    cp(30, 110, -2, 5.0, 'tarmac'),
+    cp(2, 26, 0, 5.4, 'tarmac'),
+    // Crest over the quarry lip, straight onto the braking zone.
+    cp(3, 44, 2.5, 5.2, 'tarmac'),
+    cp(4, 62, 0, 5.4, 'tarmac'),
+    cp(6, 86, 0, 5.4, 'tarmac'),
+    cp(34, 112, -2, 5.0, 'tarmac'),
     cp(85, 130, -4, 4.6, 'gravel'),
     cp(130, 100, -4, 4.4, 'gravel', 0.12),
     cp(140, 45, -2, 4.4, 'gravel'),
