@@ -22,7 +22,7 @@ import { TRACES, sampleTrace } from './sim/trace.js';
 import { SimWorld, initPhysics } from './sim/world.js';
 import { Mixer } from './audio/mixer.js';
 import { CarView } from './render/carView.js';
-import { ParticleField, Precipitation, SkidMarks, updateWheelEffects } from './render/fx.js';
+import { ParticleField, Precipitation, SkidMarks, emitDragSparks, updateWheelEffects } from './render/fx.js';
 import { IsoCamera } from './render/camera.js';
 import {
   KEY_LIGHT_OFFSET,
@@ -35,6 +35,7 @@ import { Controls } from './ui/controls.js';
 import { Hud } from './ui/hud.js';
 import { RaceHud } from './ui/raceHud.js';
 import { DamagePanel } from './ui/damagePanel.js';
+import { DebrisView } from './render/debrisView.js';
 import { Garage } from './ui/garage.js';
 import { TuningPanel } from './ui/tuningPanel.js';
 
@@ -87,6 +88,7 @@ async function main(): Promise<void> {
   const camera = new IsoCamera();
   const carView = new CarView(scene);
   const ghostView = new CarView(scene, { ghost: true });
+  const debrisView = new DebrisView(scene);
   ghostView.visible = false;
   const particles = new ParticleField(scene);
   const skids = new SkidMarks(scene);
@@ -238,6 +240,8 @@ async function main(): Promise<void> {
       raceHud.setDelta(null);
       recorder.reset();
       world.damage?.reset();
+      world.clearDebris();
+      debrisView.clear();
       applyCarCondition();
       particles.clear();
       skids.clear();
@@ -335,7 +339,8 @@ async function main(): Promise<void> {
   const drawOnce = (alpha: number, dt: number) => {
     const state = world.state();
     const transform = world.renderTransform(alpha);
-    carView.update(transform, state, world.damage);
+    carView.update(transform, state, world.damage, world.debris);
+    debrisView.update(world.loose);
 
     if (ghost && race) {
       const sample = ghost.sampleAt(race.time);
@@ -496,6 +501,8 @@ async function main(): Promise<void> {
               .map((l) => l.label)
           : null,
         failures: d ? [...d.failures] : [],
+        dragging: world.debris?.dragging() ?? [],
+        shed: world.loose.map((l) => l.id),
         temp: d ? +d.temperature.toFixed(2) : null,
       };
     },
@@ -522,6 +529,27 @@ async function main(): Promise<void> {
     // `?brakes=650` preheats the discs. Brake glow starts at a temperature the
     // AI does not reach on a clean lap, so the only way to check how it looks
     // is to put the heat there directly.
+    // `?loosen=15000` puts one impact's worth of N·s through the nose mounts,
+    // then runs on a couple of seconds so the parts do what they were going to
+    // do. The visual question — does a dragging bumper read as dragging — is
+    // otherwise only answerable by crashing until it happens.
+    const loosen = params.get('loosen');
+    if (loosen) {
+      world!.debris?.applyImpact({ x: 0, y: 0, z: 1.9 }, Number(loosen));
+      const state = () => world!.state();
+      for (let i = 0; i < 120 * Number(params.get('after') ?? '2'); i++) {
+        world!.step({ throttle: 0.35, brake: 0, steer: 0, handbrake: 0 });
+        updateWheelEffects(particles, skids, state().wheels, state().velocity, world!.dt);
+        // Sparks too, or a harness frame of a dragging bumper shows the pose
+        // without the shower that is the actual telegraph.
+        for (const id of world!.debris?.dragging() ?? []) {
+          const at = carView.dragPoint(id);
+          if (at) emitDragSparks(particles, at, state().velocity, Math.abs(state().speed), world!.dt);
+        }
+        particles.update(world!.dt);
+      }
+      camera.jumpTo(world!.state().position);
+    }
     const brakes = params.get('brakes');
     if (brakes) world!.damage?.brakeTemp.fill(Number(brakes));
     // `?zoom=8` pulls the orthographic camera in. Detail on the car itself —
@@ -612,6 +640,11 @@ async function main(): Promise<void> {
     // number the physics uses — so what you see and hear is what is happening.
     if (!garage.isOpen) {
       updateWheelEffects(particles, skids, state.wheels, state.velocity, dt);
+      // Anything scraping along the road throws sparks from where it touches.
+      for (const id of world.debris?.dragging() ?? []) {
+        const at = carView.dragPoint(id);
+        if (at) emitDragSparks(particles, at, state.velocity, Math.abs(state.speed), dt);
+      }
       mixer.update(state, {
         maxRpm: world.vehicle.tuning.maxRpm,
         throttle: input.throttle,

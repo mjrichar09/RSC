@@ -11,6 +11,7 @@ import * as THREE from 'three';
 import { CAR } from '../data/tuning.js';
 import type { Quat, Vec3 } from '../sim/math.js';
 import type { DamageModel } from '../sim/damage.js';
+import type { DebrisModel, PartId } from '../sim/debris.js';
 import type { GhostSample } from '../sim/replay.js';
 import type { VehicleState } from '../sim/vehicle.js';
 import { PALETTE } from './scene.js';
@@ -63,6 +64,9 @@ export class CarView {
   private cabin!: THREE.Mesh;
   private body!: THREE.Mesh;
   private wing!: THREE.Mesh;
+  /** The panels that can come off, and where they sit while they are still on. */
+  private readonly parts = new Map<PartId, THREE.Mesh>();
+  private readonly partRest = new Map<PartId, THREE.Vector3>();
 
   constructor(parent: THREE.Object3D, options: CarViewOptions = {}) {
     const h = CAR.halfExtents;
@@ -104,6 +108,40 @@ export class CarView {
     wing.position.set(0, h.y * 1.55, -h.z * 0.92);
     wing.castShadow = !isGhost;
     this.chassis.add(wing);
+
+    // Detachable panels. They are modelled as their own meshes because they
+    // have to be able to leave: a bumper that is part of the body mesh can
+    // scrape and tear off in the simulation and still be visibly bolted on.
+    const bumperGeo = new THREE.BoxGeometry(h.x * 1.72, h.y * 0.24, h.z * 0.12);
+    const bumperMat = flat(PALETTE.carCabin, 0.55, isGhost);
+    const bonnet = new THREE.Mesh(
+      new THREE.BoxGeometry(h.x * 1.5, h.y * 0.12, h.z * 0.66),
+      flat(PALETTE.carBody, 0.55, isGhost),
+    );
+    bonnet.position.set(0, h.y * 0.62, h.z * 0.42);
+    const bumperFront = new THREE.Mesh(bumperGeo, bumperMat);
+    bumperFront.position.set(0, -h.y * 0.28, h.z * 0.99);
+    const bumperRear = new THREE.Mesh(bumperGeo, bumperMat);
+    bumperRear.position.set(0, -h.y * 0.28, -h.z * 0.99);
+    const doorGeo = new THREE.BoxGeometry(h.x * 0.12, h.y * 0.62, h.z * 0.5);
+    const doorLeft = new THREE.Mesh(doorGeo, flat(PALETTE.carBody, 0.5, isGhost));
+    doorLeft.position.set(-h.x * 1.02, h.y * 0.2, -0.08);
+    const doorRight = new THREE.Mesh(doorGeo, flat(PALETTE.carBody, 0.5, isGhost));
+    doorRight.position.set(h.x * 1.02, h.y * 0.2, -0.08);
+
+    for (const [id, mesh] of [
+      ['bonnet', bonnet],
+      ['bumperFront', bumperFront],
+      ['bumperRear', bumperRear],
+      ['doorLeft', doorLeft],
+      ['doorRight', doorRight],
+      ['wing', wing],
+    ] as const) {
+      mesh.castShadow = !isGhost;
+      if (mesh !== wing) this.chassis.add(mesh);
+      this.parts.set(id, mesh);
+      this.partRest.set(id, mesh.position.clone());
+    }
 
     this.group.add(this.chassis);
 
@@ -287,6 +325,37 @@ export class CarView {
     }
   }
 
+  /**
+   * Show what the debris model says: a gone part is gone, and a dragging one
+   * hangs at one corner and scrapes. The dragging pose is the telegraph — it is
+   * the only warning the player gets before the part finally lets go.
+   */
+  private applyDebris(debris: DebrisModel): void {
+    for (const [id, mesh] of this.parts) {
+      const state = debris.stateOf(id);
+      mesh.visible = state !== 'gone';
+      const rest = this.partRest.get(id)!;
+      if (state === 'dragging') {
+        mesh.position.set(rest.x - 0.12, rest.y - 0.2, rest.z);
+        mesh.rotation.set(0, 0, 0.5);
+      } else if (debris.isLoose(id)) {
+        // Sitting proud and skewed: the tell that this one is about to go.
+        mesh.position.set(rest.x, rest.y + 0.07, rest.z);
+        mesh.rotation.set(-0.18, 0, 0.06);
+      } else {
+        mesh.position.copy(rest);
+        mesh.rotation.set(0, 0, 0);
+      }
+    }
+  }
+
+  /** Where a dragging part touches the road, in world space, for sparks. */
+  dragPoint(id: PartId): THREE.Vector3 | null {
+    const mesh = this.parts.get(id);
+    if (!mesh || !mesh.visible) return null;
+    return mesh.getWorldPosition(new THREE.Vector3());
+  }
+
   set visible(value: boolean) {
     this.group.visible = value;
     for (const dot of this.contactDots) dot.visible = value;
@@ -315,9 +384,11 @@ export class CarView {
     transform: { position: Vec3; rotation: Quat },
     state: VehicleState,
     damage: DamageModel | null = null,
+    debris: DebrisModel | null = null,
   ): void {
     if (this.ghost) return;
     if (damage) this.applyDamage(damage);
+    if (debris) this.applyDebris(debris);
     const { position, rotation } = transform;
     this.group.position.set(position.x, position.y, position.z);
     this.group.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);

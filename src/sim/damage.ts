@@ -166,6 +166,8 @@ export interface DamageOptions {
   fuel?: number;
   /** Deterministic random source, so headless runs stay reproducible. */
   random?: () => number;
+  /** Seed for the built-in stream. Only matters if `random` is not supplied. */
+  seed?: number;
   /** Ambient air, 0..1 as `ambientTemperature()` reports it. */
   ambient?: number;
 }
@@ -237,6 +239,21 @@ const TINT_FULL_C = 450;
 const GLOW_START_C = 500;
 const GLOW_FULL_C = 800;
 
+/**
+ * Small deterministic stream, the same shape as the one stages use. Kept here
+ * rather than imported so `damage.ts` stays free of stage concerns.
+ */
+function seededStream(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 export class DamageModel {
   /** Health per component, 1 = new, 0 = destroyed. */
   readonly health = new Map<ComponentId, number>();
@@ -263,7 +280,11 @@ export class DamageModel {
     this.rollcage = clamp(options.rollcage ?? 0, 0, 0.9);
     this.fuelCapacity = options.fuel ?? 45;
     this.fuel = this.fuelCapacity;
-    this.random = options.random ?? Math.random;
+    // Seeded by default, not `Math.random`. Everything that draws from this —
+    // misfires, gearbox refusals, and now which second a loose part chooses to
+    // let go — has to give the same answer twice for a headless run to mean
+    // anything, and a default of `Math.random` silently broke that.
+    this.random = options.random ?? seededStream(options.seed ?? 0x5eed1e);
     this.setAmbient(options.ambient ?? 0.8);
     this.brakeTemp.fill(this.ambientC);
     for (const c of COMPONENTS) this.health.set(c.id, 1);

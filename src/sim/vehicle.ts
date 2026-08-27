@@ -14,6 +14,7 @@ import type RAPIER from '@dimforge/rapier3d-compat';
 import type { VehicleTuning } from '../data/tuning.js';
 import { CLEAR_DAY, type Conditions, gripMultiplier } from './conditions.js';
 import type { DamageEffects, DamageModel } from './damage.js';
+import type { DebrisModel } from './debris.js';
 import type { DriverInput } from './input.js';
 import { type Surface, surface } from './surfaces.js';
 import { slipAngle, slipRatio, tireForces } from './tires.js';
@@ -37,6 +38,25 @@ import {
 const RPM_PER_RAD_S = 60 / (2 * Math.PI);
 /** Rotational inertia of one wheel+hub assembly, kg·m². */
 const WHEEL_INERTIA = 1.2;
+/**
+ * Closing speed below which bottoming out is just a hard bump, m/s.
+ *
+ * Kerbs and compressions bottom the suspension all the time at low speed; only
+ * a landing arrives fast enough to matter, and without a floor here every kerb
+ * in the game would quietly bill the player for a suspension.
+ */
+const BOTTOM_OUT_SPEED = 2.5;
+/**
+ * How much harsher a bump stop is than an equivalent impact into the nose.
+ *
+ * The damage thresholds were calibrated against wall impacts, where a crumpling
+ * panel and the whole structure sit between the obstacle and the part. A bump
+ * stop is steel onto the damper with nothing in between. Set so that a landing
+ * on one corner from about 5 m starts costing a suspension, and a flat landing
+ * from the same height costs nothing — which is what separates a bad landing
+ * from a merely spectacular one. Measured with `npm run crash -- --drop=`.
+ */
+const BOTTOM_OUT_HARSHNESS = 1.8;
 /** Real cars rotate more willingly than a solid box of the same size. */
 const YAW_INERTIA_SCALE = 0.62;
 
@@ -82,6 +102,8 @@ export interface VehicleOptions {
   surfaceAt?: (point: Vec3) => Surface;
   /** Component damage. When absent the car behaves as if factory fresh. */
   damage?: DamageModel;
+  /** Attachment state, for the drag a scraping part adds. */
+  debris?: DebrisModel;
   /** Weather and time of day. Weather takes real grip away. */
   conditions?: Conditions;
 }
@@ -110,6 +132,7 @@ export class Vehicle {
   readonly tuning: VehicleTuning;
   private readonly surfaceAt: (point: Vec3) => Surface;
   readonly damage: DamageModel | null;
+  readonly debris: DebrisModel | null;
   readonly conditions: Conditions;
   private effects: DamageEffects = PRISTINE;
 
@@ -135,6 +158,7 @@ export class Vehicle {
     this.engineRpm = tuning.idleRpm;
     this.surfaceAt = options.surfaceAt ?? (() => surface('tarmac'));
     this.damage = options.damage ?? null;
+    this.debris = options.debris ?? null;
     this.conditions = options.conditions ?? CLEAR_DAY;
 
     const h = tuning.halfExtents;
@@ -247,6 +271,8 @@ export class Vehicle {
     // axle before anything is applied.
     const susp: number[] = [0, 0, 0, 0];
     const hit: ({ point: Vec3; normal: Vec3 } | null)[] = [null, null, null, null];
+    /** Closing speed at each corner that ran out of suspension travel, m/s. */
+    const bottomed: number[] = [0, 0, 0, 0];
 
     for (let i = 0; i < 4; i++) {
       const w = this.wheels[i]!;
@@ -304,6 +330,14 @@ export class Vehicle {
 
       susp[i] = force;
       hit[i] = { point, normal: result.normal as Vec3 };
+      // Bottoming out: the spring has run out of travel and whatever closing
+      // speed is left goes through the bump stop into the car. Recorded here
+      // and turned into damage once every corner is known, because how bad a
+      // landing is depends on how many wheels are sharing it.
+      bottomed[i] =
+        compression >= t.suspensionRestLength - 1e-3 && compressionSpeed > BOTTOM_OUT_SPEED
+          ? compressionSpeed
+          : 0;
 
       w.grounded = true;
       w.compression = compression / t.suspensionRestLength;
@@ -335,6 +369,23 @@ export class Vehicle {
       if (!h) continue;
       this.wheels[i]!.load = susp[i]!;
       body.addForceAtPoint(scale(up, susp[i]!), h.point, true);
+    }
+
+    // A landing that bottoms the suspension is an impact like any other, and it
+    // goes through the same pipeline: the car's vertical momentum has to be
+    // arrested by however many corners are taking it, so a nose-first landing
+    // puts twice as much through each front corner as a flat one does through
+    // each of four. This is "landing in a bad place hurts" falling out of the
+    // physics rather than being scripted.
+    if (this.damage) {
+      const sharing = bottomed.filter((v) => v > 0).length;
+      if (sharing > 0) {
+        for (let i = 0; i < 4; i++) {
+          if (bottomed[i]! <= 0) continue;
+          const impulse = (t.mass * bottomed[i]! * BOTTOM_OUT_HARSHNESS) / sharing;
+          this.damage.applyImpact(t.wheelPositions[i]!, impulse);
+        }
+      }
     }
 
     // --- Drivetrain ----------------------------------------------------------
@@ -440,7 +491,13 @@ export class Vehicle {
     // --- Body forces ---------------------------------------------------------
     const v = length(linvel);
     if (v > 0.1) {
-      body.addForce(scale(normalize(linvel), -t.dragFactor * fx.dragScale * v * v), true);
+      // A bumper hanging off the front is worth more drag than a crumpled
+      // panel, and it is drag you can hear and see the cause of.
+      const debrisDrag = this.debris?.dragScale ?? 1;
+      body.addForce(
+        scale(normalize(linvel), -t.dragFactor * fx.dragScale * debrisDrag * v * v),
+        true,
+      );
     }
     const grounded = this.wheels.some((w) => w.grounded);
     if (grounded) {
@@ -602,7 +659,9 @@ export class Vehicle {
       // A damaged gearbox sometimes refuses the shift and sits on the limiter.
       // Drawn from the damage model's stream rather than Math.random, so a
       // headless run stays reproducible with a damaged car.
-      const roll = this.damage?.nextRandom() ?? Math.random();
+      // Without a damage model there is nothing to fail, so there is no roll
+      // to make and no need for a stream at all.
+      const roll = this.damage?.nextRandom() ?? 1;
       if (this.effects.shiftFailure > 0 && roll < this.effects.shiftFailure) {
         this.shiftTimer = t.shiftTime * 2;
         return;

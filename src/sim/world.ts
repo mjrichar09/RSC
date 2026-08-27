@@ -13,7 +13,8 @@ import type { DriverInput } from './input.js';
 import { NEUTRAL_INPUT } from './input.js';
 import { CLEAR_DAY, type Conditions, ambientTemperature } from './conditions.js';
 import { DamageModel, type DamageOptions, impactPointFromForce } from './damage.js';
-import { type Quat, type Vec3, add, lerpVec, rotateInverse, slerp, v3 } from './math.js';
+import { DebrisModel, type DetachEvent, type PartId } from './debris.js';
+import { type Quat, type Vec3, add, lerpVec, rotate, rotateInverse, slerp, v3 } from './math.js';
 import { type Stage } from './stage.js';
 import { type SurfaceId, surface } from './surfaces.js';
 import { Vehicle, type VehicleState } from './vehicle.js';
@@ -72,11 +73,35 @@ export const resolveTuning = (overrides?: Partial<VehicleTuning>): VehicleTuning
   ...overrides,
 });
 
+/** A part that has come off the car and is now part of the world. */
+export interface LooseBody {
+  id: PartId;
+  label: string;
+  body: RAPIER.RigidBody;
+  /** Half-extents, so the renderer can size a box without re-deriving them. */
+  half: Vec3;
+}
+
+/** Hard cap on loose bodies. Measured in `npm run perf`, not guessed at. */
+const DEBRIS_BUDGET = 12;
+/** Loose bodies further than this from the car are removed, metres. */
+const DEBRIS_KEEP_RADIUS = 120;
+
 export class SimWorld {
   readonly world: RAPIER.World;
   readonly vehicle: Vehicle;
   readonly stage: Stage | null;
   readonly damage: DamageModel | null;
+  /** Parts still bolted to the car, and the ones that are not. Null without damage. */
+  readonly debris: DebrisModel | null;
+  /**
+   * Loose parts as physics bodies, oldest first.
+   *
+   * Capped, because a long stage otherwise accumulates bodies until the step
+   * cost climbs — and everything here is collidable, so your own bumper is now
+   * an obstacle on the road.
+   */
+  readonly loose: LooseBody[] = [];
   readonly conditions: Conditions;
   readonly dt = 1 / SIM.hz;
 
@@ -183,12 +208,16 @@ export class SimWorld {
             ambient: ambientTemperature(this.conditions),
             ...(options.damage === true ? {} : options.damage),
           });
+    this.debris = this.damage
+      ? new DebrisModel({ random: () => this.damage!.nextRandom() })
+      : null;
     this.events = this.damage ? new RAPIER.EventQueue(true) : null;
 
     this.vehicle = new Vehicle(RAPIER, this.world, resolveTuning(options.tuning), spawn, {
       surfaceAt: (p) => surface(this.surfaceIdAt(p)),
       conditions: this.conditions,
       ...(this.damage ? { damage: this.damage } : {}),
+      ...(this.debris ? { debris: this.debris } : {}),
     });
   }
 
@@ -230,8 +259,89 @@ export class SimWorld {
         z: worldDirection.z * sign,
       });
 
-      this.damage!.applyImpact(impactPointFromForce(local), impulse);
+      const at = impactPointFromForce(local);
+      this.damage!.applyImpact(at, impulse);
+      // The same hit works the mounts loose. One impact, two consequences:
+      // what it costs to repair, and whether the part is still on the car.
+      this.debris?.applyImpact(at, impulse);
     });
+  }
+
+  /**
+   * Advance the attachment state machines and turn anything that came off into
+   * a real body, then clear away what is far behind.
+   */
+  private updateDebris(): void {
+    if (!this.debris || !this.damage) return;
+
+    const state = this.vehicle.state();
+    const speed = Math.abs(state.speed);
+    this.debris.update(this.dt, speed, (id) => this.damage!.get(id) <= 0);
+
+    for (const event of this.debris.drainDetached()) this.spawnLoose(event, state);
+
+    // Cleanup runs on distance rather than on age: a part dropped at the finish
+    // line is worth keeping in view, and one dropped two corners ago is not.
+    const here = state.position;
+    for (let i = this.loose.length - 1; i >= 0; i--) {
+      const at = this.loose[i]!.body.translation() as Vec3;
+      const dx = at.x - here.x;
+      const dz = at.z - here.z;
+      if (dx * dx + dz * dz > DEBRIS_KEEP_RADIUS * DEBRIS_KEEP_RADIUS || at.y < -60) {
+        this.removeLoose(i);
+      }
+    }
+  }
+
+  /** Turn a detached part into a dynamic body carrying the car's motion. */
+  private spawnLoose(event: DetachEvent, state: VehicleState): void {
+    // Oldest goes first. The budget is what keeps the step cost flat over a
+    // long stage; without it the physics bill climbs with every scrape.
+    while (this.loose.length >= DEBRIS_BUDGET) this.removeLoose(0);
+
+    const rot = state.rotation;
+    const offset = rotate(rot, event.at);
+    const spin = () => (this.damage!.nextRandom() - 0.5) * 12;
+
+    const body = this.world.createRigidBody(
+      RAPIER.RigidBodyDesc.dynamic()
+        .setTranslation(
+          state.position.x + offset.x,
+          state.position.y + offset.y,
+          state.position.z + offset.z,
+        )
+        .setRotation(rot)
+        // It leaves with the car's velocity plus a kick, or it would appear to
+        // stop dead the moment it came off.
+        .setLinvel(
+          state.velocity.x,
+          state.velocity.y + 1.5 + this.damage!.nextRandom() * 2,
+          state.velocity.z,
+        )
+        .setAngvel({ x: spin(), y: spin(), z: spin() }),
+    );
+    const volume = 8 * event.half.x * event.half.y * event.half.z;
+    this.world.createCollider(
+      RAPIER.ColliderDesc.cuboid(event.half.x, event.half.y, event.half.z)
+        .setDensity(Math.max(event.mass / Math.max(volume, 1e-4), 1))
+        .setFriction(0.6)
+        .setRestitution(0.2),
+      body,
+    );
+    this.loose.push({ id: event.id, label: event.label, body, half: event.half });
+  }
+
+  /** Put every part back on the car and clear the road. Used on a restart. */
+  clearDebris(): void {
+    this.debris?.reset();
+    while (this.loose.length > 0) this.removeLoose(this.loose.length - 1);
+  }
+
+  private removeLoose(index: number): void {
+    const entry = this.loose[index];
+    if (!entry) return;
+    this.world.removeRigidBody(entry.body);
+    this.loose.splice(index, 1);
   }
 
   private surfaceIdAt(p: Vec3): SurfaceId {
@@ -260,6 +370,7 @@ export class SimWorld {
     this.vehicle.step(this.dt, input);
     this.world.step(this.events ?? undefined);
     this.processImpacts();
+    this.updateDebris();
     this.time += this.dt;
     this.steps++;
   }

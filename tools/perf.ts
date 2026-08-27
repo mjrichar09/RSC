@@ -13,13 +13,23 @@ import { STAGES } from '../src/data/stages/index.js';
 import { Stage } from '../src/sim/stage.js';
 import { createWorld } from '../src/sim/world.js';
 import { Driver } from '../src/sim/driver.js';
+import { PARTS } from '../src/sim/debris.js';
 
 for (const [label, opts] of [
   ['flat proving ground', {}],
   ['stage, no damage', { stage: new Stage(STAGES[0]!) }],
   ['stage, with damage', { stage: new Stage(STAGES[0]!), damage: true }],
+  // A full debris budget is the expensive case: twelve dynamic bodies rolling
+  // around a trimesh corridor. The budget exists because of this number.
+  ['stage, full debris', { stage: new Stage(STAGES[0]!), damage: true, debris: 'full' }],
 ] as const) {
-  const world = await createWorld(opts as never);
+  const { debris: debrisMode, ...worldOpts } = opts as Record<string, unknown>;
+  const world = await createWorld(worldOpts as never);
+  if (debrisMode === 'full') {
+    // Shed everything the car has, so the loose-body cap is actually reached.
+    for (const part of PARTS) world.debris!.detach(part);
+    world.step({ throttle: 0, brake: 0, steer: 0, handbrake: 0 });
+  }
   const driver = world.stage ? new Driver(world.stage) : null;
   const input = { throttle: 1, brake: 0, steer: 0.2, handbrake: 0 };
 

@@ -358,7 +358,31 @@ export class Precipitation {
 }
 
 const SPRAY_COLOR = new THREE.Color();
+const SPARK_COLOR = new THREE.Color(0xffb648);
 const scratch = { x: 0, y: 0, z: 0 };
+
+/**
+ * Sparks from a part scraping the road.
+ *
+ * This is the telegraph made visible: a dragging bumper has seconds of shower
+ * before it lets go, and the shower is the only warning the player gets.
+ */
+export function emitDragSparks(
+  particles: ParticleField,
+  at: Vec3,
+  carVelocity: Vec3,
+  speed: number,
+  dt: number,
+): void {
+  if (speed < 4) return;
+  const count = Math.min(Math.round(speed * 1.4 * dt * 60), 8);
+  for (let n = 0; n < count; n++) {
+    scratch.x = -carVelocity.x * 0.3 + (Math.random() - 0.5) * 6;
+    scratch.y = 1.2 + Math.random() * 3.5;
+    scratch.z = -carVelocity.z * 0.3 + (Math.random() - 0.5) * 6;
+    particles.emit(at, scratch, SPARK_COLOR, 0.12 + Math.random() * 0.16, 0.25 + Math.random() * 0.4);
+  }
+}
 
 /**
  * Emit spray and lay marks for the current wheel states.
