@@ -26,13 +26,21 @@ function arg(name: string, fallback: string): string {
 // out right", and detail beyond that answers no question worth the bytes.
 const [CELL_W, CELL_H] = arg('size', '640x360').split('x').map(Number) as [number, number];
 
-const cellSpec = arg('cells', 'launch@2,slalom@6,handbrake@5.6,circle@8');
+// A cell is `<stage-id>@<seconds>`, or `trace:<name>@<seconds>` for the
+// proving ground. Stage cells are driven by the AI so the frame is repeatable.
+const cellSpec = arg('cells', 'pine-loop@22,quarry-run@26,north-pass@30,pine-loop@44');
 const [gridCols, gridRows] = arg('grid', '2x2').split('x').map(Number) as [number, number];
 const outName = arg('out', 'composite');
 
 const cells = cellSpec.split(',').map((spec) => {
-  const [trace, t] = spec.split('@');
-  return { trace: trace!, t: Number(t ?? '3'), label: `${trace} @ ${t ?? 3}s` };
+  const [name, t] = spec.split('@');
+  const seconds = Number(t ?? '3');
+  const isTrace = name!.startsWith('trace:');
+  const id = isTrace ? name!.slice(6) : name!;
+  return {
+    url: isTrace ? `/?trace=${id}&t=${seconds}` : `/?stage=${id}&t=${seconds}`,
+    label: `${id} @ ${seconds}s`,
+  };
 });
 
 const server = await createServer({ server: { port: 0 }, logLevel: 'error' });
@@ -77,7 +85,7 @@ try {
   const shots: string[] = [];
 
   for (const cell of cells) {
-    await page.goto(`${origin}/?trace=${cell.trace}&t=${cell.t}`, { waitUntil: 'load' });
+    await page.goto(`${origin}${cell.url}`, { waitUntil: 'load' });
     await page.waitForFunction(() => window.RSC?.rendered === true, undefined, { timeout: 30_000 });
     const buf = await page.screenshot({ type: 'png' });
     shots.push(`data:image/png;base64,${buf.toString('base64')}`);

@@ -89,6 +89,21 @@ export function createScene(canvas: HTMLCanvasElement): SceneBundle {
   fill.position.set(34, 16, 30);
   scene.add(fill);
 
+  const resize = (width: number, height: number) => {
+    renderer.setSize(width, height, false);
+  };
+
+  return { renderer, scene, key, resize };
+}
+
+/**
+ * The P0/P1 proving ground: a large flat plane with a reference grid.
+ *
+ * Only added in free-roam mode. A stage brings its own geometry, and leaving
+ * this in cuts a grid straight through the corridor and shows a flat plane
+ * through every gap in it.
+ */
+export function addProvingGround(scene: THREE.Scene): void {
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(800, 800),
     new THREE.MeshStandardMaterial({ color: PALETTE.ground, roughness: 0.95, metalness: 0 }),
@@ -97,8 +112,6 @@ export function createScene(canvas: HTMLCanvasElement): SceneBundle {
   ground.receiveShadow = true;
   scene.add(ground);
 
-  // Without a grid on an empty plane there is no motion cue at all, and the
-  // handling is impossible to judge.
   // Two grids: a fine one for close-range speed cues and a coarse one that
   // still reads when the car is moving fast. Without them an empty plane gives
   // no sense of motion at all and the handling is impossible to judge.
@@ -113,12 +126,6 @@ export function createScene(canvas: HTMLCanvasElement): SceneBundle {
     grid.position.y = y;
     scene.add(grid);
   }
-
-  const resize = (width: number, height: number) => {
-    renderer.setSize(width, height, false);
-  };
-
-  return { renderer, scene, key, resize };
 }
 
 /**

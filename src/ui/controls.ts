@@ -23,6 +23,10 @@ export class Controls {
   onReset: (() => void) | null = null;
   /** Fires on the tuning-panel toggle key. */
   onToggleTuning: (() => void) | null = null;
+  /** Fires with a zero-based index when a stage-select key is pressed. */
+  onSelectStage: ((index: number) => void) | null = null;
+  /** Fires on the manual rescue key. */
+  onRescue: (() => void) | null = null;
 
   constructor(target: EventTarget = window) {
     target.addEventListener('keydown', (e) => {
@@ -31,6 +35,8 @@ export class Controls {
       this.held.add(ev.code);
       if (ev.code === 'KeyR' || ev.code === 'Enter') this.onReset?.();
       if (ev.code === 'KeyT') this.onToggleTuning?.();
+      if (ev.code === 'KeyQ') this.onRescue?.();
+      if (/^Digit[1-9]$/.test(ev.code)) this.onSelectStage?.(Number(ev.code.slice(5)) - 1);
       if (ev.code === 'Space' || ev.code.startsWith('Arrow')) ev.preventDefault();
     });
     target.addEventListener('keyup', (e) => this.held.delete((e as KeyboardEvent).code));

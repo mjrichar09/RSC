@@ -11,7 +11,8 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { CAR, SIM, type VehicleTuning } from '../data/tuning.js';
 import type { DriverInput } from './input.js';
 import { NEUTRAL_INPUT } from './input.js';
-import { type Quat, type Vec3, lerpVec, slerp, v3 } from './math.js';
+import { type Quat, type Vec3, add, lerpVec, slerp, v3 } from './math.js';
+import { type Stage } from './stage.js';
 import { type SurfaceId, surface } from './surfaces.js';
 import { Vehicle, type VehicleState } from './vehicle.js';
 
@@ -33,6 +34,11 @@ export interface GroundPatch {
 }
 
 export interface WorldOptions {
+  /**
+   * Drive a generated stage corridor instead of the flat proving ground. When
+   * set, the spawn, ground geometry and surface lookup all come from the stage.
+   */
+  stage?: Stage;
   /** Default surface outside every patch. */
   baseSurface?: SurfaceId;
   /** Rectangular surface patches, tested in order. Replaced by stages in P2. */
@@ -51,6 +57,7 @@ export const resolveTuning = (overrides?: Partial<VehicleTuning>): VehicleTuning
 export class SimWorld {
   readonly world: RAPIER.World;
   readonly vehicle: Vehicle;
+  readonly stage: Stage | null;
   readonly dt = 1 / SIM.hz;
 
   /** Simulated seconds since construction. Not wall-clock time. */
@@ -59,6 +66,11 @@ export class SimWorld {
   steps = 0;
 
   private accumulator = 0;
+  /**
+   * Last spline sample the car was near. Feeding this back as a hint turns the
+   * per-wheel surface lookup into a short local scan instead of a spatial query.
+   */
+  private splineHint: number | undefined;
   /** Transform at the start of the last fixed step, for render interpolation. */
   private previous: { position: Vec3; rotation: Quat } = {
     position: v3(),
@@ -73,27 +85,45 @@ export class SimWorld {
 
     this.world = new RAPIER.World({ x: 0, y: SIM.gravity, z: 0 });
     this.world.integrationParameters.dt = this.dt;
+    this.stage = options.stage ?? null;
 
-    // P0 ground: a large static slab. P2 replaces this with generated stage
-    // geometry, but the surface lookup below already works the same way.
-    const groundBody = this.world.createRigidBody(
-      RAPIER.RigidBodyDesc.fixed().setTranslation(0, -0.5, 0),
-    );
-    this.world.createCollider(
-      RAPIER.ColliderDesc.cuboid(400, 0.5, 400).setFriction(1.0),
-      groundBody,
-    );
+    const ground = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
 
-    this.vehicle = new Vehicle(
-      RAPIER,
-      this.world,
-      resolveTuning(options.tuning),
-      options.spawn ?? { position: v3(0, 1.2, 0), heading: 0 },
-      { surfaceAt: (p) => surface(this.surfaceIdAt(p)) },
-    );
+    if (this.stage) {
+      // The stage corridor is a single trimesh: road, verges and embankments in
+      // one mesh, with the surface resolved analytically rather than per-triangle.
+      this.world.createCollider(
+        RAPIER.ColliderDesc.trimesh(this.stage.geometry.vertices, this.stage.geometry.indices)
+          .setFriction(1.0),
+        ground,
+      );
+    } else {
+      // Proving ground: a large static slab, used by the handling tests and the
+      // free-roam surface patchwork.
+      ground.setTranslation({ x: 0, y: -0.5, z: 0 }, false);
+      this.world.createCollider(
+        RAPIER.ColliderDesc.cuboid(400, 0.5, 400).setFriction(1.0),
+        ground,
+      );
+    }
+
+    const spawn =
+      options.spawn ??
+      (this.stage
+        ? { position: this.stage.start.position, heading: this.stage.start.heading }
+        : { position: v3(0, 1.2, 0), heading: 0 });
+
+    this.vehicle = new Vehicle(RAPIER, this.world, resolveTuning(options.tuning), spawn, {
+      surfaceAt: (p) => surface(this.surfaceIdAt(p)),
+    });
   }
 
   private surfaceIdAt(p: Vec3): SurfaceId {
+    if (this.stage) {
+      const hit = this.stage.surfaceAt(p, this.splineHint);
+      this.splineHint = hit.index;
+      return hit.surface;
+    }
     for (const patch of this.patches) {
       if (
         Math.abs(p.x - patch.x) <= patch.halfX &&
@@ -133,6 +163,28 @@ export class SimWorld {
 
   state(): VehicleState {
     return this.vehicle.state();
+  }
+
+  /**
+   * Put the car back on the centreline, upright and stationary.
+   *
+   * A car can end up beached across the verge lip with its chassis resting on
+   * the ground and all four wheels dangling — no drive, no way out. Every rally
+   * game needs an answer to that, and it is also what keeps the headless stage
+   * validator from reporting a stage as impossible because of one bad landing.
+   *
+   * It rewinds slightly so the corner is re-entered rather than resumed from
+   * halfway through.
+   */
+  rescue(distance?: number): void {
+    if (!this.stage) {
+      this.vehicle.reset(v3(0, 1.2, 0), 0);
+      return;
+    }
+    const at = distance ?? this.stage.progressAt(this.state().position, this.splineHint).distance;
+    const s = this.stage.spline.at(Math.max(at - 8, 0));
+    this.vehicle.reset(add(s.position, v3(0, 1.4, 0)), Math.atan2(s.forward.x, s.forward.z));
+    this.splineHint = undefined;
   }
 
   /**

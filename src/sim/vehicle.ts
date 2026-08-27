@@ -94,6 +94,8 @@ export class Vehicle {
   private steerAngle = 0;
   private gearIndex = 1;
   private shiftTimer = 0;
+  /** Seconds spent stationary under braking, before reverse engages. */
+  private reverseHold = 0;
   private engineRpm: number;
 
   constructor(
@@ -280,7 +282,16 @@ export class Vehicle {
 
     // --- Drivetrain ----------------------------------------------------------
     this.updateGearbox(dt, speed, input);
-    const engineTorque = this.engineTorque(input.throttle);
+
+    // Arcade reverse: at a standstill, holding the brake selects reverse and
+    // then *is* the reverse throttle, while the throttle becomes the brake.
+    // Without this swap the car engages reverse and then brakes itself in place
+    // forever, because any throttle input immediately reselects first gear.
+    const inReverse = this.gearIndex === 0;
+    const driveInput = inReverse ? input.brake : input.throttle;
+    const brakeInput = inReverse ? input.throttle : input.brake;
+
+    const engineTorque = this.engineTorque(driveInput);
     const gearRatio = t.gearRatios[this.gearIndex] ?? 0;
     const shifting = this.shiftTimer > 0;
     const axleTorque = shifting
@@ -296,9 +307,9 @@ export class Vehicle {
       w.steer = front ? this.steerAngle : 0;
 
       const driveTorque = driveTorques[i]!;
-      const brakeInput = input.brake * (front ? t.brakeBias : 1 - t.brakeBias) * 2;
+      const axleBrake = brakeInput * (front ? t.brakeBias : 1 - t.brakeBias) * 2;
       const brakeTorque =
-        t.brakeTorque * clamp(brakeInput, 0, 1) +
+        t.brakeTorque * clamp(axleBrake, 0, 1) +
         (front ? 0 : t.handbrakeTorque * input.handbrake);
 
       const h = hit[i];
@@ -486,16 +497,24 @@ export class Vehicle {
     const rawRpm = Math.abs(avgSpin * ratio * t.finalDrive) * RPM_PER_RAD_S;
     this.engineRpm = clamp(Math.max(rawRpm, t.idleRpm), t.idleRpm, t.maxRpm);
 
-    // Reverse engages from a near-stop when braking with no throttle.
-    if (speed < 0.6 && input.brake > 0.5 && input.throttle < 0.1) {
-      this.gearIndex = 0;
+    // Reverse engages from a near-stop when braking with no throttle, and is
+    // left again by applying throttle once the car has stopped rolling back.
+    // The short hold stops a hard stop from flipping straight into reverse
+    // while the player still has the brake buried.
+    if (this.gearIndex > 0 && speed < 0.6 && input.brake > 0.5 && input.throttle < 0.1) {
+      this.reverseHold += dt;
+      if (this.reverseHold > 0.45) {
+        this.gearIndex = 0;
+        this.reverseHold = 0;
+      }
       return;
     }
-    if (this.gearIndex === 0 && input.throttle > 0.1) {
-      this.gearIndex = 1;
+    this.reverseHold = 0;
+    if (this.gearIndex === 0) {
+      if (speed > -0.6 && input.throttle > 0.4 && input.brake < 0.1) this.gearIndex = 1;
       return;
     }
-    if (this.gearIndex === 0 || this.shiftTimer > 0) return;
+    if (this.shiftTimer > 0) return;
 
     const frac = this.engineRpm / t.maxRpm;
     if (frac > t.upshiftAt && this.gearIndex < t.gearRatios.length - 1) {
@@ -519,6 +538,7 @@ export class Vehicle {
     this.steerAngle = 0;
     this.gearIndex = 1;
     this.shiftTimer = 0;
+    this.reverseHold = 0;
     this.engineRpm = this.tuning.idleRpm;
     for (const w of this.wheels) {
       w.spin = 0;

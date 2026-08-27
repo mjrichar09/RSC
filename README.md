@@ -21,8 +21,9 @@ npm install
 npm run dev        # http://localhost:5173
 ```
 
-**Controls** — `WASD` / arrows to drive, `Space` handbrake, `R` reset,
-`T` for the live tuning panel. Gamepads work too (triggers for throttle/brake,
+**Controls** — `WASD` / arrows to drive, `Space` handbrake, `R` restart,
+`Q` rescue, `1`–`3` to pick a stage, `T` for the live tuning panel.
+`?free` opens the flat proving ground instead of a stage. Gamepads work too (triggers for throttle/brake,
 `A` for handbrake).
 
 The tuning panel edits the car while you drive — every slider takes effect on
@@ -37,6 +38,7 @@ puts the changed values on the clipboard, ready to paste into
 npm test           # unit + headless handling regression tests (text, fast)
 npm run telemetry  # headless run -> speeds, drift, slide time, 0-100
 npm run sweep      # steady-state cornering matrix -> grip and balance table
+npm run stages     # drive every stage with the AI -> completable? how fast?
 npm run shoot      # -> ONE composite grid PNG in shots/
 npm run typecheck
 ```
@@ -70,14 +72,29 @@ telemetry and the regression suite possible.
 | `src/sim/` | Physics, vehicle, tires, traces, telemetry. Headless, Node-runnable. |
 | `src/render/` | Three.js. Reads sim state, never writes it. |
 | `src/ui/` | DOM overlay — HUD and input mapping. |
-| `src/data/` | `tuning.ts` holds every magic number; stage and ground data. |
-| `tools/` | `headless.ts` (telemetry), `shoot.ts` (composite screenshots). |
+| `src/game/` | Race rules: timing, checkpoints, medals. |
+| `src/data/` | `tuning.ts` holds every magic number; `stages/` holds stage definitions. |
+| `tools/` | `headless.ts` (telemetry), `sweep.ts` (balance), `stages.ts` (validation), `shoot.ts` (composites). |
 
 The sim runs at a fixed 120 Hz; rendering interpolates between the last two
 steps, so handling is identical on any display refresh rate.
 
 Ghosts (P3) will record sampled transforms rather than replaying inputs, so
 nothing depends on bit-exact physics determinism surviving future refactors.
+
+### Stages
+
+A stage is data, not a scene: a centreline of control points, each with a width
+and a surface. Everything else is generated from it — the road ribbon, the
+verges, the containment embankments, the collider, checkpoint gates and edge
+markers — so a stage costs a few dozen lines rather than an afternoon in an
+editor, and the mesh you see is built from the exact vertices the physics uses.
+
+`npm run stages` drives each one with the AI and reports whether it is
+completable, how long it takes, how much of the run is off the road, and whether
+the corridor runs into itself. That last check matters: a centreline that
+doubles back within ~27 m produces two overlapping ribbons, and the car ends up
+buried in an embankment belonging to a section it has not reached yet.
 
 ## Roadmap
 

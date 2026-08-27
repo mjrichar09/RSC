@@ -35,10 +35,28 @@ describe('straight-line performance', () => {
     }
   });
 
-  it('stops under braking', async () => {
+  it('stops under braking, then reverses if the brake is held', async () => {
     const { recorder } = await runTrace(TRACES.brake!);
+    const braking = recorder.samples.filter((s) => s.t > 6);
+
+    // It has to actually come to a stop...
+    const slowest = Math.min(...braking.map((s) => Math.abs(s.speed)));
+    expect(slowest).toBeLessThan(1);
+
+    // ...and then reverse out, which is the arcade convention: at a standstill
+    // the brake becomes reverse. Holding it must not just pin the car in place.
     const last = recorder.samples.at(-1)!;
-    expect(Math.abs(last.speed)).toBeLessThan(1.5);
+    expect(last.speed).toBeLessThan(-1);
+  });
+
+  it('does not snap into reverse the instant the car stops', async () => {
+    const { recorder } = await runTrace(TRACES.brake!);
+    // Find the moment the car first stops, and check it stays stopped briefly
+    // rather than immediately rolling backwards.
+    const stop = recorder.samples.find((s) => s.t > 6 && Math.abs(s.speed) < 0.5);
+    expect(stop).toBeDefined();
+    const justAfter = recorder.samples.find((s) => s.t > stop!.t + 0.3);
+    expect(Math.abs(justAfter!.speed)).toBeLessThan(2);
   });
 });
 

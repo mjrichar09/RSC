@@ -183,6 +183,8 @@ export const CAMERA = {
   yaw: Math.PI * 0.25, // 45°, the classic isometric read
   /** Seconds for the camera to close half the distance to its target. */
   followHalfLife: 0.22,
+  /** Seconds for a camera-zone change to close half its distance. */
+  zoneHalfLife: 0.9,
   /** Metres of lookahead per m/s of speed. */
   lookaheadPerSpeed: 0.42,
   maxLookahead: 14,

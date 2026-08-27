@@ -211,3 +211,103 @@ html, body {
 /* Keep the HUD clear of the tuning panel while it is open. */
 #hud.has-tuning .hud-br { right: 330px; }
 #hud.has-tuning .hud-tl { left: 0; }
+
+/* ---- Race HUD (P2) ------------------------------------------------------ */
+
+.race { position: absolute; inset: 0; pointer-events: none; }
+
+.race-top {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 340px;
+  text-align: center;
+}
+
+.race-stage {
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: var(--dim);
+  margin-bottom: 4px;
+}
+
+.race-clock {
+  font-size: 40px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.7);
+}
+.race-clock.staged { color: var(--dim); }
+
+.race-progress {
+  height: 4px;
+  margin: 8px 0 6px;
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 2px;
+  overflow: hidden;
+}
+#race-progress-fill { height: 100%; width: 0; background: var(--accent); }
+
+.race-cps { display: flex; gap: 6px; justify-content: center; }
+.race-cps span {
+  flex: 1;
+  font-size: 11px;
+  padding: 3px 0;
+  color: var(--dim);
+  background: var(--panel);
+  border-radius: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.race-cps span.done { color: var(--ink); background: rgba(242, 193, 78, 0.22); }
+
+.race-panel {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(0.96);
+  min-width: 300px;
+  padding: 26px 34px;
+  text-align: center;
+  background: rgba(10, 13, 18, 0.93);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+.race-panel.is-open { opacity: 1; visibility: visible; transform: translate(-50%, -50%) scale(1); }
+
+.finish-medal { font-size: 14px; letter-spacing: 0.28em; color: var(--accent); }
+.medal-author .finish-medal { color: #b06bff; }
+.medal-gold .finish-medal { color: #f2c14e; }
+.medal-silver .finish-medal { color: #c8d0d9; }
+.medal-bronze .finish-medal { color: #cd8642; }
+.medal-finish .finish-medal { color: var(--dim); }
+
+.finish-time {
+  font-size: 46px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  margin: 6px 0 16px;
+}
+
+.finish-medals { text-align: left; }
+.medal-row {
+  display: grid;
+  grid-template-columns: 1fr auto 62px;
+  gap: 10px;
+  padding: 3px 0;
+  font-size: 12px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+.medal-row span { letter-spacing: 0.12em; text-transform: uppercase; }
+.medal-row i { font-style: normal; text-align: right; }
+.medal-row.beaten { color: var(--ink); }
+.medal-row.beaten i { color: #4fd6a0; }
+.medal-row.earned { font-weight: 700; }
+
+.finish-hint { margin-top: 16px; font-size: 11px; color: var(--dim); letter-spacing: 0.1em; }
+.finish-hint b { color: var(--ink); }
