@@ -1,9 +1,10 @@
 /**
- * Race HUD: clock, progress, splits and the finish panel.
+ * Race HUD: clock, live delta, progress, splits and the finish panel.
  *
- * Split deltas are left as placeholders here and filled in properly in P3, when
- * there is a ghost to compare against — the layout reserves the space now so it
- * does not move once there is.
+ * The delta is the part that makes chasing a ghost addictive: it compares your
+ * clock against the ghost's clock *at the same point on the road*, not at the
+ * same moment in time, so it answers "am I up or down" rather than "where is
+ * the other car".
  */
 
 import type { Medal, Race } from '../game/race.js';
@@ -30,8 +31,12 @@ export class RaceHud {
   private readonly progressFill: HTMLElement;
   private readonly checkpoints: HTMLElement;
   private readonly panel: HTMLElement;
+  private readonly delta: HTMLElement;
+  private readonly best: HTMLElement;
   private lastSplitCount = -1;
   private lastPhase = '';
+  private ghostTime: number | null = null;
+  private splitDeltas: (number | null)[] = [];
 
   constructor(parent: HTMLElement) {
     this.root = document.createElement('div');
@@ -40,6 +45,8 @@ export class RaceHud {
       <div class="race-top">
         <div class="race-stage" id="race-stage"></div>
         <div class="race-clock" id="race-clock">0:00.00</div>
+        <div class="race-delta" id="race-delta"></div>
+        <div class="race-best" id="race-best"></div>
         <div class="race-progress"><div id="race-progress-fill"></div></div>
         <div class="race-cps" id="race-cps"></div>
       </div>
@@ -51,6 +58,36 @@ export class RaceHud {
     this.progressFill = this.root.querySelector('#race-progress-fill')!;
     this.checkpoints = this.root.querySelector('#race-cps')!;
     this.panel = this.root.querySelector('#race-panel')!;
+    this.delta = this.root.querySelector('#race-delta')!;
+    this.best = this.root.querySelector('#race-best')!;
+  }
+
+  /** Personal best for this stage, shown under the clock. Null hides it. */
+  setBest(time: number | null): void {
+    this.ghostTime = time;
+    this.best.textContent = time === null ? 'no time set' : `PB ${formatTime(time)}`;
+    this.best.classList.toggle('none', time === null);
+  }
+
+  /**
+   * Live delta against the ghost, in seconds. Negative is ahead. Null when
+   * there is no ghost or it has not reached this far.
+   */
+  setDelta(seconds: number | null): void {
+    if (seconds === null) {
+      this.delta.textContent = '';
+      this.delta.className = 'race-delta';
+      return;
+    }
+    const ahead = seconds < 0;
+    this.delta.textContent = `${ahead ? '−' : '+'}${Math.abs(seconds).toFixed(2)}`;
+    this.delta.className = `race-delta ${ahead ? 'ahead' : 'behind'}`;
+  }
+
+  /** Per-checkpoint deltas against the ghost, aligned with the split list. */
+  setSplitDeltas(deltas: (number | null)[]): void {
+    this.splitDeltas = deltas;
+    this.lastSplitCount = -1;
   }
 
   setStage(stage: Stage): void {
@@ -71,7 +108,14 @@ export class RaceHud {
       const total = race.stage.checkpoints.length;
       this.checkpoints.innerHTML = Array.from({ length: total }, (_, i) => {
         const split = race.splits[i];
-        return `<span class="${split ? 'done' : ''}">${split ? formatTime(split.time) : `CP${i + 1}`}</span>`;
+        if (!split) return `<span>CP${i + 1}</span>`;
+        const d = this.splitDeltas[i];
+        const label =
+          d === null || d === undefined
+            ? formatTime(split.time)
+            : `${d < 0 ? '−' : '+'}${Math.abs(d).toFixed(2)}`;
+        const tone = d === null || d === undefined ? '' : d < 0 ? 'ahead' : 'behind';
+        return `<span class="done ${tone}">${label}</span>`;
       }).join('');
     }
 
@@ -81,6 +125,15 @@ export class RaceHud {
         this.showFinish(race.medal, race.finishTime ?? 0, race.stage);
       }
     }
+  }
+
+  /** Adds the record banner to the finish panel after a run beats the ghost. */
+  markRecord(previous: number | null): void {
+    const banner = document.createElement('div');
+    banner.className = 'finish-record';
+    banner.textContent =
+      previous === null ? 'FIRST TIME SET' : `NEW RECORD  −${(previous - this.ghostTime!).toFixed(2)}`;
+    this.panel.prepend(banner);
   }
 
   private showFinish(medal: Medal, time: number, stage: Stage): void {

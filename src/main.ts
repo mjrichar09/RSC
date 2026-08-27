@@ -9,8 +9,10 @@
 import { STAGES, stageById } from './data/stages/index.js';
 import { TEST_PATCHES } from './data/testGround.js';
 import { Race } from './game/race.js';
+import { SaveStore } from './game/save.js';
 import { NEUTRAL_INPUT } from './sim/input.js';
 import { Driver } from './sim/driver.js';
+import { GhostPlayer, GhostRecorder } from './sim/replay.js';
 import { Stage } from './sim/stage.js';
 import { TRACES, sampleTrace } from './sim/trace.js';
 import { SimWorld, initPhysics } from './sim/world.js';
@@ -37,6 +39,11 @@ interface HarnessHooks {
   rendered: boolean;
   /** Run a stage forward with the AI driver to `seconds`, then draw. */
   seekStage: (stageId: string, seconds: number) => void;
+  /**
+   * Drive a full AI lap, store it as the ghost, then replay a fresh run to
+   * `seconds` so both cars are on screen. Used by the screenshot harness.
+   */
+  seedGhostAndSeek: (stageId: string, seconds: number) => Promise<void>;
   /** Run a proving-ground input trace to `seconds`, then draw. */
   seekTrace: (traceName: string, seconds: number) => void;
   draw: () => void;
@@ -59,9 +66,13 @@ async function main(): Promise<void> {
   const { renderer, scene, key, resize } = createScene(canvas);
   const camera = new IsoCamera();
   const carView = new CarView(scene);
+  const ghostView = new CarView(scene, { ghost: true });
+  ghostView.visible = false;
   const hud = new Hud(hudRoot);
   const raceHud = new RaceHud(hudRoot);
   const controls = new Controls();
+  const save = new SaveStore();
+  await save.open();
 
   const params = new URLSearchParams(location.search);
   const freeRoam = params.has('free') || params.has('trace');
@@ -72,6 +83,20 @@ async function main(): Promise<void> {
   let stageView: StageView | null = null;
   let tuningPanel: TuningPanel | null = null;
   let stuckFor = 0;
+  let ghost: GhostPlayer | null = null;
+  const recorder = new GhostRecorder();
+
+  /** Show the stored best for this stage, and start chasing its ghost. */
+  const attachGhost = async (stageId: string) => {
+    const record = save.recordFor(stageId);
+    raceHud.setBest(record?.time ?? null);
+
+    const stored = await save.loadGhost(stageId);
+    // Guard against the player switching stage while this was loading.
+    if (!stage || stage.def.id !== stageId) return;
+    ghost = stored ? new GhostPlayer(stored) : null;
+    ghostView.visible = ghost !== null;
+  };
 
   const loadStage = (stageId: string) => {
     stageView?.dispose();
@@ -89,6 +114,11 @@ async function main(): Promise<void> {
     camera.applyZones(stage.def.cameraZones, 0);
     camera.jumpTo(world.state().position);
     stuckFor = 0;
+
+    ghost = null;
+    ghostView.visible = false;
+    recorder.reset();
+    void attachGhost(stage.def.id);
   };
 
   const loadFreeRoam = () => {
@@ -109,6 +139,10 @@ async function main(): Promise<void> {
       world.vehicle.reset(stage.start.position, stage.start.heading);
       race.reset();
       raceHud.setStage(stage);
+      raceHud.setBest(save.recordFor(stage.def.id)?.time ?? null);
+      raceHud.setSplitDeltas([]);
+      raceHud.setDelta(null);
+      recorder.reset();
       camera.applyZones(stage.def.cameraZones, 0);
     } else {
       world.vehicle.reset({ x: 0, y: 1.2, z: 0 }, 0);
@@ -127,6 +161,22 @@ async function main(): Promise<void> {
     if (def && !freeRoam) loadStage(def.id);
   };
 
+  /** Store a completed run if it beats the stored best, then chase the new ghost. */
+  const finishRun = async (time: number, medal: NonNullable<Race['medal']>) => {
+    if (!stage) return;
+    const previous = save.recordFor(stage.def.id)?.time ?? null;
+    const isRecord = await save.submitRun(
+      stage.def.id,
+      time,
+      medal,
+      recorder.finish(stage.def.id, time),
+    );
+    if (!isRecord) return;
+    raceHud.setBest(time);
+    raceHud.markRecord(previous);
+    await attachGhost(stage.def.id);
+  };
+
   const onResize = () => {
     const w = window.innerWidth;
     const h = window.innerHeight;
@@ -140,6 +190,13 @@ async function main(): Promise<void> {
     const state = world.state();
     const transform = world.renderTransform(alpha);
     carView.update(transform, state);
+
+    if (ghost && race) {
+      const sample = ghost.sampleAt(race.time);
+      if (sample) ghostView.updateFromGhost(sample);
+      // Hide it once its run has ended rather than freezing a car on the road.
+      ghostView.visible = race.time <= ghost.duration + 0.5;
+    }
 
     if (stage && race) camera.applyZones(stage.def.cameraZones, race.furthest);
     camera.follow(dt, transform.position, state.velocity);
@@ -161,7 +218,10 @@ async function main(): Promise<void> {
     ready: true,
     rendered: false,
     seekStage(stageId, seconds) {
-      loadStage(stageId);
+      // Reuse the loaded stage when possible: reloading would drop the ghost
+      // that seedGhostAndSeek has just attached.
+      if (!stage || stage.def.id !== stageId) loadStage(stageId);
+      else restart();
       const driver = new Driver(stage!);
       for (let i = 0; i < 60; i++) world.step(NEUTRAL_INPUT);
       world.time = 0;
@@ -169,10 +229,47 @@ async function main(): Promise<void> {
         world.step(driver.input(world.state(), world.dt));
         race!.update(world.state(), world.dt);
       }
+      raceHud.setSplitDeltas(
+        race!.splits.map((split) => {
+          const at = ghost?.timeAtDistance(split.distance);
+          return at === null || at === undefined ? null : split.time - at;
+        }),
+      );
+
+      // Pose the ghost for the same moment, so a harness frame shows the chase.
+      if (ghost) {
+        const sample = ghost.sampleAt(race!.time);
+        if (sample) ghostView.updateFromGhost(sample);
+        ghostView.visible = race!.time <= ghost.duration + 0.5;
+        const ghostAt = ghost.timeAtDistance(race!.furthest);
+        raceHud.setDelta(ghostAt === null ? null : race!.time - ghostAt);
+      }
       camera.applyZones(stage!.def.cameraZones, race!.furthest);
       camera.jumpTo(world.state().position);
       raceHud.update(race!);
       hud.update(world.state(), 60);
+    },
+    async seedGhostAndSeek(stageId, seconds) {
+      if (!stage || stage.def.id !== stageId) loadStage(stageId);
+      const driver = new Driver(stage!);
+      for (let i = 0; i < 60; i++) world.step(NEUTRAL_INPUT);
+      world.time = 0;
+
+      // A full lap first, recorded exactly as a player's run would be.
+      while (race!.phase !== 'finished' && world.time < 240) {
+        world.step(driver.input(world.state(), world.dt));
+        race!.update(world.state(), world.dt);
+        if (race!.phase === 'running') {
+          recorder.capture(race!.time, race!.furthest, world.state());
+        }
+      }
+      if (race!.phase === 'finished' && race!.medal) {
+        await finishRun(race!.finishTime ?? 0, race!.medal);
+      }
+
+      restart();
+      await attachGhost(stageId);
+      this.seekStage(stageId, seconds);
     },
     seekTrace(traceName, seconds) {
       const trace = TRACES[traceName];
@@ -197,7 +294,9 @@ async function main(): Promise<void> {
     return;
   }
   if (harnessSeek) {
-    window.RSC.seekStage(params.get('stage') ?? STAGES[0]!.id, Number(harnessSeek));
+    const id = params.get('stage') ?? STAGES[0]!.id;
+    if (params.has('ghost')) await window.RSC.seedGhostAndSeek(id, Number(harnessSeek));
+    else window.RSC.seekStage(id, Number(harnessSeek));
     window.RSC.draw();
     return;
   }
@@ -214,8 +313,32 @@ async function main(): Promise<void> {
     const alpha = world.advance(dt, input);
 
     const state = world.state();
-    if (race) {
+    if (race && stage) {
+      const wasRunning = race.phase === 'running';
+      const splitsBefore = race.splits.length;
       race.update(state, dt);
+
+      if (race.phase === 'running') {
+        recorder.capture(race.time, race.furthest, state);
+
+        // Live delta: when did the ghost reach the point we have reached?
+        const ghostTime = ghost?.timeAtDistance(race.furthest) ?? null;
+        raceHud.setDelta(ghostTime === null ? null : race.time - ghostTime);
+      }
+
+      if (race.splits.length !== splitsBefore) {
+        raceHud.setSplitDeltas(
+          race.splits.map((split) => {
+            const at = ghost?.timeAtDistance(split.distance);
+            return at === null || at === undefined ? null : split.time - at;
+          }),
+        );
+      }
+
+      if (wasRunning && race.phase === 'finished' && race.medal) {
+        void finishRun(race.finishTime ?? 0, race.medal);
+      }
+
       raceHud.update(race);
 
       // Beaching the chassis across the verge with all four wheels dangling is

@@ -8,6 +8,7 @@
 
 import { Race } from '../game/race.js';
 import { Driver, type DriverOptions } from './driver.js';
+import { type Ghost, GhostRecorder } from './replay.js';
 import type { Stage } from './stage.js';
 import { TelemetryRecorder, type TelemetrySummary } from './telemetry.js';
 import { createWorld } from './world.js';
@@ -27,12 +28,16 @@ export interface StageRunResult {
   offRoadFraction: number;
   /** How many times the car had to be rescued back onto the centreline. */
   rescues: number;
+  /** Recorded ghost, when `recordGhost` was requested and the run finished. */
+  ghost: Ghost | null;
 }
 
 export interface StageRunOptions {
   driver?: DriverOptions;
   /** Give up after this many simulated seconds. */
   timeout?: number;
+  /** Record a ghost of the run. Used for benchmark ghosts and for tests. */
+  recordGhost?: boolean;
 }
 
 export async function runStage(
@@ -44,6 +49,7 @@ export async function runStage(
   const driver = new Driver(stage, options.driver);
   const race = new Race(stage);
   const recorder = new TelemetryRecorder();
+  const ghostRecorder = options.recordGhost ? new GhostRecorder() : null;
 
   for (let i = 0; i < 60; i++) world.step({ throttle: 0, brake: 0, steer: 0, handbrake: 0 });
   world.time = 0;
@@ -59,6 +65,9 @@ export async function runStage(
     world.step(driver.input(state, world.dt));
     race.update(world.state(), world.dt);
     recorder.capture(world);
+    if (ghostRecorder && race.phase === 'running') {
+      ghostRecorder.capture(race.time, race.furthest, world.state());
+    }
 
     const here = stage.progressAt(world.state().position);
     if (!here.onRoad) offRoadSteps++;
@@ -94,5 +103,9 @@ export async function runStage(
     summary: recorder.summarise(world.steps),
     offRoadFraction: world.steps > 0 ? offRoadSteps / world.steps : 0,
     rescues,
+    ghost:
+      ghostRecorder && race.finishTime !== null
+        ? ghostRecorder.finish(stage.def.id, race.finishTime)
+        : null,
   };
 }

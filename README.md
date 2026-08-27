@@ -58,7 +58,8 @@ npm run sweep -- --steer=0.3,0.5,0.7,1.0 --surface=gravel
 npm run sweep -- --set=lsdBias=0.2,yawDamping=2600
 npm run telemetry -- --trace=launch,slalom --surface=gravel --csv
 npm run shoot -- --grid=2x2 --cells=launch@2,slalom@6,handbrake@5.6,circle@8
-npm run shoot -- --grid=1x1 --cells=circle@8 --size=900x560 --out=inspect
+npm run shoot -- --cells=ghost:pine-loop@30 --grid=1x1 --size=900x560
+npm run shoot -- --cells=trace:circle@8 --grid=1x1 --size=900x560 --out=inspect
 ```
 
 ## Architecture
@@ -72,15 +73,24 @@ telemetry and the regression suite possible.
 | `src/sim/` | Physics, vehicle, tires, traces, telemetry. Headless, Node-runnable. |
 | `src/render/` | Three.js. Reads sim state, never writes it. |
 | `src/ui/` | DOM overlay — HUD and input mapping. |
-| `src/game/` | Race rules: timing, checkpoints, medals. |
+| `src/game/` | Race rules: timing, checkpoints, medals, and saved progress. |
 | `src/data/` | `tuning.ts` holds every magic number; `stages/` holds stage definitions. |
 | `tools/` | `headless.ts` (telemetry), `sweep.ts` (balance), `stages.ts` (validation), `shoot.ts` (composites). |
 
 The sim runs at a fixed 120 Hz; rendering interpolates between the last two
 steps, so handling is identical on any display refresh rate.
 
-Ghosts (P3) will record sampled transforms rather than replaying inputs, so
-nothing depends on bit-exact physics determinism surviving future refactors.
+### Ghosts
+
+Ghosts store sampled transforms, not inputs. Replaying inputs would be smaller,
+but it would make every saved ghost depend on the physics producing bit-identical
+results forever — so any tuning change would silently corrupt every time a player
+had ever set. Recording where the car actually was costs a couple of hundred
+kilobytes and survives everything.
+
+Each frame also records how far along the stage the car had got, which is what
+makes the live delta meaningful: it compares your clock against the ghost's clock
+*at the same point on the road*, not at the same moment in time.
 
 ### Stages
 
@@ -104,7 +114,9 @@ buried in an embankment belonging to a section it has not reached yet.
   and a steady-state sweep tool. Tarmac grip went from 0.67 g cornering on two
   wheels to a flat 1.05 g on all four, and throttle now genuinely rotates the car.
 - **P2 — Stages.** Spline road generation, checkpoints, timing, medals, camera zones.
-- **P3 — Ghosts.** Record, replay, split deltas, instant restart.
+- **P3 — Ghosts** ✅ your best run per stage recorded, saved to IndexedDB and
+  replayed as a translucent chase car, with a live delta and per-checkpoint
+  split deltas against it.
 - **P4 — Damage.** Component graph, impact mapping, failures, damage HUD.
 - **P5 — Economy.** Entry fees, payouts, repair bills, upgrades, career.
 - **P6 — Juice.** Particles, skids, audio, stylized shading, replay cam.

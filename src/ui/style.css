@@ -311,3 +311,34 @@ html, body {
 
 .finish-hint { margin-top: 16px; font-size: 11px; color: var(--dim); letter-spacing: 0.1em; }
 .finish-hint b { color: var(--ink); }
+
+.race-delta {
+  height: 22px;
+  font-size: 19px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8);
+}
+.race-delta.ahead { color: #4fd6a0; }
+.race-delta.behind { color: var(--hot); }
+
+.race-best {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+.race-best.none { opacity: 0.6; }
+
+.race-cps span.ahead { color: #4fd6a0; background: rgba(79, 214, 160, 0.16); }
+.race-cps span.behind { color: var(--hot); background: rgba(232, 85, 47, 0.16); }
+
+.finish-record {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  color: #4fd6a0;
+  margin-bottom: 10px;
+  font-variant-numeric: tabular-nums;
+}

@@ -36,11 +36,13 @@ const cells = cellSpec.split(',').map((spec) => {
   const [name, t] = spec.split('@');
   const seconds = Number(t ?? '3');
   const isTrace = name!.startsWith('trace:');
-  const id = isTrace ? name!.slice(6) : name!;
-  return {
-    url: isTrace ? `/?trace=${id}&t=${seconds}` : `/?stage=${id}&t=${seconds}`,
-    label: `${id} @ ${seconds}s`,
-  };
+  // `ghost:` seeds a recorded AI lap first, so the frame shows the chase.
+  const withGhost = name!.startsWith('ghost:');
+  const id = isTrace ? name!.slice(6) : withGhost ? name!.slice(6) : name!;
+  const url = isTrace
+    ? `/?trace=${id}&t=${seconds}`
+    : `/?stage=${id}&t=${seconds}${withGhost ? '&ghost=1' : ''}`;
+  return { url, label: `${id} @ ${seconds}s${withGhost ? ' + ghost' : ''}` };
 });
 
 const server = await createServer({ server: { port: 0 }, logLevel: 'error' });
@@ -86,7 +88,7 @@ try {
 
   for (const cell of cells) {
     await page.goto(`${origin}${cell.url}`, { waitUntil: 'load' });
-    await page.waitForFunction(() => window.RSC?.rendered === true, undefined, { timeout: 30_000 });
+    await page.waitForFunction(() => window.RSC?.rendered === true, undefined, { timeout: 90_000 });
     const buf = await page.screenshot({ type: 'png' });
     shots.push(`data:image/png;base64,${buf.toString('base64')}`);
     console.log(`  captured ${cell.label}`);
