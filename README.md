@@ -41,6 +41,7 @@ npm run telemetry  # headless run -> speeds, drift, slide time, 0-100
 npm run sweep      # steady-state cornering matrix -> grip and balance table
 npm run stages     # drive every stage with the AI -> completable? how fast?
 npm run crash      # drive into a wall at known speeds -> what breaks, what it costs
+npm run generate   # make new stages, validate them, calibrate their medals
 npm run shoot      # -> ONE composite grid PNG in shots/
 npm run typecheck
 ```
@@ -111,6 +112,56 @@ Stages are lined with trees, rocks and bales because without them the damage
 model has nothing to act on: the embankments are shallow ramps, so a car that
 runs wide climbs one and slides back with far too little force to hurt anything.
 The hazards are what make running wide a decision rather than an inconvenience.
+
+### Generated stages
+
+A stage is only a centreline, so generating one is a walk: pick a heading, step
+forward, turn by a bounded amount, repeat. Everything visible is already derived
+from that, so the generator never touches geometry.
+
+What makes the output shippable is the validation, not the generation. Every
+candidate must survive three checks — its corridor must not run into itself, its
+corners must be drivable, and the AI driver must get round it at several
+different grip budgets, because a stage that only works for one driving style is
+not a good stage. Medal times and payouts are then calibrated from the measured
+laps, with the AI's time anchoring silver so gold and author are left for a
+human.
+
+```bash
+npm run generate -- --count=8 --biome=coast --write
+```
+
+In practice the layout constraints reject far more candidates than the driving
+test does — bounded turn angles and a minimum separation between passes catch
+most bad stages before the physics ever runs. The drivability check earns its
+place as the net underneath: it is what would catch a regression in the
+generator or in the car, and a test drives it against a deliberately
+undriveable stage to prove it still bites.
+
+The six stages currently in `src/data/stages/generated.ts` came out of this and
+sit alongside the three hand-authored ones. They are the same kind of data and
+go through exactly the same code — the only difference is that a person picked
+the corners of the first three.
+
+### Desktop build
+
+```bash
+npm run desktop:dev     # run the game in a native window
+npm run desktop:build   # produce an installer
+```
+
+Tauri rather than Electron: the game is entirely front-end code, so the desktop
+shell is a window and nothing else — no commands are exposed to the web layer.
+
+Building it needs the Rust toolchain plus the platform's webview development
+packages. On Debian/Ubuntu that is `webkit2gtk-4.1` and `librsvg2-dev`; see
+[the Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for
+Windows and macOS. The desktop shell has **not** been compiled and run — the
+sandbox this was built in has Rust but no webview libraries, so the
+configuration is correct and unproven.
+
+`npm run icon` regenerates the application icon, which is drawn in code rather
+than committed as an undiffable binary.
 
 ### Sound
 
@@ -196,4 +247,5 @@ buried in an embankment belonging to a section it has not reached yet.
 - **P6 — Juice** ✅ surface-coloured wheel spray, skid marks, camera shake and
   speed-linked zoom, and a fully synthesised engine that tracks rpm, throttle
   and engine condition.
-- **P7 — Scale & ship.** Procedural stage generation, Tauri desktop build.
+- **P7 — Scale & ship** ✅ seeded stage generation across five biomes with
+  AI-driven validation, and a Tauri desktop shell.

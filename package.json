@@ -13,7 +13,12 @@
     "typecheck": "tsc --noEmit",
     "sweep": "tsx tools/sweep.ts",
     "stages": "tsx tools/stages.ts",
-    "crash": "tsx tools/crash.ts"
+    "crash": "tsx tools/crash.ts",
+    "generate": "tsx tools/generate.ts",
+    "tauri": "tauri",
+    "desktop:dev": "tauri dev",
+    "desktop:build": "tauri build",
+    "icon": "tsx tools/icon.ts"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.14.0",
@@ -21,6 +26,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.48.0",
+    "@tauri-apps/cli": "^2.11.4",
     "@types/node": "^22.7.0",
     "@types/three": "^0.169.0",
     "tsx": "^4.19.0",

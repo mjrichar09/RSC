@@ -40,6 +40,55 @@ export interface StageRunOptions {
   recordGhost?: boolean;
 }
 
+export interface ValidationResult {
+  ok: boolean;
+  /** Best time achieved across the attempts, or null if none finished. */
+  time: number | null;
+  /** Why it was rejected. */
+  reason: string | null;
+  offRoadFraction: number;
+  rescues: number;
+}
+
+/**
+ * Decide whether a stage is shippable.
+ *
+ * Driven at several grip budgets, because a stage that only works for one very
+ * specific driving style is not a good stage — and because the AI is chaotic
+ * near its own limit, so a single run is a coin toss rather than a verdict.
+ * A stage has to be completable by a careful driver *and* by a committed one.
+ */
+export async function validateStage(stage: Stage): Promise<ValidationResult> {
+  const budgets = [0.55, 0.75, 0.95];
+  let best: number | null = null;
+  let offRoad = 0;
+  let rescues = 0;
+  let finished = 0;
+
+  for (const gripBudget of budgets) {
+    const result = await runStage(stage, { driver: { gripBudget }, recordGhost: false });
+    offRoad = Math.max(offRoad, result.offRoadFraction);
+    rescues = Math.max(rescues, result.rescues);
+    if (result.finished && result.time !== null) {
+      finished++;
+      if (best === null || result.time < best) best = result.time;
+    }
+  }
+
+  // Two of three is the bar: one failure at the ragged end of the range is the
+  // AI making a mistake, three is the stage being at fault.
+  if (finished < 2) {
+    return { ok: false, time: best, reason: 'not reliably completable', offRoadFraction: offRoad, rescues };
+  }
+  if (offRoad > 0.45) {
+    return { ok: false, time: best, reason: 'too much of it is off-road', offRoadFraction: offRoad, rescues };
+  }
+  if (rescues > 3) {
+    return { ok: false, time: best, reason: 'needs too many rescues', offRoadFraction: offRoad, rescues };
+  }
+  return { ok: true, time: best, reason: null, offRoadFraction: offRoad, rescues };
+}
+
 export async function runStage(
   stage: Stage,
   options: StageRunOptions = {},

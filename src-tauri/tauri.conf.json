@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Rally Stage Challenge",
+  "version": "0.1.0",
+  "identifier": "dev.rsc.rally-stage-challenge",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Rally Stage Challenge",
+        "width": 1600,
+        "height": 900,
+        "minWidth": 960,
+        "minHeight": 540,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "deb", "appimage", "dmg"],
+    "icon": ["icons/icon.png"],
+    "shortDescription": "Top-down rally racing with component damage and an economy.",
+    "longDescription": "A top-down rally racer: Trackmania's time-attack loop, RalliSport Challenge's point-to-point stages, and a component-level damage model with real repair bills."
+  }
+}

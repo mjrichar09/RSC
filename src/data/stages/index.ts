@@ -142,7 +142,17 @@ const northPass: StageDef = {
   ],
 };
 
-export const STAGES: StageDef[] = [pineLoop, quarryRun, northPass];
+import { GENERATED_STAGES } from './generated.js';
+
+/**
+ * Hand-authored stages first, then generated ones.
+ *
+ * The three authored stages teach the car and anchor the economy; the generated
+ * set is what makes the game bigger than an afternoon. They are the same kind of
+ * data and go through exactly the same code — the only difference is that a
+ * person picked the corners of the first three.
+ */
+export const STAGES: StageDef[] = [pineLoop, quarryRun, northPass, ...GENERATED_STAGES];
 
 export const stageById = (id: string): StageDef => {
   const found = STAGES.find((s) => s.id === id);

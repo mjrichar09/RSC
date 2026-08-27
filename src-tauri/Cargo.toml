@@ -1,0 +1,22 @@
+[package]
+name = "rsc"
+version = "0.1.0"
+description = "Rally Stage Challenge"
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+# The game is entirely front-end; Tauri is a window and a native binary around
+# it, so there is deliberately nothing else in here.
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
