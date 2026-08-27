@@ -57,6 +57,7 @@ export function buildStageView(stage: Stage): StageView {
   road.castShadow = true;
   group.add(road);
 
+  group.add(buildTerrain(stage));
   group.add(buildGates(stage));
   group.add(buildEdgeMarkers(stage));
   group.add(buildProps(stage));
@@ -68,6 +69,90 @@ export function buildStageView(stage: Stage): StageView {
       (road.material as THREE.Material).dispose();
     },
   };
+}
+
+/** Rolling ground colour per biome, under and beyond the corridor. */
+const TERRAIN_COLOUR: Record<string, [number, number]> = {
+  forest: [0x2f4429, 0x24361f],
+  quarry: [0x5a4a35, 0x453927],
+  winter: [0xc3cdd6, 0xa8b4c0],
+  moor: [0x3f4a30, 0x333c26],
+  coast: [0x415034, 0x33402a],
+};
+
+/**
+ * Distant ground beyond the corridor.
+ *
+ * Without it the world stops at the embankment walls and the isometric camera
+ * looks straight over them into fog — the stage reads as a ribbon floating in
+ * nothing. This is a coarse noise-displaced grid covering the stage's bounding
+ * area, sitting below road level so it never intrudes on the driving surface,
+ * and it is the difference between a test track and a place.
+ *
+ * Deliberately low resolution: it is scenery, it is always distant, and it must
+ * cost nothing.
+ */
+function buildTerrain(stage: Stage): THREE.Group {
+  const group = new THREE.Group();
+
+  // Bounding box of the centreline, generously padded.
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const s of stage.spline.samples) {
+    minX = Math.min(minX, s.position.x);
+    maxX = Math.max(maxX, s.position.x);
+    minZ = Math.min(minZ, s.position.z);
+    maxZ = Math.max(maxZ, s.position.z);
+  }
+  const pad = 260;
+  minX -= pad; maxX += pad; minZ -= pad; maxZ += pad;
+
+  const cells = 40;
+  const geometry = new THREE.PlaneGeometry(maxX - minX, maxZ - minZ, cells, cells);
+  geometry.rotateX(-Math.PI / 2);
+  geometry.translate((minX + maxX) / 2, 0, (minZ + maxZ) / 2);
+
+  const position = geometry.getAttribute('position') as THREE.BufferAttribute;
+  const colors = new Float32Array(position.count * 3);
+  const [near, far] = TERRAIN_COLOUR[stage.def.biome] ?? TERRAIN_COLOUR.forest!;
+  const a = new THREE.Color(near);
+  const b = new THREE.Color(far);
+  const mixed = new THREE.Color();
+
+  for (let i = 0; i < position.count; i++) {
+    const x = position.getX(i);
+    const z = position.getZ(i);
+
+    // Two octaves of cheap trig noise: enough to read as landscape, and
+    // deterministic, so the same stage always looks the same.
+    const h =
+      Math.sin(x * 0.011) * Math.cos(z * 0.013) * 9 +
+      Math.sin(x * 0.037 + 1.7) * Math.cos(z * 0.029 - 0.9) * 3.5;
+
+    // Follow the road's local height rather than a single global minimum, so
+    // the ground sits just below the corridor everywhere instead of dropping
+    // into a canyon wherever the stage climbs.
+    const nearest = stage.spline.locate({ x, y: 0, z });
+    const roadHeight = nearest.sample.position.y;
+    const distance = Math.abs(nearest.lateral);
+    const clearance = Math.min(Math.max((distance - 30) / 110, 0), 1);
+
+    position.setY(i, roadHeight - 4 + h * clearance);
+    mixed.copy(a).lerp(b, Math.min(Math.max(h / 12, 0), 1));
+    colors[i * 3] = mixed.r;
+    colors[i * 3 + 1] = mixed.g;
+    colors[i * 3 + 2] = mixed.b;
+  }
+
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geometry.computeVertexNormals();
+
+  const mesh = new THREE.Mesh(
+    geometry,
+    new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, flatShading: true }),
+  );
+  mesh.receiveShadow = true;
+  group.add(mesh);
+  return group;
 }
 
 /**
