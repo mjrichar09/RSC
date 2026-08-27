@@ -11,7 +11,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { CAR, SIM, type VehicleTuning } from '../data/tuning.js';
 import type { DriverInput } from './input.js';
 import { NEUTRAL_INPUT } from './input.js';
-import { CLEAR_DAY, type Conditions } from './conditions.js';
+import { CLEAR_DAY, type Conditions, ambientTemperature } from './conditions.js';
 import { DamageModel, type DamageOptions, impactPointFromForce } from './damage.js';
 import { type Quat, type Vec3, add, lerpVec, rotateInverse, slerp, v3 } from './math.js';
 import { type Stage } from './stage.js';
@@ -177,7 +177,12 @@ export class SimWorld {
     this.damage =
       options.damage === undefined || options.damage === false
         ? null
-        : new DamageModel(options.damage === true ? {} : options.damage);
+        : new DamageModel({
+            // Ambient air comes from the stage's conditions, so brakes and
+            // coolant both behave differently on a winter night.
+            ambient: ambientTemperature(this.conditions),
+            ...(options.damage === true ? {} : options.damage),
+          });
     this.events = this.damage ? new RAPIER.EventQueue(true) : null;
 
     this.vehicle = new Vehicle(RAPIER, this.world, resolveTuning(options.tuning), spawn, {

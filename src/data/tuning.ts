@@ -99,6 +99,18 @@ export interface VehicleTuning {
   peakSlipRatio: number;
   /** Fraction of peak force retained at full slide. Higher = more controllable drifts. */
   slideGripFloor: number;
+  /**
+   * Slide floor for a *locked* wheel, used only on the braking side of the slip
+   * curve.
+   *
+   * Measured, not guessed: with the one shared floor of 0.74, stamping the
+   * pedal stopped the car at 1.10 g and the best a driver could hold without
+   * locking was also 1.10 g — so threshold braking was worth exactly nothing
+   * and the fastest stop was the least skilled one. A locked tyre ploughs; it
+   * gives up more than a sliding one, and the drive side keeps its own floor
+   * because that is what the launch was calibrated against.
+   */
+  lockedGripFloor: number;
 
   /** Drag coefficient × frontal area × ½ρ, so drag = this × v². */
   dragFactor: number;
@@ -159,7 +171,11 @@ export const CAR: VehicleTuning = {
   downshiftAt: 0.45,
   shiftTime: 0.12,
 
-  brakeTorque: 3200,
+  // 2400 rather than 3200: measured against the locked-wheel floor, anything
+  // above about 2600 Nm locks all four wheels from half pedal, which left the
+  // whole top of the pedal doing nothing but ploughing. At 2400 the best stop
+  // is 1.00 g at around half pedal and locking costs 16%.
+  brakeTorque: 2400,
   brakeBias: 0.62,
   handbrakeTorque: 2600,
   handbrakeGripLoss: 0.42,
@@ -170,6 +186,7 @@ export const CAR: VehicleTuning = {
   peakSlipAngle: 0.18,
   peakSlipRatio: 0.14,
   slideGripFloor: 0.74,
+  lockedGripFloor: 0.55,
 
   dragFactor: 0.42,
   downforceFactor: 0.22,

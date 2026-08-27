@@ -24,6 +24,8 @@ function arg(name: string): string | undefined {
 const requested = (arg('trace') ?? 'launch,brake,slalom,handbrake,catch,circle').split(',');
 const baseSurface = (arg('surface') ?? 'tarmac') as SurfaceId;
 const wantCsv = process.argv.includes('--csv');
+/** `--damage` runs with the damage model on, which is what brake heat needs. */
+const wantDamage = process.argv.includes('--damage');
 
 /** `--set=handbrakeTorque=2000,lsdBias=0.2` overrides tuning for this run. */
 const overrides: Partial<VehicleTuning> = {};
@@ -47,7 +49,11 @@ console.log(`surface: ${baseSurface}\n`);
 
 for (const name of requested) {
   const trace = TRACES[name]!;
-  const { summary, recorder } = await runTrace(trace, { baseSurface, tuning: overrides });
+  const { summary, recorder } = await runTrace(trace, {
+    baseSurface,
+    tuning: overrides,
+    ...(wantDamage ? { damage: true } : {}),
+  });
   console.log(formatSummary(name, summary));
   console.log(`  ${trace.description}\n`);
 

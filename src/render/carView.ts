@@ -35,11 +35,18 @@ const flat = (color: number, roughness = 0.6, ghost = false) =>
       : {}),
   });
 
+/** Disc colours: cool cast iron, heat-tinted bronze, cherry red, and white heat. */
+const DISC_COLD = new THREE.Color(0x8d949c);
+const DISC_TINT = new THREE.Color(0x6b4a34);
+const DISC_GLOW = new THREE.Color(0xff3b12);
+const DISC_WHITE = new THREE.Color(0xffd9a0);
+
 export class CarView {
   readonly group = new THREE.Group();
 
   private readonly chassis = new THREE.Group();
   private readonly wheels: THREE.Group[] = [];
+  private readonly discs: THREE.Mesh[] = [];
   /** Marks where each tire is actually touching, and how hard it is sliding. */
   private readonly contactDots: THREE.Mesh[] = [];
 
@@ -105,6 +112,13 @@ export class CarView {
     const tireMat = flat(PALETTE.tire, 0.9, isGhost);
     const hubGeo = new THREE.BoxGeometry(0.28, CAR.wheelRadius * 0.9, CAR.wheelRadius * 0.9);
     const hubMat = flat(0xb9c0c9, 0.4, isGhost);
+    // The disc is a ring on the *outboard* face, which is how you see one on a
+    // real car: through the wheel, around the hub. A cylinder tucked inside the
+    // tyre was invisible from an isometric camera — the tyre is in front of it.
+    // MeshBasic because a hot disc emits its own light, and has to read at
+    // night, which is when it matters most.
+    const discGeo = new THREE.RingGeometry(CAR.wheelRadius * 0.42, CAR.wheelRadius * 0.76, 16);
+    discGeo.rotateY(Math.PI / 2);
 
     for (let i = 0; i < 4; i++) {
       const wheel = new THREE.Group();
@@ -113,6 +127,15 @@ export class CarView {
       wheel.add(tire);
       // The hub spins with the wheel and makes rotation (and lockup) visible.
       wheel.add(new THREE.Mesh(hubGeo, hubMat));
+      // Each disc owns its material: four corners reach four temperatures, and
+      // the front pair does most of the work.
+      const disc = new THREE.Mesh(
+        discGeo,
+        new THREE.MeshBasicMaterial({ color: DISC_COLD, side: THREE.DoubleSide }),
+      );
+      disc.position.x = i % 2 === 0 ? -0.135 : 0.135;
+      wheel.add(disc);
+      this.discs.push(disc);
       this.wheels.push(wheel);
       this.group.add(wheel);
 
@@ -251,6 +274,16 @@ export class CarView {
       view.visible = damage.get(`hub${key}` as never) > 0;
       const tyre = damage.get(`tyre${key}` as never);
       view.scale.set(1, tyre <= 0 ? 0.55 : 1, 1);
+
+      // Cold grey → oxidised bronze → red → orange-white, in two stages, the
+      // same two the thermal model reports: discolouration first, then light.
+      const disc = this.discs[i];
+      if (disc) {
+        const mat = disc.material as THREE.MeshBasicMaterial;
+        mat.color.copy(DISC_COLD).lerp(DISC_TINT, damage.brakeTint(i));
+        const glow = damage.brakeGlow(i);
+        if (glow > 0) mat.color.lerp(DISC_GLOW, glow).lerp(DISC_WHITE, glow * glow);
+      }
     }
   }
 

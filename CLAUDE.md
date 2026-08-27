@@ -23,6 +23,7 @@ npm run telemetry  # handling questions, in text
 npm run sweep      # balance: lateral g, turn radius, front-minus-rear slip
 npm run stages     # is every stage still completable, and how fast
 npm run crash      # what an impact at a given speed breaks and costs
+npm run telemetry -- --trace=stops --damage   # brake temperature
 npm run perf       # simulation cost per step
 npm run shoot      # ONE composite grid PNG, only for visual questions
 ```
@@ -51,6 +52,10 @@ Each of these cost real time and is easy to repeat:
   any moment with no wheel down, so a beached car read as a 45-second jump.
 - **Reaching for `Math.random` in `sim/` or `game/`.** Headless runs must be
   reproducible; stochastic behaviour draws from an injected stream.
+- **Measuring a stop at the standstill.** The slip-ratio denominator clamps at
+  1 m/s, so every wheel reads locked at walking pace whatever it was doing at
+  speed. Sample mid-stop; a slip ratio taken at the end told me the car was
+  locking when it was not, and I nearly retuned the tyre model on it.
 - **three.js needing an explicit call after you change a shadow camera's
   frustum** (`light.shadow.camera.updateProjectionMatrix()`), and needing the
   key light on the opposite azimuth from the camera or the car sits on its own

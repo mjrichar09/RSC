@@ -41,6 +41,12 @@ export interface StageRunOptions {
   timeout?: number;
   /** Record a ghost of the run. Used for benchmark ghosts and for tests. */
   recordGhost?: boolean;
+  /**
+   * Run with the damage model on. Off by default so stage validation measures
+   * the road rather than the car's condition; on when the question is about
+   * wear, heat or brakes.
+   */
+  damage?: boolean;
 }
 
 export interface ValidationResult {
@@ -107,6 +113,7 @@ export async function runStage(
   const world = await createWorld({
     stage,
     ...(options.conditions ? { conditions: options.conditions } : {}),
+    ...(options.damage ? { damage: true } : {}),
   });
   const driver = new Driver(stage, options.driver);
   const race = new Race(stage);

@@ -207,6 +207,12 @@ export class Vehicle {
     return this.isFront(i) ? (1 - awdRearBias) / 2 : awdRearBias / 2;
   }
 
+  /**
+   * Brake torque actually applied at each corner this step, Nm. The thermal
+   * model reads it: heat is the work the caliper did, not the pedal travel.
+   */
+  private readonly brakeApplied: [number, number, number, number] = [0, 0, 0, 0];
+
   /** Advance one fixed step. Call before `world.step()`. */
   step(dt: number, input: DriverInput): void {
     const t = this.tuning;
@@ -362,6 +368,7 @@ export class Vehicle {
       const brakeTorque =
         t.brakeTorque * clamp(axleBrake, 0, 1) * fx.wheelBrake[i]! +
         (front ? 0 : t.handbrakeTorque * input.handbrake);
+      this.brakeApplied[i] = brakeTorque;
 
       const h = hit[i];
       if (!h) {
@@ -407,6 +414,7 @@ export class Vehicle {
         peakSlipAngle: t.peakSlipAngle,
         peakSlipRatio: t.peakSlipRatio,
         slideFloor: t.slideGripFloor,
+        lockedFloor: t.lockedGripFloor,
         driveScale: 1,
       });
 
@@ -438,6 +446,17 @@ export class Vehicle {
     if (grounded) {
       body.addForce(scale(up, -t.downforceFactor * v * v), true);
       body.addTorque(scale(up, -t.yawDamping * dot(angvel, up)), true);
+    }
+
+    // Brake heat is settled last, on the torques and wheel speeds this step
+    // actually produced. The fade it causes arrives next step, through
+    // `effects()`.
+    if (this.damage) {
+      this.damage.updateBrakes(
+        dt,
+        this.wheels.map((w, i) => ({ torque: this.brakeApplied[i]!, spin: w.spin })),
+        planarSpeed,
+      );
     }
   }
 

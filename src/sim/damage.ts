@@ -166,6 +166,8 @@ export interface DamageOptions {
   fuel?: number;
   /** Deterministic random source, so headless runs stay reproducible. */
   random?: () => number;
+  /** Ambient air, 0..1 as `ambientTemperature()` reports it. */
+  ambient?: number;
 }
 
 const WHEEL_KEYS = ['FL', 'FR', 'RL', 'RR'] as const;
@@ -197,12 +199,54 @@ export function impactPointFromForce(localForceDirection: Vec3): Vec3 {
   return v3(d.x * t, d.y * t, d.z * t);
 }
 
+/**
+ * Brake thermal model, in real units so the numbers can be argued with.
+ *
+ * A ventilated disc plus its pads and hat is roughly 5 kg of steel, and steel
+ * holds about 460 J per kg per kelvin: ~2300 J/K per corner. That mass is what
+ * makes the sums come out where a real car does — stopping this car from
+ * 145 km/h puts about 300 kJ into each front disc, which is a 110 K rise, and
+ * two or three of those in quick succession is what it takes to see any glow.
+ */
+const DISC_HEAT_CAPACITY = 1500;
+/** Fraction of the friction work that lands in the disc rather than the pad, air and tyre. */
+const DISC_ABSORPTION = 0.85;
+/** Convective loss, watts per kelvin: a standing term plus airflow with speed. */
+const DISC_COOL_BASE = 4;
+const DISC_COOL_PER_MPS = 0.35;
+/** Ambient air, °C, at the two ends of `ambientTemperature()`. */
+const AMBIENT_COLD = 0;
+const AMBIENT_HOT = 30;
+/** Fade starts here on healthy brakes and is total 200 K later. */
+const FADE_START_C = 520;
+const FADE_SPAN_C = 220;
+/** What is left of the brakes when they are completely cooked. */
+const FADE_FLOOR = 0.35;
+/**
+ * What the disc looks like, in two stages, because a hot disc changes colour
+ * long before it emits any light.
+ *
+ * Steel oxidises straw, then bronze, then blue from about 200°C — that is the
+ * `tint`. Actual incandescence starts around 500°C and reaches orange-white
+ * near 800. Measured against a hard AI lap of Quarry Run, which peaks around
+ * 345°C, the tint is a normal sight and the glow is something you have to
+ * earn — a long descent, a dragged pedal, or brakes already damaged.
+ */
+const TINT_START_C = 200;
+const TINT_FULL_C = 450;
+const GLOW_START_C = 500;
+const GLOW_FULL_C = 800;
+
 export class DamageModel {
   /** Health per component, 1 = new, 0 = destroyed. */
   readonly health = new Map<ComponentId, number>();
 
   /** Coolant temperature, 0 = cold, 1 = boiling. */
   temperature = 0;
+  /** Brake disc temperature per corner, °C. */
+  readonly brakeTemp: [number, number, number, number] = [0, 0, 0, 0];
+  /** Ambient air temperature, °C. Set from the stage's conditions. */
+  ambientC = AMBIENT_HOT;
   fuel: number;
   readonly fuelCapacity: number;
 
@@ -220,6 +264,8 @@ export class DamageModel {
     this.fuelCapacity = options.fuel ?? 45;
     this.fuel = this.fuelCapacity;
     this.random = options.random ?? Math.random;
+    this.setAmbient(options.ambient ?? 0.8);
+    this.brakeTemp.fill(this.ambientC);
     for (const c of COMPONENTS) this.health.set(c.id, 1);
   }
 
@@ -380,6 +426,67 @@ export class DamageModel {
     if (this.fuel <= 0) this.failures.add('out-of-fuel');
   }
 
+  /**
+   * Set ambient air from the stage's conditions, 0..1.
+   *
+   * Cold brakes on a winter night are not a cosmetic difference: the same
+   * descent that fades on a hot afternoon can be driven straight through.
+   */
+  setAmbient(ambient: number): void {
+    // A disc already at rest follows the air; a hot one keeps its heat and
+    // cools toward the new ambient on its own.
+    const cold = this.brakeTemp.map((t) => t <= this.ambientC + 1);
+    this.ambientC = AMBIENT_COLD + clamp(ambient, 0, 1) * (AMBIENT_HOT - AMBIENT_COLD);
+    for (let i = 0; i < 4; i++) if (cold[i]) this.brakeTemp[i] = this.ambientC;
+  }
+
+  /**
+   * Brake heat: friction work in, convection out.
+   *
+   * `torque` is what the caliper actually applied and `spin` the wheel it
+   * applied it to, so the power is the real dissipated watts rather than a
+   * proxy for pedal pressure — a locked wheel makes no heat, which is exactly
+   * the behaviour that makes threshold braking worth doing.
+   */
+  updateBrakes(
+    dt: number,
+    corners: readonly { torque: number; spin: number }[],
+    speed: number,
+  ): void {
+    const airflow = DISC_COOL_BASE + DISC_COOL_PER_MPS * Math.min(Math.abs(speed), 60);
+    for (let i = 0; i < 4; i++) {
+      const c = corners[i];
+      const power = c ? Math.abs(c.torque * c.spin) * DISC_ABSORPTION : 0;
+      const loss = (this.brakeTemp[i]! - this.ambientC) * airflow;
+      this.brakeTemp[i] = Math.max(
+        this.ambientC,
+        this.brakeTemp[i]! + ((power - loss) / DISC_HEAT_CAPACITY) * dt,
+      );
+    }
+  }
+
+  /**
+   * How much braking is left at this corner, 1 down to `FADE_FLOOR`.
+   *
+   * A damaged brake fades sooner as well as braking less hard: warped discs
+   * and cooked pads are the same failure arriving from two directions.
+   */
+  brakeFade(i: number): number {
+    const start = FADE_START_C * (0.55 + 0.45 * this.get(`brake${WHEEL_KEYS[i]}` as ComponentId));
+    const over = clamp((this.brakeTemp[i]! - start) / FADE_SPAN_C, 0, 1);
+    return 1 - over * (1 - FADE_FLOOR);
+  }
+
+  /** 0..1 heat discolouration of the disc — straw through blue. Render-only. */
+  brakeTint(i: number): number {
+    return clamp((this.brakeTemp[i]! - TINT_START_C) / (TINT_FULL_C - TINT_START_C), 0, 1);
+  }
+
+  /** 0..1 how brightly this disc is actually glowing. Render-only. */
+  brakeGlow(i: number): number {
+    return clamp((this.brakeTemp[i]! - GLOW_START_C) / (GLOW_FULL_C - GLOW_START_C), 0, 1);
+  }
+
   /** Current handling penalties. Read once per physics step by the vehicle. */
   effects(): DamageEffects {
     const engine = this.get('engine');
@@ -395,7 +502,9 @@ export class DamageModel {
       const hub = this.get(`hub${key}` as ComponentId);
       // A punctured tyre keeps a little grip on the rim, and not much.
       wheelGrip[i] = tyre <= 0 ? 0.22 : 0.45 + 0.55 * tyre;
-      wheelBrake[i] = this.get(`brake${key}` as ComponentId);
+      // Fade is folded in here rather than in the vehicle, so every consumer of
+      // `wheelBrake` — including the AI — feels hot brakes without knowing why.
+      wheelBrake[i] = this.get(`brake${key}` as ComponentId) * this.brakeFade(i);
       wheelSuspension[i] = 0.3 + 0.7 * this.get(`suspension${key}` as ComponentId);
       wheelLost[i] = hub <= 0;
     });
@@ -527,6 +636,7 @@ export class DamageModel {
     this.failures.clear();
     this.pending = [];
     this.temperature = 0;
+    for (let i = 0; i < 4; i++) this.brakeTemp[i] = this.ambientC;
     this.fuel = this.fuelCapacity;
     this.peakImpulse = 0;
   }

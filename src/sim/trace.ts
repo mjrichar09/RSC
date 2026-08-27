@@ -52,6 +52,18 @@ export const TRACES: Record<string, Trace> = {
     segments: [seg(6, { throttle: 1 }), seg(6, { brake: 1 })],
   },
 
+  stops: {
+    // Five cycles is what fits: the proving ground is 400 m from the spawn to
+    // its edge, and a trace that drives off it measures a fall, not the brakes.
+    name: 'stops',
+    description: 'Five accelerate-and-stop cycles at threshold pressure, for brake temperature.',
+    // A third of the pedal, not all of it: past about 0.42 at these speeds
+    // every wheel locks, and a locked disc turns no work into heat at all. The
+    // trace that measures brake temperature has to be one that keeps the discs
+    // turning — which is also the fastest way to stop.
+    segments: Array.from({ length: 5 }, () => [seg(3, { throttle: 1 }), seg(2.4, { brake: 0.35 })]).flat(),
+  },
+
   slalom: {
     name: 'slalom',
     description: 'Power on, alternating full lock. Exposes weight transfer and roll.',

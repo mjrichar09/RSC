@@ -52,6 +52,8 @@ export interface TireInput {
   peakSlipAngle: number;
   peakSlipRatio: number;
   slideFloor: number;
+  /** Floor for a locked wheel — the braking side of the longitudinal curve. */
+  lockedFloor?: number;
   /** Fraction of longitudinal capability available (0 while a wheel is locked). */
   driveScale: number;
 }
@@ -74,7 +76,10 @@ export function tireForces(i: TireInput): TireOutput {
   const capacity = Math.max(i.load, 0) * i.mu;
 
   const lat = -slipCurve(i.slipAngle / i.peakSlipAngle, i.slideFloor) * capacity;
-  const long = slipCurve(i.slipRatio / i.peakSlipRatio, i.slideFloor) * capacity * i.driveScale;
+  // Braking and driving get different floors: a locked tyre loses far more
+  // than a spinning one, which is what makes threshold braking worth doing.
+  const longFloor = i.slipRatio < 0 ? (i.lockedFloor ?? i.slideFloor) : i.slideFloor;
+  const long = slipCurve(i.slipRatio / i.peakSlipRatio, longFloor) * capacity * i.driveScale;
 
   const mag = Math.hypot(lat, long);
   const saturation = capacity > 1e-6 ? mag / capacity : 0;

@@ -172,6 +172,17 @@ export class IsoCamera {
     }
   }
 
+  /**
+   * Force the orthographic half-height, overriding the zone zoom. Harness only:
+   * the visual tool needs to get close enough to see the car's own detail.
+   */
+  setViewSize(size: number): void {
+    this.viewSize = size;
+    this.desiredZoom = size;
+    this.speedZoom = 1;
+    this.applyProjection();
+  }
+
   /** Orthographic half-height actually in use, including the speed zoom. */
   get effectiveViewSize(): number {
     return this.viewSize * this.speedZoom;

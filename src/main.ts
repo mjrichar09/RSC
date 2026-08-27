@@ -519,6 +519,15 @@ async function main(): Promise<void> {
         Number(params.get('grip') ?? '0.6'),
       );
     }
+    // `?brakes=650` preheats the discs. Brake glow starts at a temperature the
+    // AI does not reach on a clean lap, so the only way to check how it looks
+    // is to put the heat there directly.
+    const brakes = params.get('brakes');
+    if (brakes) world!.damage?.brakeTemp.fill(Number(brakes));
+    // `?zoom=8` pulls the orthographic camera in. Detail on the car itself —
+    // a brake disc is about a metre across — is invisible at race distance.
+    const zoom = params.get('zoom');
+    if (zoom) camera.setViewSize(Number(zoom));
     window.RSC.draw();
     return;
   }

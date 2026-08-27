@@ -43,6 +43,8 @@ export interface TelemetrySample {
    */
   turnRadius: number;
   wheelsGrounded: number;
+  /** Hottest brake disc this sample, °C. Null without a damage model. */
+  brakeC: number | null;
 }
 
 export interface TelemetrySummary {
@@ -65,6 +67,10 @@ export interface TelemetrySummary {
    * 45-second beaching read as a 45-second jump.
    */
   timeAirborne: number;
+  /** Hottest brake disc reached, °C, or null when the run had no damage model. */
+  peakBrakeC: number | null;
+  /** Coolest the hottest disc got back to after that peak, °C. */
+  finalBrakeC: number | null;
   finalPosition: { x: number; y: number; z: number };
 }
 
@@ -95,6 +101,7 @@ export class TelemetryRecorder {
       turnRadius:
         Math.abs(s.yawRate) > 0.02 ? Math.min(Math.abs(s.speed / s.yawRate), 999) : 999,
       wheelsGrounded: s.wheels.filter((w) => w.grounded).length,
+      brakeC: world.damage ? Math.max(...world.damage.brakeTemp) : null,
     });
   }
 
@@ -111,6 +118,8 @@ export class TelemetryRecorder {
         maxDriftDeg: 0,
         timeSliding: 0,
         timeAirborne: 0,
+        peakBrakeC: null,
+        finalBrakeC: null,
         finalPosition: { x: 0, y: 0, z: 0 },
       };
     }
@@ -148,12 +157,16 @@ export class TelemetryRecorder {
       maxDriftDeg: maxDrift,
       timeSliding: sliding,
       timeAirborne: airborne,
+      peakBrakeC: this.samples.some((s) => s.brakeC !== null)
+        ? Math.max(...this.samples.map((s) => s.brakeC ?? 0))
+        : null,
+      finalBrakeC: last.brakeC,
       finalPosition: { x: last.x, y: last.y, z: last.z },
     };
   }
 
   toCsv(): string {
-    const header = 't,x,y,z,speed,rpm,gear,drift,saturation,yawRate,turnRadius,grounded';
+    const header = 't,x,y,z,speed,rpm,gear,drift,saturation,yawRate,turnRadius,grounded,brakeC';
     const rows = this.samples.map((s) =>
       [
         s.t.toFixed(4),
@@ -168,6 +181,7 @@ export class TelemetryRecorder {
         s.yawRate.toFixed(2),
         s.turnRadius.toFixed(1),
         s.wheelsGrounded,
+        s.brakeC === null ? '' : s.brakeC.toFixed(1),
       ].join(','),
     );
     return [header, ...rows].join('\n');
@@ -186,6 +200,14 @@ export function formatSummary(name: string, s: TelemetrySummary): string {
     row('max drift', `${s.maxDriftDeg.toFixed(1)}°`),
     row('time sliding', `${s.timeSliding.toFixed(2)} s`),
     row('time airborne', `${s.timeAirborne.toFixed(2)} s`),
+    ...(s.peakBrakeC === null
+      ? []
+      : [
+          row(
+            'brakes',
+            `peak ${s.peakBrakeC.toFixed(0)}°C, ended ${(s.finalBrakeC ?? 0).toFixed(0)}°C`,
+          ),
+        ]),
     row(
       'final pos',
       `(${s.finalPosition.x.toFixed(1)}, ${s.finalPosition.y.toFixed(1)}, ${s.finalPosition.z.toFixed(1)})`,

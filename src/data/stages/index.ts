@@ -161,7 +161,11 @@ const northPass: StageDef = {
   requiresMedals: 2,
   payouts: { author: 8600, gold: 5400, silver: 3000, bronze: 1700, finish: 1000 },
   checkpoints: 4,
-  medals: { author: 45, gold: 53, silver: 66, bronze: 85 },
+  // Re-derived after the locked-wheel grip floor: the AI's best lap here went
+  // from 56.84s to 65.12s, because snow is where crude braking costs most and
+  // locking now gives up 45% of peak grip rather than 26%. Same ratios to the
+  // measured lap as before, moved with it.
+  medals: { author: 52, gold: 61, silver: 76, bronze: 97 },
   controlPoints: [
     cp(0, 0, 0, 6.4, 'snow'),
     cp(-8, 65, 2, 6.4, 'snow'),

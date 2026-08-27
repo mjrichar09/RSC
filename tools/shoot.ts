@@ -31,6 +31,10 @@ const [CELL_W, CELL_H] = arg('size', '640x360').split('x').map(Number) as [numbe
 const cellSpec = arg('cells', 'pine-loop@22,quarry-run@26,north-pass@30,pine-loop@44');
 /** Driver commitment for stage cells, so a frame can catch the car at real pace. */
 const grip = arg('grip', '0.6');
+/** `--zoom=9` pulls the camera in, for questions about the car itself. */
+const zoomArg = arg('zoom', '');
+/** `--brakes=650` preheats the brake discs, in °C, for the glow. */
+const brakesArg = arg('brakes', '');
 /** `--variant=night-rain` shoots the stage under those conditions. */
 const variantArg = arg('variant', '');
 const [gridCols, gridRows] = arg('grid', '2x2').split('x').map(Number) as [number, number];
@@ -46,24 +50,30 @@ const cells = cellSpec.split(',').map((spec) => {
   // cell may name its own variant as `<stage>/<variant>`.
   const crashMatch = /^crash(\d+(?:\.\d+)?)?:(.+)$/.exec(name!);
   const crashFor = crashMatch ? Number(crashMatch[1] ?? '2') : 0;
+  // `hot<°C>:<stage>` preheats the discs for that cell alone, so one composite
+  // can answer "what does each temperature look like".
+  const hotMatch = /^hot(\d+):(.+)$/.exec(name!);
+  const hotFor = hotMatch ? hotMatch[1]! : brakesArg;
 
   // `garage` shoots the stage-select screen itself, which is the only place
   // the variant list is visible.
   if (name === 'garage') return { url: '/', label: 'garage' };
 
-  const raw = isTrace || withGhost ? name!.slice(6) : (crashMatch?.[2] ?? name!);
+  const raw = isTrace || withGhost
+    ? name!.slice(6)
+    : (crashMatch?.[2] ?? hotMatch?.[2] ?? name!);
   const [id, cellVariant] = raw.split('/');
   const useVariant = cellVariant ?? variantArg;
   const url = isTrace
     ? `/?trace=${id}&t=${seconds}`
     : `/?stage=${id}&t=${seconds}&grip=${grip}${useVariant ? `&variant=${useVariant}` : ''}${
         withGhost ? '&ghost=1' : ''
-      }${crashFor ? `&crash=${crashFor}` : ''}`;
+      }${crashFor ? `&crash=${crashFor}` : ''}${hotFor ? `&brakes=${hotFor}` : ''}${zoomArg ? `&zoom=${zoomArg}` : ''}`;
   return {
     url,
     label: `${id}${useVariant ? ` ${useVariant}` : ''} @ ${seconds}s${withGhost ? ' + ghost' : ''}${
       crashFor ? ` + ${crashFor}s crash` : ''
-    }`,
+    }${hotMatch ? ` · ${hotFor}°C` : ''}`,
   };
 });
 

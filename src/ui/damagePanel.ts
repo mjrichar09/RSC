@@ -59,6 +59,8 @@ export class DamagePanel {
   private readonly temp: HTMLElement;
   private readonly fuel: HTMLElement;
   private readonly tempFill: HTMLElement;
+  private readonly brake: HTMLElement;
+  private readonly brakeFill: HTMLElement;
   private readonly fuelFill: HTMLElement;
   private readonly toasts: HTMLElement;
   private readonly worst: HTMLElement;
@@ -80,6 +82,7 @@ export class DamagePanel {
       </svg>
       <div class="damage-worst" id="damage-worst"></div>
       <div class="gauge"><span>TEMP</span><div class="gauge-bar"><i id="gauge-temp"></i></div><b id="gauge-temp-v"></b></div>
+      <div class="gauge"><span>BRAKE</span><div class="gauge-bar"><i id="gauge-brake"></i></div><b id="gauge-brake-v"></b></div>
       <div class="gauge"><span>FUEL</span><div class="gauge-bar"><i id="gauge-fuel"></i></div><b id="gauge-fuel-v"></b></div>
       <div class="damage-toasts" id="damage-toasts"></div>`;
     parent.appendChild(this.root);
@@ -88,6 +91,8 @@ export class DamagePanel {
       this.zones.set(z.id, this.root.querySelector(`[data-zone="${z.id}"]`)!);
     }
     this.tempFill = this.root.querySelector('#gauge-temp')!;
+    this.brakeFill = this.root.querySelector('#gauge-brake')!;
+    this.brake = this.root.querySelector('#gauge-brake-v')!;
     this.fuelFill = this.root.querySelector('#gauge-fuel')!;
     this.temp = this.root.querySelector('#gauge-temp-v')!;
     this.fuel = this.root.querySelector('#gauge-fuel-v')!;
@@ -121,6 +126,15 @@ export class DamagePanel {
     this.tempFill.style.width = `${(t * 100).toFixed(0)}%`;
     this.tempFill.classList.toggle('hot', damage.temperature > 0.8);
     this.temp.textContent = `${(damage.temperature * 120).toFixed(0)}°`;
+
+    // Brakes: the hottest disc, in the units the model works in. Fade is
+    // otherwise invisible — the pedal simply stops working and there is nothing
+    // on screen to explain why.
+    const hottest = Math.max(...damage.brakeTemp);
+    const worstFade = Math.min(damage.brakeFade(0), damage.brakeFade(1), damage.brakeFade(2), damage.brakeFade(3));
+    this.brakeFill.style.width = `${Math.min((hottest / 800) * 100, 100).toFixed(0)}%`;
+    this.brakeFill.classList.toggle('hot', worstFade < 0.98);
+    this.brake.textContent = `${hottest.toFixed(0)}°`;
 
     const f = damage.fuel / damage.fuelCapacity;
     this.fuelFill.style.width = `${(f * 100).toFixed(0)}%`;

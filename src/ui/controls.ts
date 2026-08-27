@@ -11,6 +11,9 @@ import { clamp, moveToward } from '../sim/math.js';
 
 const KEY_STEER_RATE = 3.2;
 const KEY_STEER_RETURN = 5.5;
+/** Pedal travel per second on a keyboard: ~0.4 s to full, released twice as fast. */
+const KEY_BRAKE_RATE = 2.6;
+const KEY_BRAKE_RELEASE = 6.0;
 const DEADZONE = 0.12;
 
 const applyDeadzone = (v: number): number =>
@@ -52,6 +55,8 @@ export class Controls {
     target.addEventListener('blur', () => this.held.clear());
   }
 
+  private keyBrake = 0;
+
   private down(...codes: string[]): boolean {
     return codes.some((c) => this.held.has(c));
   }
@@ -60,7 +65,16 @@ export class Controls {
     const pad = navigator.getGamepads?.().find((p) => p !== null) ?? null;
 
     let throttle = this.down('KeyW', 'ArrowUp') ? 1 : 0;
-    let brake = this.down('KeyS', 'ArrowDown') ? 1 : 0;
+    // The brake ramps like the steering does, and for the same reason: with a
+    // digital pedal every keyboard stop locks all four wheels, so threshold
+    // braking — the thing the tyre model now rewards — would be unreachable
+    // without a gamepad.
+    this.keyBrake = moveToward(
+      this.keyBrake,
+      this.down('KeyS', 'ArrowDown') ? 1 : 0,
+      (this.down('KeyS', 'ArrowDown') ? KEY_BRAKE_RATE : KEY_BRAKE_RELEASE) * dt,
+    );
+    let brake = this.keyBrake;
     let handbrake = this.down('Space') ? 1 : 0;
 
     const left = this.down('KeyA', 'ArrowLeft');
