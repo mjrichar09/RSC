@@ -10,6 +10,7 @@
 import * as THREE from 'three';
 import { CAR } from '../data/tuning.js';
 import type { Quat, Vec3 } from '../sim/math.js';
+import type { DamageModel } from '../sim/damage.js';
 import type { GhostSample } from '../sim/replay.js';
 import type { VehicleState } from '../sim/vehicle.js';
 import { PALETTE } from './scene.js';
@@ -43,6 +44,13 @@ export class CarView {
   private readonly contactDots: THREE.Mesh[] = [];
 
   private readonly ghost: boolean;
+
+  /** Undamaged pose of each deformable part, to deform away from. */
+  private readonly restPose = new Map<THREE.Mesh, { position: THREE.Vector3; scale: THREE.Vector3; color: THREE.Color }>();
+  private nose!: THREE.Mesh;
+  private cabin!: THREE.Mesh;
+  private body!: THREE.Mesh;
+  private wing!: THREE.Mesh;
 
   constructor(parent: THREE.Object3D, options: CarViewOptions = {}) {
     const h = CAR.halfExtents;
@@ -114,6 +122,74 @@ export class CarView {
     }
 
     parent.add(this.group);
+
+    this.body = body;
+    this.cabin = cabin;
+    this.nose = nose;
+    this.wing = wing;
+    for (const mesh of [body, cabin, nose, wing]) {
+      this.restPose.set(mesh, {
+        position: mesh.position.clone(),
+        scale: mesh.scale.clone(),
+        color: (mesh.material as THREE.MeshStandardMaterial).color.clone(),
+      });
+    }
+  }
+
+  /**
+   * Deform and discolour the car to match its condition.
+   *
+   * The damage panel says what is broken; this makes it visible on the thing
+   * you are actually looking at. A crumpled nose and a sunken corner are read
+   * without taking your eyes off the road, which an abstract readout never is.
+   *
+   * Purely presentational — nothing here feeds back into the simulation.
+   */
+  private applyDamage(damage: DamageModel): void {
+    const crush = (
+      mesh: THREE.Mesh,
+      health: number,
+      axis: 'x' | 'y' | 'z',
+      shift: number,
+      /** How dark this part may get. The nose keeps its brightness because it
+       *  is the cue for which end is the front, and losing that on a damaged
+       *  car costs more than the realism gains. */
+      darkestAllowed = 0.45,
+    ) => {
+      const rest = this.restPose.get(mesh);
+      if (!rest) return;
+      const hurt = 1 - health;
+
+      mesh.scale.copy(rest.scale);
+      mesh.scale[axis] = rest.scale[axis] * (1 - hurt * 0.42);
+      mesh.position.copy(rest.position);
+      // Crumple inward, toward the middle of the car.
+      mesh.position[axis] = rest.position[axis] - shift * hurt;
+
+      // Damaged bodywork goes dull and dark rather than staying showroom.
+      const material = mesh.material as THREE.MeshStandardMaterial;
+      material.color.copy(rest.color).multiplyScalar(1 - hurt * (1 - darkestAllowed));
+      material.roughness = 0.6 + hurt * 0.35;
+    };
+
+    crush(this.nose, damage.get('panelFront'), 'z', 0.55, 0.8);
+    crush(this.wing, damage.get('panelRear'), 'z', -0.35);
+    crush(this.cabin, damage.get('panelRoof'), 'y', 0.22);
+    crush(
+      this.body,
+      Math.min(damage.get('panelLeft'), damage.get('panelRight')),
+      'x',
+      0,
+    );
+
+    for (let i = 0; i < 4; i++) {
+      const key = ['FL', 'FR', 'RL', 'RR'][i]!;
+      const view = this.wheels[i]!;
+      // A detached wheel is simply gone; a flat one squats on its rim.
+      view.visible = damage.get(`hub${key}` as never) > 0;
+      const tyre = damage.get(`tyre${key}` as never);
+      view.scale.set(1, tyre <= 0 ? 0.55 : 1, 1);
+    }
   }
 
   set visible(value: boolean) {
@@ -140,8 +216,13 @@ export class CarView {
     }
   }
 
-  update(transform: { position: Vec3; rotation: Quat }, state: VehicleState): void {
+  update(
+    transform: { position: Vec3; rotation: Quat },
+    state: VehicleState,
+    damage: DamageModel | null = null,
+  ): void {
     if (this.ghost) return;
+    if (damage) this.applyDamage(damage);
     const { position, rotation } = transform;
     this.group.position.set(position.x, position.y, position.z);
     this.group.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);

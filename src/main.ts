@@ -314,7 +314,7 @@ async function main(): Promise<void> {
   const drawOnce = (alpha: number, dt: number) => {
     const state = world.state();
     const transform = world.renderTransform(alpha);
-    carView.update(transform, state);
+    carView.update(transform, state, world.damage);
 
     if (ghost && race) {
       const sample = ghost.sampleAt(race.time);
