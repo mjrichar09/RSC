@@ -42,6 +42,7 @@ npm run sweep      # steady-state cornering matrix -> grip and balance table
 npm run stages     # drive every stage with the AI -> completable? how fast?
 npm run crash      # drive into a wall at known speeds -> what breaks, what it costs
 npm run generate   # make new stages, validate them, calibrate their medals
+npm run perf       # simulation cost per fixed step, GPU-independent
 npm run shoot      # -> ONE composite grid PNG in shots/
 npm run typecheck
 ```
@@ -64,6 +65,18 @@ npm run shoot -- --grid=2x2 --cells=launch@2,slalom@6,handbrake@5.6,circle@8
 npm run shoot -- --cells=ghost:pine-loop@30 --grid=1x1 --size=900x560
 npm run shoot -- --cells=trace:circle@8 --grid=1x1 --size=900x560 --out=inspect
 ```
+
+## Performance
+
+The simulation is not the constraint. Measured headless with `npm run perf`,
+one fixed step on a stage with damage enabled costs about 100 µs, so the 120
+steps that make a second of game time cost roughly **12 ms of CPU per second** —
+about 1% of one core, with two orders of magnitude of headroom. Building a
+stage, which happens on load, takes about 3 ms.
+
+Rendering will dominate on any real machine, and a flat-shaded low-poly scene
+gives a modern GPU very little to do. The only figures measured under an actual
+GPU are still outstanding — everything here ran under software rendering.
 
 ## Architecture
 

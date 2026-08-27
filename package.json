@@ -18,7 +18,8 @@
     "tauri": "tauri",
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build",
-    "icon": "tsx tools/icon.ts"
+    "icon": "tsx tools/icon.ts",
+    "perf": "tsx tools/perf.ts"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.14.0",
