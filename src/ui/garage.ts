@@ -114,6 +114,7 @@ export class Garage {
           </div>
           <div class="garage-money"><span>FUNDS</span><b>${money(this.career.money)}</b></div>
         </header>
+        ${this.warningsPanel()}
         <div class="garage-cols">
           <section>${this.stagesPanel()}</section>
           <section>${this.repairsPanel()}</section>
@@ -124,6 +125,23 @@ export class Garage {
           <button data-action="close">Close</button>
         </footer>
       </div>`;
+  }
+
+  /**
+   * What is actually wrong, in words, above everything else.
+   *
+   * A condition percentage is not a warning — "Car at 93%" was what the garage
+   * said while the radiator was holed and the next two races were guaranteed to
+   * end in an overheat. The player has to be able to make the repair decision
+   * knowing what declining it costs.
+   */
+  private warningsPanel(): string {
+    const warnings = this.career.warnings();
+    if (warnings.length === 0) return '';
+    const rows = warnings
+      .map((w) => `<div class="warn-row ${w.severity}"><i></i><span>${w.text}</span></div>`)
+      .join('');
+    return `<div class="garage-warnings">${rows}</div>`;
   }
 
   private conditionLine(): string {

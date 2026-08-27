@@ -618,3 +618,26 @@ html, body {
 #hud.in-garage .damage,
 #hud.in-garage .hud-corner,
 #hud.in-garage .tuning { display: none; }
+
+.garage-warnings {
+  margin-top: 18px;
+  padding: 12px 16px;
+  background: rgba(232, 85, 47, 0.09);
+  border: 1px solid rgba(232, 85, 47, 0.35);
+  border-radius: 4px;
+}
+.warn-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+  padding: 3px 0;
+  letter-spacing: 0.03em;
+}
+.warn-row i { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.warn-row.fatal { color: var(--hot); font-weight: 700; }
+.warn-row.fatal i { background: var(--hot); }
+.warn-row.severe { color: #ffb27a; }
+.warn-row.severe i { background: #ffb27a; }
+.warn-row.caution { color: var(--dim); }
+.warn-row.caution i { background: var(--dim); }

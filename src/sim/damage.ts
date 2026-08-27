@@ -118,6 +118,18 @@ export type FailureId =
   | 'out-of-fuel'
   | `wheel-lost-${'FL' | 'FR' | 'RL' | 'RR'}`;
 
+/** What each failure means, in words. The single source for every surface. */
+export const FAILURE_LABEL: Record<FailureId, string> = {
+  'engine-seized': 'Engine seized',
+  overheated: 'Engine overheated — the radiator was holed',
+  'driveshaft-snapped': 'Driveshaft snapped',
+  'out-of-fuel': 'Out of fuel',
+  'wheel-lost-FL': 'Lost the front left wheel',
+  'wheel-lost-FR': 'Lost the front right wheel',
+  'wheel-lost-RL': 'Lost the rear left wheel',
+  'wheel-lost-RR': 'Lost the rear right wheel',
+};
+
 export interface DamageEvent {
   component: ComponentId;
   label: string;
@@ -356,6 +368,86 @@ export class DamageModel {
       shiftFailure: (1 - this.get('transmission')) * 0.4,
       retired: this.retired,
     };
+  }
+
+  /**
+   * Seconds of racing before this radiator boils the engine, at the given pace.
+   * Null when it never will.
+   *
+   * Derived from the same rates `update` uses, so the warning cannot drift out
+   * of step with what actually happens.
+   */
+  secondsToOverheat(rpmFraction = 0.62, speed = 26): number | null {
+    const cooling = this.get('cooling');
+    const generated = 0.05 * (0.25 + rpmFraction);
+    const shed = 0.055 * (0.15 + cooling * 0.85) * (0.5 + Math.min(Math.abs(speed) / 40, 1));
+    const net = generated - shed;
+    if (net <= 0) return null;
+    return Math.max((1.15 - this.temperature) / net, 0);
+  }
+
+  /** Seconds of racing before the tank runs dry at the given pace. */
+  secondsToEmpty(rpmFraction = 0.62): number | null {
+    const burn = (0.0022 + 0.011 * rpmFraction) * (1 + (1 - this.get('engine')) * 0.4);
+    const leak = (1 - this.get('fuelLine')) * 0.05;
+    const rate = (burn + leak) * 10;
+    return rate <= 0 ? null : this.fuel / rate;
+  }
+
+  /**
+   * Risks worth telling the player about before they pay to enter a stage.
+   *
+   * A percentage is not a warning. "Car at 93%" is what the garage said while
+   * the radiator was holed and the next two races were guaranteed to end in an
+   * overheat — the information existed and told the player nothing. Legibility
+   * is what separates a hardcore damage model from an arbitrary one, and that
+   * has to extend to the decision *before* the race, not just the HUD during it.
+   */
+  warnings(): { severity: 'fatal' | 'severe' | 'caution'; text: string }[] {
+    const out: { severity: 'fatal' | 'severe' | 'caution'; text: string }[] = [];
+
+    // Read the actual failure set rather than guessing from which components
+    // look important. `caged` means "a rollcage protects this", not "the car
+    // stops without it" — using it as a proxy claimed destroyed headlights
+    // stopped the car from starting, while the car started perfectly well.
+    for (const failure of this.failures) {
+      out.push({ severity: 'fatal', text: `${FAILURE_LABEL[failure]} — the car cannot start` });
+    }
+
+    const boil = this.secondsToOverheat();
+    if (boil !== null) {
+      out.push({
+        severity: boil < 90 ? 'severe' : 'caution',
+        text: `Radiator holed — the engine will overheat after about ${Math.round(boil)}s of racing`,
+      });
+    }
+
+    const dry = this.secondsToEmpty();
+    if (dry !== null && dry < 240) {
+      out.push({
+        severity: dry < 100 ? 'severe' : 'caution',
+        text: `Fuel line leaking — about ${Math.round(dry)}s of fuel left`,
+      });
+    }
+
+    const engine = this.get('engine');
+    if (engine > 0 && engine < 0.5) {
+      out.push({ severity: 'severe', text: `Engine at ${(engine * 100).toFixed(0)}% — misfiring under load` });
+    }
+
+    for (const key of WHEEL_KEYS) {
+      const tyre = this.get(`tyre${key}` as ComponentId);
+      if (tyre > 0 && tyre < 0.3) {
+        out.push({ severity: 'caution', text: `Tyre ${key} at ${(tyre * 100).toFixed(0)}% — close to a puncture` });
+      }
+      const steering = this.get('steering');
+      if (key === 'FL' && steering > 0 && steering < 0.6) {
+        out.push({ severity: 'caution', text: `Steering rack bent — the car pulls to one side` });
+      }
+    }
+
+    const order = { fatal: 0, severe: 1, caution: 2 } as const;
+    return out.sort((a, b) => order[a.severity] - order[b.severity]);
   }
 
   /** Total cost to return the car to new. */

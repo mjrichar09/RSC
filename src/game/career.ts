@@ -73,6 +73,11 @@ export class Career {
     return this.buildDamage().condition;
   }
 
+  /** Risks worth showing before the player pays to enter a stage. */
+  warnings(): ReturnType<DamageModel['warnings']> {
+    return this.buildDamage().warnings();
+  }
+
   canEnter(stage: StageDef): EntryCheck {
     return canEnter(stage, { money: this.money, carIsDriveable: this.carIsDriveable });
   }

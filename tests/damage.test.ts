@@ -243,3 +243,80 @@ describe('repair bills', () => {
     expect(d.fuel).toBe(d.fuelCapacity);
   });
 });
+
+describe('warnings', () => {
+  it('says nothing about a healthy car', () => {
+    expect(new DamageModel().warnings()).toEqual([]);
+  });
+
+  it('predicts an overheat, with a time the player can act on', () => {
+    const d = new DamageModel();
+    d.health.set('cooling', 0);
+
+    const boil = d.secondsToOverheat();
+    expect(boil).not.toBeNull();
+    expect(boil!).toBeGreaterThan(5);
+    expect(boil!).toBeLessThan(90);
+
+    const warning = d.warnings().find((w) => w.text.includes('overheat'));
+    expect(warning?.severity).toBe('severe');
+  });
+
+  it('agrees with what actually happens', () => {
+    // The prediction is derived from the same rates `update` uses, so the two
+    // must not drift apart — a warning that lies is worse than no warning.
+    const d = new DamageModel();
+    d.health.set('cooling', 0.2);
+    const predicted = d.secondsToOverheat()!;
+
+    let elapsed = 0;
+    while (!d.failures.has('overheated') && elapsed < 600) {
+      d.update(1 / 120, { rpmFraction: 0.62, speed: 26 });
+      elapsed += 1 / 120;
+    }
+    expect(elapsed).toBeCloseTo(predicted, 0);
+  });
+
+  it('never predicts an overheat the car cannot actually reach', () => {
+    expect(new DamageModel().secondsToOverheat()).toBeNull();
+  });
+
+  it('warns loudest about what stops the car starting', () => {
+    const d = new DamageModel();
+    d.health.set('engine', 0);
+    d.refreshFailures();
+    expect(d.warnings()[0]!.severity).toBe('fatal');
+  });
+
+  it('predicts fuel range, and shortens it when the line is holed', () => {
+    const healthy = new DamageModel().secondsToEmpty()!;
+    const leaking = new DamageModel();
+    leaking.health.set('fuelLine', 0);
+    expect(leaking.secondsToEmpty()!).toBeLessThan(healthy);
+    expect(leaking.warnings().some((w) => w.text.includes('Fuel line'))).toBe(true);
+  });
+});
+
+describe('warning accuracy', () => {
+  it('does not claim a cosmetic failure stops the car', () => {
+    const d = new DamageModel();
+    d.health.set('lights', 0);
+    d.health.set('panelFront', 0);
+    d.refreshFailures();
+
+    // Destroyed headlights are not a reason the car cannot start, and saying so
+    // trains the player to ignore the warnings that matter.
+    expect(d.retired).toBe(false);
+    expect(d.warnings().some((w) => w.severity === 'fatal')).toBe(false);
+  });
+
+  it('does claim a real failure stops the car', () => {
+    const d = new DamageModel();
+    d.health.set('hubRL', 0);
+    d.refreshFailures();
+    expect(d.retired).toBe(true);
+    const fatal = d.warnings().filter((w) => w.severity === 'fatal');
+    expect(fatal).toHaveLength(1);
+    expect(fatal[0]!.text).toContain('rear left wheel');
+  });
+});

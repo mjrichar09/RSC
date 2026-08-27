@@ -15,7 +15,7 @@ import { SaveStore } from './game/save.js';
 import { NEUTRAL_INPUT } from './sim/input.js';
 import { Driver } from './sim/driver.js';
 import { GhostPlayer, GhostRecorder } from './sim/replay.js';
-import type { ComponentId, FailureId } from './sim/damage.js';
+import { FAILURE_LABEL, type ComponentId } from './sim/damage.js';
 import { Stage } from './sim/stage.js';
 import { TRACES, sampleTrace } from './sim/trace.js';
 import { SimWorld, initPhysics } from './sim/world.js';
@@ -61,6 +61,11 @@ interface HarnessHooks {
   draw: () => void;
   /** Text snapshot for the harness: cheaper to check than a screenshot. */
   status: () => Record<string, unknown>;
+  /**
+   * Drive the loaded stage to the finish with the AI and settle it, exactly as
+   * a completed player run would be. Lets a whole career be exercised headlessly.
+   */
+  finishWithAi: (timeout?: number) => Promise<Record<string, unknown>>;
 }
 
 declare global {
@@ -71,18 +76,6 @@ declare global {
 
 /** Seconds of being stuck before the car is put back on the road. */
 const AUTO_RESCUE_AFTER = 3.5;
-
-/** Why the run ended, in words the player can act on. */
-const FAILURE_REASON: Record<FailureId, string> = {
-  'engine-seized': 'Engine seized',
-  overheated: 'Engine overheated — the radiator was holed',
-  'driveshaft-snapped': 'Driveshaft snapped',
-  'out-of-fuel': 'Out of fuel',
-  'wheel-lost-FL': 'Lost the front left wheel',
-  'wheel-lost-FR': 'Lost the front right wheel',
-  'wheel-lost-RL': 'Lost the rear left wheel',
-  'wheel-lost-RR': 'Lost the rear right wheel',
-};
 
 async function main(): Promise<void> {
   await initPhysics();
@@ -367,7 +360,7 @@ async function main(): Promise<void> {
           updateWheelEffects(particles, skids, world.state().wheels, world.state().velocity, world.dt);
           particles.update(world.dt);
           const failure = [...(world.damage?.failures ?? [])][0];
-          if (failure) race!.retire(FAILURE_REASON[failure]);
+          if (failure) race!.retire(FAILURE_LABEL[failure]);
         }
         damagePanel.report(world.damage!.drainEvents());
       }
@@ -428,11 +421,43 @@ async function main(): Promise<void> {
       drawOnce(1, 1 / 60);
       window.RSC!.rendered = true;
     },
+    async finishWithAi(timeout = 240) {
+      if (!stage || !race) return { error: 'no stage loaded' };
+      const driver = new Driver(stage);
+      for (let i = 0; i < 60; i++) world.step(NEUTRAL_INPUT);
+      world.time = 0;
+
+      let stuck = 0;
+      while (race.phase !== 'finished' && race.phase !== 'retired' && world.time < timeout) {
+        world.step(driver.input(world.state(), world.dt));
+        race.update(world.state(), world.dt);
+        if (race.phase === 'running') recorder.capture(race.time, race.furthest, world.state());
+
+        const failure = [...(world.damage?.failures ?? [])][0];
+        if (failure && race.phase === 'running') race.retire(FAILURE_LABEL[failure]);
+
+        if (race.phase === 'running' && Math.abs(world.state().speed) < 1) {
+          stuck += world.dt;
+          if (stuck > AUTO_RESCUE_AFTER) {
+            world.rescue(race.furthest);
+            stuck = 0;
+          }
+        } else {
+          stuck = 0;
+        }
+      }
+
+      await settleRun(race.phase === 'retired');
+      raceHud.update(race, world.damage);
+      return this.status();
+    },
     status() {
       const d = world.damage;
       return {
         stage: stage?.def.id ?? 'free',
         phase: race?.phase ?? 'n/a',
+        money: career.money,
+        medal: race?.medal ?? null,
         time: race?.time.toFixed(2),
         condition: d ? +(d.condition * 100).toFixed(1) : null,
         bill: d?.repairBill().total ?? null,
@@ -500,7 +525,7 @@ async function main(): Promise<void> {
         damagePanel.update(world.damage);
 
         const failure = [...world.damage.failures][0];
-        if (failure && race.phase === 'running') race.retire(FAILURE_REASON[failure]);
+        if (failure && race.phase === 'running') race.retire(FAILURE_LABEL[failure]);
       }
 
       if (race.phase === 'running') {
