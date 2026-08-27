@@ -325,6 +325,7 @@ html, body {
 
 .race-best {
   font-size: 11px;
+  line-height: 1.3;
   letter-spacing: 0.14em;
   color: var(--dim);
   font-variant-numeric: tabular-nums;
@@ -641,3 +642,17 @@ html, body {
 .warn-row.severe i { background: #ffb27a; }
 .warn-row.caution { color: var(--dim); }
 .warn-row.caution i { background: var(--dim); }
+
+.race-pace {
+  height: 16px;
+  margin-bottom: 2px;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+.race-pace.medal-author { color: #b06bff; }
+.race-pace.medal-gold { color: #f2c14e; }
+.race-pace.medal-silver { color: #c8d0d9; }
+.race-pace.medal-bronze { color: #cd8642; }
+.race-pace.medal-finish { color: var(--dim); }

@@ -34,6 +34,7 @@ export class RaceHud {
   private readonly checkpoints: HTMLElement;
   private readonly panel: HTMLElement;
   private readonly delta: HTMLElement;
+  private readonly pace: HTMLElement;
   private readonly best: HTMLElement;
   private lastSplitCount = -1;
   private lastPhase = '';
@@ -49,6 +50,7 @@ export class RaceHud {
         <div class="race-stage" id="race-stage"></div>
         <div class="race-clock" id="race-clock">0:00.00</div>
         <div class="race-delta" id="race-delta"></div>
+        <div class="race-pace" id="race-pace"></div>
         <div class="race-best" id="race-best"></div>
         <div class="race-progress"><div id="race-progress-fill"></div></div>
         <div class="race-cps" id="race-cps"></div>
@@ -62,6 +64,7 @@ export class RaceHud {
     this.checkpoints = this.root.querySelector('#race-cps')!;
     this.panel = this.root.querySelector('#race-panel')!;
     this.delta = this.root.querySelector('#race-delta')!;
+    this.pace = this.root.querySelector('#race-pace')!;
     this.best = this.root.querySelector('#race-best')!;
   }
 
@@ -143,6 +146,18 @@ export class RaceHud {
 
   update(race: Race, damage: DamageModel | null = null): void {
     this.clock.textContent = formatTime(race.time);
+
+    // What this run is on for, so there is a target from the very first
+    // attempt rather than only once a ghost exists.
+    const projected = race.projectedTime;
+    const medal = race.projectedMedal;
+    if (projected === null || medal === null) {
+      this.pace.textContent = '';
+      this.pace.className = 'race-pace';
+    } else {
+      this.pace.textContent = `on for ${medal.toUpperCase()} · ${formatTime(projected)}`;
+      this.pace.className = `race-pace medal-${medal}`;
+    }
     this.clock.classList.toggle('staged', race.phase === 'staging');
     this.progressFill.style.width = `${(race.progress * 100).toFixed(1)}%`;
 

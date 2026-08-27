@@ -10,7 +10,9 @@
 
 import { describe, expect, it } from 'vitest';
 import { STAGES } from '../src/data/stages/index.js';
-import { medalFor } from '../src/game/race.js';
+import { Race, medalFor } from '../src/game/race.js';
+import { Driver } from '../src/sim/driver.js';
+import { createWorld } from '../src/sim/world.js';
 import { Stage } from '../src/sim/stage.js';
 import { runStage } from '../src/sim/runStage.js';
 
@@ -84,5 +86,39 @@ describe('race rules', () => {
     for (let i = 1; i < result.splits.length; i++) {
       expect(result.splits[i]!).toBeGreaterThan(result.splits[i - 1]!);
     }
+  }, 30_000);
+});
+
+describe('live pace projection', () => {
+  it('says nothing before there is enough of the stage behind you', () => {
+    const race = new Race(stages[0]!);
+    expect(race.projectedTime).toBeNull();
+    expect(race.projectedMedal).toBeNull();
+  });
+
+  it('projects a finish time from partial progress', async () => {
+    const stage = stages[0]!;
+    const result = await runStage(stage, { recordGhost: false });
+    expect(result.finished).toBe(true);
+
+    // Re-run and sample the projection part way round.
+    const race = new Race(stage);
+    const world = await createWorld({ stage });
+    const driver = new Driver(stage);
+    for (let i = 0; i < 60; i++) world.step({ throttle: 0, brake: 0, steer: 0, handbrake: 0 });
+    world.time = 0;
+
+    let midway: number | null = null;
+    while (race.phase !== 'finished' && world.time < 200) {
+      world.step(driver.input(world.state(), world.dt));
+      race.update(world.state(), world.dt);
+      if (midway === null && race.progress > 0.5) midway = race.projectedTime;
+    }
+
+    expect(midway).not.toBeNull();
+    // Crude by design, but it has to be in the right neighbourhood or it is
+    // worse than showing nothing.
+    expect(midway!).toBeGreaterThan(result.time! * 0.6);
+    expect(midway!).toBeLessThan(result.time! * 1.4);
   }, 30_000);
 });

@@ -59,6 +59,28 @@ export class Race {
     return this.nextCheckpoint;
   }
 
+  /**
+   * Finish time this run is currently on for, in seconds.
+   *
+   * Elapsed time scaled by how much of the stage is left. Crude — it assumes
+   * the rest of the stage takes as long per metre as the part already driven —
+   * but it is available from the first attempt, which a ghost is not. A player
+   * with no time set otherwise races with no reference at all.
+   *
+   * Null until enough of the stage is behind you for the estimate to mean
+   * anything; early on it swings wildly and would read as noise.
+   */
+  get projectedTime(): number | null {
+    if (this.phase !== 'running' || this.progress < 0.06) return null;
+    return this.time / this.progress;
+  }
+
+  /** The medal this run is currently on for, or null while it is too early. */
+  get projectedMedal(): Medal | null {
+    const projected = this.projectedTime;
+    return projected === null ? null : medalFor(projected, this.stage.def.medals);
+  }
+
   /** Call once per fixed step, after the sim has advanced. */
   /**
    * End the run without a finish. The clock stops, no medal is awarded, and

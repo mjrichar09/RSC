@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Unit tests plus the headless handling, stage and generator suites. The
+      # whole simulation runs in Node, so this covers the physics, the damage
+      # model, the economy and every stage's completability without a GPU.
+      - name: Test
+        run: npm test
+
+      # A stage that stopped being completable is the failure most likely to be
+      # introduced by a physics change and least likely to be noticed, so it is
+      # checked explicitly rather than left to the test suite alone.
+      - name: Validate stages
+        run: npm run stages
+
+      - name: Build
+        run: npm run build
