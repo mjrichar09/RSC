@@ -50,6 +50,25 @@ export interface VehicleTuning {
   /** 'fwd' | 'rwd' | 'awd' — awd splits torque by `awdRearBias`. */
   drivetrain: 'fwd' | 'rwd' | 'awd';
   awdRearBias: number;
+  /**
+   * Limited-slip differential: N·m of drive torque shifted away from a wheel
+   * per rad/s that it is spinning faster than its partner.
+   *
+   * This biases *torque*, it does not equalise wheel speed. An open diff feeds
+   * the wheel with least grip, so an unloaded inside wheel spins up and
+   * swallows the engine's output; biasing torque to the slower (gripping) wheel
+   * is what actually fires the car out of a corner.
+   */
+  lsdLock: number;
+  /** Ceiling on the LSD's bias, as a fraction of that axle's torque (0..0.5). */
+  lsdBias: number;
+  /** Centre-diff torque bias between the axles on AWD, N·m per rad/s. */
+  centreLock: number;
+  /** Ceiling on the centre diff's bias, as a fraction of total torque. */
+  centreBias: number;
+  /** Engine braking torque at redline with a closed throttle, N·m at the crank. */
+  engineBraking: number;
+
   /** Auto-shift points as a fraction of maxRpm. */
   upshiftAt: number;
   downshiftAt: number;
@@ -101,9 +120,9 @@ export const CAR: VehicleTuning = {
   suspensionReboundDamping: 5200,
   antiRollStiffness: 9000,
 
-  maxSteerAngle: 0.62,
-  steerSpeedFalloff: 0.38,
-  steerSpeedFalloffAt: 42,
+  maxSteerAngle: 0.5,
+  steerSpeedFalloff: 0.3,
+  steerSpeedFalloffAt: 24,
   steerRate: 3.6,
   steerReturnRate: 5.0,
 
@@ -124,6 +143,11 @@ export const CAR: VehicleTuning = {
   drivetrainEfficiency: 0.9,
   drivetrain: 'awd',
   awdRearBias: 0.6,
+  lsdLock: 20,
+  lsdBias: 0.3,
+  centreLock: 18,
+  centreBias: 0.3,
+  engineBraking: 42,
   upshiftAt: 0.93,
   downshiftAt: 0.45,
   shiftTime: 0.12,
@@ -134,14 +158,14 @@ export const CAR: VehicleTuning = {
   handbrakeGripLoss: 0.42,
 
   tireGrip: 1.35,
-  tireGripBalance: 1.02,
-  peakSlipAngle: 0.16,
+  tireGripBalance: 1.12,
+  peakSlipAngle: 0.18,
   peakSlipRatio: 0.14,
   slideGripFloor: 0.74,
 
   dragFactor: 0.42,
   downforceFactor: 0.22,
-  yawDamping: 900,
+  yawDamping: 2200,
 };
 
 export const SIM = {

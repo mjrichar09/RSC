@@ -21,6 +21,8 @@ export class Controls {
   private keySteer = 0;
   /** Fires when the player asks for a restart. */
   onReset: (() => void) | null = null;
+  /** Fires on the tuning-panel toggle key. */
+  onToggleTuning: (() => void) | null = null;
 
   constructor(target: EventTarget = window) {
     target.addEventListener('keydown', (e) => {
@@ -28,6 +30,7 @@ export class Controls {
       if (ev.repeat) return;
       this.held.add(ev.code);
       if (ev.code === 'KeyR' || ev.code === 'Enter') this.onReset?.();
+      if (ev.code === 'KeyT') this.onToggleTuning?.();
       if (ev.code === 'Space' || ev.code.startsWith('Arrow')) ev.preventDefault();
     });
     target.addEventListener('keyup', (e) => this.held.delete((e as KeyboardEvent).code));

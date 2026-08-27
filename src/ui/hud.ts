@@ -31,7 +31,7 @@ export class Hud {
         <div class="drift" id="hud-drift"></div>
       </div>
       <div class="hud-corner hud-bl help">
-        <b>WASD</b> drive · <b>Space</b> handbrake · <b>R</b> reset
+        <b>WASD</b> drive · <b>Space</b> handbrake · <b>R</b> reset · <b>T</b> tuning
       </div>`;
 
     this.speed = root.querySelector('#hud-speed')!;

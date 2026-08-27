@@ -15,6 +15,7 @@ import { IsoCamera } from './render/camera.js';
 import { KEY_LIGHT_OFFSET, addSurfacePatches, createScene } from './render/scene.js';
 import { Controls } from './ui/controls.js';
 import { Hud } from './ui/hud.js';
+import { TuningPanel } from './ui/tuningPanel.js';
 
 /**
  * The screenshot harness drives the car from a scripted trace instead of the
@@ -52,8 +53,18 @@ async function main(): Promise<void> {
   addSurfacePatches(scene, TEST_PATCHES);
 
   let world = new SimWorld(worldOptions);
+
+  // The panel mutates the live tuning object, so changes land on the next
+  // physics step. P1's whole premise is that feel has to be driven, not derived.
+  const tuningPanel = new TuningPanel(
+    document.getElementById('hud') as HTMLElement,
+    world.vehicle.tuning,
+  );
+  controls.onToggleTuning = () => tuningPanel.toggle();
+
   const rebuild = () => {
     world = new SimWorld(worldOptions);
+    tuningPanel.rebind(world.vehicle.tuning);
   };
   controls.onReset = () => {
     world.vehicle.reset({ x: 0, y: 1.2, z: 0 }, 0);
@@ -129,7 +140,9 @@ async function main(): Promise<void> {
     const alpha = world.advance(dt, input);
 
     drawOnce(alpha, dt);
-    hud.update(world.state(), fps);
+    const state = world.state();
+    hud.update(state, fps);
+    tuningPanel.update(state);
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);

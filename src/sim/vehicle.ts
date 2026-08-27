@@ -69,6 +69,8 @@ export interface VehicleState {
   gear: number;
   /** Angle between the car's nose and its direction of travel, radians. */
   driftAngle: number;
+  /** Rotation about the car's up axis, rad/s. Signed: positive turns right. */
+  yawRate: number;
   wheels: WheelState[];
   airborne: boolean;
 }
@@ -84,7 +86,7 @@ export class Vehicle {
 
   private readonly rapier: typeof RAPIER;
   private readonly world: RAPIER.World;
-  private readonly tuning: VehicleTuning;
+  readonly tuning: VehicleTuning;
   private readonly surfaceAt: (point: Vec3) => Surface;
 
   readonly wheels: WheelState[] = [];
@@ -250,15 +252,23 @@ export class Vehicle {
       w.surface = this.surfaceAt(point);
     }
 
-    // Anti-roll bars couple the two wheels on each axle, which is what stops the
-    // car rolling onto its door in a fast corner.
+    // Anti-roll bars couple the two wheels on each axle. The bar resists the
+    // difference in compression, so the *more* compressed (outer) wheel gains
+    // support and the inner one loses it — that couple is what opposes body
+    // roll. Getting this sign backwards amplifies roll instead of resisting it
+    // and lifts the inside wheels clean off the ground in a fast corner.
+    //
+    // It only acts with both wheels on an axle grounded: a real bar needs
+    // something to react against, and applying it against an airborne wheel
+    // removes support from the one wheel still carrying the car.
     for (const [l, r] of [
       [0, 1],
       [2, 3],
     ] as const) {
+      if (!this.wheels[l]!.grounded || !this.wheels[r]!.grounded) continue;
       const diff = (this.wheels[l]!.compression - this.wheels[r]!.compression) * t.antiRollStiffness;
-      if (this.wheels[l]!.grounded) susp[l] = Math.max(0, susp[l]! - diff);
-      if (this.wheels[r]!.grounded) susp[r] = Math.max(0, susp[r]! + diff);
+      susp[l] = Math.max(0, susp[l]! + diff);
+      susp[r] = Math.max(0, susp[r]! - diff);
     }
 
     for (let i = 0; i < 4; i++) {
@@ -277,13 +287,15 @@ export class Vehicle {
       ? 0
       : engineTorque * gearRatio * t.finalDrive * t.drivetrainEfficiency;
 
+    const driveTorques = this.distributeTorque(axleTorque);
+
     // --- Tire pass -----------------------------------------------------------
     for (let i = 0; i < 4; i++) {
       const w = this.wheels[i]!;
       const front = this.isFront(i);
       w.steer = front ? this.steerAngle : 0;
 
-      const driveTorque = axleTorque * this.torqueShare(i);
+      const driveTorque = driveTorques[i]!;
       const brakeInput = input.brake * (front ? t.brakeBias : 1 - t.brakeBias) * 2;
       const brakeTorque =
         t.brakeTorque * clamp(brakeInput, 0, 1) +
@@ -364,6 +376,44 @@ export class Vehicle {
     }
   }
 
+  /**
+   * Split total axle torque across the four wheels through the differentials.
+   *
+   * Each diff shifts torque away from whichever side is spinning faster, capped
+   * at a fraction of what that axle is being given. Because this only ever
+   * redistributes torque that already exists, it cannot inject energy — which
+   * an implementation that forces wheel speeds together can, and does,
+   * violently.
+   */
+  private distributeTorque(axleTorque: number): number[] {
+    const t = this.tuning;
+    const out = [0, 0, 0, 0];
+
+    const split = (a: number, b: number, total: number) => {
+      const diff = this.wheels[a]!.spin - this.wheels[b]!.spin;
+      const cap = Math.abs(total) * t.lsdBias;
+      const transfer = clamp(diff * t.lsdLock, -cap, cap);
+      out[a] = total / 2 - transfer;
+      out[b] = total / 2 + transfer;
+    };
+
+    let frontShare = this.torqueShare(0) + this.torqueShare(1);
+    let rearShare = this.torqueShare(2) + this.torqueShare(3);
+
+    if (t.drivetrain === 'awd') {
+      // Centre diff: same idea one level up, biasing between the axles.
+      const front = (this.wheels[0]!.spin + this.wheels[1]!.spin) / 2;
+      const rear = (this.wheels[2]!.spin + this.wheels[3]!.spin) / 2;
+      const shift = clamp((front - rear) * t.centreLock, -t.centreBias, t.centreBias);
+      frontShare = clamp(frontShare - shift, 0, 1);
+      rearShare = clamp(rearShare + shift, 0, 1);
+    }
+
+    if (frontShare > 0) split(0, 1, axleTorque * frontShare);
+    if (rearShare > 0) split(2, 3, axleTorque * rearShare);
+    return out;
+  }
+
   /** Snapshot for rendering, telemetry and ghost recording. */
   state(): VehicleState {
     const rot = this.body.rotation() as Quat;
@@ -375,6 +425,9 @@ export class Vehicle {
         ? Math.acos(clamp(dot(normalize(planar), normalize(v3(nose.x, 0, nose.z))), -1, 1))
         : 0;
 
+    const angvel = this.body.angvel() as Vec3;
+    const up = rotate(rot, v3(0, 1, 0));
+
     return {
       position: this.body.translation() as Vec3,
       rotation: rot,
@@ -383,6 +436,7 @@ export class Vehicle {
       rpm: this.engineRpm,
       gear: this.gearIndex,
       driftAngle: drift,
+      yawRate: dot(angvel, up),
       wheels: this.wheels,
       airborne: !this.wheels.some((w) => w.grounded),
     };
@@ -410,9 +464,15 @@ export class Vehicle {
     const t = this.tuning;
     const rpm = clamp(this.engineRpm, t.idleRpm, t.maxRpm);
     const peak = sampleCurve(t.torqueCurve, rpm);
-    // A little torque at zero throttle keeps the engine off its idle floor
-    // instead of dragging the car to a stop the moment you lift.
-    return peak * (0.06 + 0.94 * clamp(throttle, 0, 1));
+    const th = clamp(throttle, 0, 1);
+
+    // Engine braking scales with revs and fades out as the throttle opens. It
+    // is what makes lifting mid-corner shift weight forward and tuck the nose
+    // in — the single most useful thing a rally driver does with their right
+    // foot, and the car feels inert without it.
+    const braking = t.engineBraking * (rpm / t.maxRpm) * (1 - th);
+
+    return peak * (0.06 + 0.94 * th) - braking;
   }
 
   private updateGearbox(dt: number, speed: number, input: DriverInput): void {

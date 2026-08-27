@@ -8,7 +8,7 @@
  */
 
 import RAPIER from '@dimforge/rapier3d-compat';
-import { CAR, SIM } from '../data/tuning.js';
+import { CAR, SIM, type VehicleTuning } from '../data/tuning.js';
 import type { DriverInput } from './input.js';
 import { NEUTRAL_INPUT } from './input.js';
 import { type Quat, type Vec3, lerpVec, slerp, v3 } from './math.js';
@@ -38,7 +38,15 @@ export interface WorldOptions {
   /** Rectangular surface patches, tested in order. Replaced by stages in P2. */
   patches?: GroundPatch[];
   spawn?: { position: Vec3; heading?: number };
+  /** Overrides merged over the default car. Drives the sweep tool and the live panel. */
+  tuning?: Partial<VehicleTuning>;
 }
+
+/** Merge overrides over the baseline car setup. */
+export const resolveTuning = (overrides?: Partial<VehicleTuning>): VehicleTuning => ({
+  ...CAR,
+  ...overrides,
+});
 
 export class SimWorld {
   readonly world: RAPIER.World;
@@ -79,7 +87,7 @@ export class SimWorld {
     this.vehicle = new Vehicle(
       RAPIER,
       this.world,
-      CAR,
+      resolveTuning(options.tuning),
       options.spawn ?? { position: v3(0, 1.2, 0), heading: 0 },
       { surfaceAt: (p) => surface(this.surfaceIdAt(p)) },
     );

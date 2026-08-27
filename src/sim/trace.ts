@@ -76,6 +76,25 @@ export const TRACES: Record<string, Trace> = {
     ],
   },
 
+  catch: {
+    name: 'catch',
+    description:
+      'Provoke a slide with the handbrake, then counter-steer and power out. ' +
+      'Tests whether a slide is recoverable — the difference between a car that ' +
+      'is exciting and one that is just punishing.',
+    segments: [
+      seg(4, { throttle: 1 }),
+      seg(0.7, { steer: -0.85, handbrake: 1 }),
+      // Opposite lock plus throttle: the classic catch.
+      seg(1.6, { throttle: 0.75, steer: 0.85 }),
+      seg(1.2, { throttle: 0.9, steer: 0.2 }),
+      seg(1.5, { throttle: 1 }),
+      // Ease off to let it settle. On full power the car sits at a small drift
+      // angle by design, so measuring recovery needs a lift first.
+      seg(1.5, { throttle: 0.45 }),
+    ],
+  },
+
   circle: {
     name: 'circle',
     description: 'Constant-radius cornering — the steady-state grip benchmark.',

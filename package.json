@@ -10,7 +10,8 @@
     "test": "vitest run",
     "telemetry": "tsx tools/headless.ts",
     "shoot": "tsx tools/shoot.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "sweep": "tsx tools/sweep.ts"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.14.0",

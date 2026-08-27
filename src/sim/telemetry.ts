@@ -8,7 +8,15 @@
 
 import { SIM } from '../data/tuning.js';
 import { length } from './math.js';
+import type { VehicleState } from './vehicle.js';
 import type { SimWorld } from './world.js';
+
+/** Mean absolute slip angle of the axle starting at wheel index `i0`, degrees. */
+function axleSlip(s: VehicleState, i0: number): number {
+  const a = Math.abs(s.wheels[i0]!.slipAngle);
+  const b = Math.abs(s.wheels[i0 + 1]!.slipAngle);
+  return (((a + b) / 2) * 180) / Math.PI;
+}
 
 export interface TelemetrySample {
   t: number;
@@ -23,6 +31,17 @@ export interface TelemetrySample {
   drift: number;
   /** Max tire saturation across the four wheels. */
   saturation: number;
+  /** Yaw rate, deg/s. Signed: positive turns right. */
+  yawRate: number;
+  /** Mean front-axle slip angle, degrees. */
+  frontSlip: number;
+  /** Mean rear-axle slip angle, degrees. */
+  rearSlip: number;
+  /**
+   * Instantaneous turn radius in metres (speed / yaw rate), capped at 999 when
+   * travelling straight. The headline number for understeer/oversteer balance.
+   */
+  turnRadius: number;
   wheelsGrounded: number;
 }
 
@@ -62,6 +81,11 @@ export class TelemetryRecorder {
       gear: s.gear,
       drift: (s.driftAngle * 180) / Math.PI,
       saturation: Math.max(...s.wheels.map((w) => w.saturation)),
+      yawRate: (s.yawRate * 180) / Math.PI,
+      frontSlip: axleSlip(s, 0),
+      rearSlip: axleSlip(s, 2),
+      turnRadius:
+        Math.abs(s.yawRate) > 0.02 ? Math.min(Math.abs(s.speed / s.yawRate), 999) : 999,
       wheelsGrounded: s.wheels.filter((w) => w.grounded).length,
     });
   }
@@ -121,7 +145,7 @@ export class TelemetryRecorder {
   }
 
   toCsv(): string {
-    const header = 't,x,y,z,speed,rpm,gear,drift,saturation,grounded';
+    const header = 't,x,y,z,speed,rpm,gear,drift,saturation,yawRate,turnRadius,grounded';
     const rows = this.samples.map((s) =>
       [
         s.t.toFixed(4),
@@ -133,6 +157,8 @@ export class TelemetryRecorder {
         s.gear,
         s.drift.toFixed(2),
         s.saturation.toFixed(3),
+        s.yawRate.toFixed(2),
+        s.turnRadius.toFixed(1),
         s.wheelsGrounded,
       ].join(','),
     );

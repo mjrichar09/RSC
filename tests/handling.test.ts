@@ -44,14 +44,41 @@ describe('straight-line performance', () => {
 
 describe('cornering', () => {
   it('actually turns, and turns toward the steering input', async () => {
-    const { summary } = await runTrace(TRACES.circle!);
-    // The circle trace steers right (+), so the car must end up at +x.
-    expect(summary.finalPosition.x).toBeGreaterThan(10);
+    const { recorder } = await runTrace(TRACES.circle!);
+    // Sample once the car has settled into the corner.
+    const cornering = recorder.samples.filter((s) => s.t > 4);
+    const meanYaw = cornering.reduce((a, s) => a + s.yawRate, 0) / cornering.length;
+    const meanRadius = cornering.reduce((a, s) => a + s.turnRadius, 0) / cornering.length;
+
+    // The circle trace steers right, which is a positive yaw rate. Asserting on
+    // yaw rather than final position keeps this honest now that the car corners
+    // tightly enough to come back around on itself.
+    expect(meanYaw).toBeGreaterThan(5);
+    expect(meanRadius).toBeLessThan(120);
   });
 
   it('rotates the car well past straight during a handbrake turn', async () => {
     const { summary } = await runTrace(TRACES.handbrake!);
     expect(summary.maxDriftDeg).toBeGreaterThan(25);
+  });
+
+  it('lets a provoked slide be caught with opposite lock', async () => {
+    const { summary, recorder } = await runTrace(TRACES.catch!);
+
+    // It has to actually slide, or the test proves nothing.
+    expect(summary.maxDriftDeg).toBeGreaterThan(30);
+
+    // ...and then come back. A car you cannot catch is punishing, not exciting.
+    const settled = recorder.samples.at(-1)!;
+    expect(settled.drift).toBeLessThan(15);
+    expect(Math.abs(settled.speed)).toBeGreaterThan(10);
+  });
+
+  it('does not spin all the way round under a normal handbrake pull', async () => {
+    const { summary } = await runTrace(TRACES.handbrake!);
+    // Past ~150° the car has swapped ends, which is a loss of control rather
+    // than a rally slide.
+    expect(summary.maxDriftDeg).toBeLessThan(150);
   });
 
   it('returns to grip after the slide rather than spinning out', async () => {
@@ -64,6 +91,25 @@ describe('cornering', () => {
 });
 
 describe('surfaces', () => {
+  it('sustains more than 0.9g of lateral grip on tarmac', async () => {
+    const { recorder } = await runTrace(TRACES.circle!);
+    const cornering = recorder.samples.filter((s) => s.t > 4);
+    const peakG = Math.max(
+      ...cornering.map((s) => Math.abs((s.speed * s.yawRate * Math.PI) / 180) / 9.81),
+    );
+    // Guards against the whole class of bug that made the car corner on two
+    // wheels at 0.67g: any regression in suspension, anti-roll or tire load
+    // handling shows up here first.
+    expect(peakG).toBeGreaterThan(0.9);
+  });
+
+  it('keeps all four wheels on the ground through a hard corner', async () => {
+    const { recorder } = await runTrace(TRACES.circle!);
+    for (const s of recorder.samples.filter((x) => x.t > 4)) {
+      expect(s.wheelsGrounded).toBe(4);
+    }
+  });
+
   it('gives less grip and less speed as the surface gets looser', async () => {
     const tarmac = await runTrace(TRACES.launch!, { baseSurface: 'tarmac' });
     const gravel = await runTrace(TRACES.launch!, { baseSurface: 'gravel' });
