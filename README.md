@@ -21,7 +21,8 @@ npm install
 npm run dev        # http://localhost:5173
 ```
 
-**Controls** — `WASD` / arrows to drive, `Space` handbrake, `R` restart,
+**Controls** — `WASD` / arrows to drive (the brake ramps, so it can be
+feathered), `Space` handbrake, `R` restart,
 `Q` rescue, `Esc` for the garage (`1`–`3` picks a stage there), `T` for the live
 tuning panel, `M` to mute.
 `?free` opens the flat proving ground instead of a stage. Gamepads work too (triggers for throttle/brake,
@@ -58,6 +59,10 @@ balance is measured rather than guessed. Both it and `telemetry` take
 `--set=key=value,...` to try a setup without editing a file.
 
 ```bash
+npm run crash -- --drop=1,3,5 --pitch=0.35 --roll=0.45   # what a landing costs
+npm run crash -- --deer=60,90,120                       # what a deer strike costs
+npm run crash -- --balance=45,66                        # can it sit on two wheels?
+npm run telemetry -- --trace=stops --damage             # brake temperature
 npm run sweep -- --steer=0.3,0.5,0.7,1.0 --surface=gravel
 npm run sweep -- --set=lsdBias=0.2,yawDamping=2600
 npm run telemetry -- --trace=launch,slalom --surface=gravel --csv
@@ -69,10 +74,12 @@ npm run shoot -- --cells=trace:circle@8 --grid=1x1 --size=900x560 --out=inspect
 ## Performance
 
 The simulation is not the constraint. Measured headless with `npm run perf`,
-one fixed step on a stage with damage enabled costs about 100 µs, so the 120
-steps that make a second of game time cost roughly **12 ms of CPU per second** —
-about 1% of one core, with two orders of magnitude of headroom. Building a
-stage, which happens on load, takes about 3 ms.
+one fixed step on a stage with damage, wildlife and weather enabled costs about
+73 µs, so the 120 steps that make a second of game time cost roughly **9 ms of
+CPU per second** — under 1% of one core, with two orders of magnitude of
+headroom. A full debris budget — twelve loose bodies rolling around the
+corridor — takes it to 80 µs, which is what the budget exists to bound.
+Building a stage, which happens on load, takes about 3 ms.
 
 Rendering will dominate on any real machine, and a flat-shaded low-poly scene
 gives a modern GPU very little to do. The only figures measured under an actual
@@ -125,6 +132,110 @@ Stages are lined with trees, rocks and bales because without them the damage
 model has nothing to act on: the embankments are shallow ramps, so a car that
 runs wide climbs one and slides back with far too little force to hurt anything.
 The hazards are what make running wide a decision rather than an inconvenience.
+
+### Conditions
+
+A stage can be raced under different **variants** — clear daylight, dusk, night,
+rain, fog, night snow — and each one is its own race with its own record, ghost,
+medals, entry fee and payout. Weather changes grip as well as visibility, and it
+does so per surface rather than as a flat multiplier: rain costs tarmac far more
+than gravel, which was loose to begin with, and rain on ice is the worst
+combination in the game.
+
+Night is where the `lights` component finally earns its repair cost. Two
+spotlights are parented to the car with their intensity, cone and range scaled
+by that component's health; below half, one side dies and the beam goes
+lopsided. On a night variant that is the difference between seeing the next
+corner and guessing at it.
+
+The AI driver reads the spline, so **visibility does not slow it down** — its
+lap on a night variant is optimistic, and those variants' medal times carry a
+stated visibility allowance on top of the measured grip effect. That factor is
+an estimate, not a measurement, and it is the first thing to re-tune once a
+human has driven a night stage properly.
+
+### Brakes
+
+Brake discs have a temperature in degrees, not in arbitrary units: friction
+power is brake torque times wheel speed, the disc is 1 500 J/K — about 3.3 kg of
+steel, a small gravel disc — and it sheds heat by convection with airflow. A
+hard stop from 140 km/h puts roughly 110 K into each front disc, and the time
+constant is about 80 seconds, so heat accumulates across a stage instead of
+vanishing between corners. Ambient air comes from the conditions, so a winter
+night genuinely cools the brakes better than a hot afternoon.
+
+Past about 520 °C they fade, and a damaged brake starts fading at 356 °C. It is
+a real loss, not a colour: a stop from 140 km/h takes 3.13 s cold and 6.19 s at
+700 °C — 1.00 g against 0.51 g. The disc renders as a ring on the outboard wheel
+face, tinting bronze from 200 °C as steel actually does and glowing from 500 °C,
+and the damage panel carries a BRAKE gauge so fade has a visible cause.
+
+Modelling the heat exposed something bigger. With a single slide floor in the
+tyre model, a locked tyre kept so much grip that stamping the pedal stopped the
+car exactly as fast as modulating it — threshold braking was worth nothing, and
+locked wheels do no work at the caliper, so the discs never warmed. A separate
+`lockedGripFloor` on the braking side of the curve, plus less brake torque, now
+gives 1.00 g modulated against 0.84 g locked. The keyboard brake ramps like the
+steering for the same reason: a digital pedal locks on every stop and would put
+that 16% out of reach without a gamepad.
+
+### Consequences
+
+Parts come off. **Attachment** is tracked separately from component health,
+because a bumper can be crumpled and still bolted on, or barely marked and
+hanging by one mount. Impacts work the mounts loose through the same call the
+damage model gets, airflow keeps working on whatever is already loose, and a
+detached part becomes a real Rapier body carrying the car's velocity — your own
+bumper is now an obstacle on the road. Loose bodies are capped at twelve and
+cleared once they are well behind.
+
+The bumper is the model case and it is two-stage: it drags, scrapes and throws
+sparks for five to fifteen seconds, and then a seeded roll weighted by speed and
+looseness picks the moment it lets go. Every other part gets a telegraph too —
+sitting proud and skewed once it is working loose.
+
+Landings hurt when they deserve to. Bottoming the suspension puts the car's
+remaining vertical momentum through the bump stop, split across however many
+corners are sharing the landing, and into the same impact pipeline. Calibrated
+in metres, which is a unit you can picture: a flat landing from 3 m costs
+nothing, from 5 m it is a scratch, and nose-down and rolled so one corner takes
+the lot, 3 m costs 151 and 8 m costs 644 with a bent suspension.
+
+**Two wheels: measured, and the answer is no.** `npm run crash -- --balance=`
+drops the car at a roll angle and reports how long it holds two wheels. It never
+holds them — from 45°, 66°, even 110° it snaps back inside half a second. The
+artificial stabilisers are innocent (the anti-roll bar and yaw damping are
+already gated on being grounded), and fading the suspension out with roll angle
+changed nothing: the righting moment comes from the chassis collider's own
+contact resolution. Making it possible means reworking that, which is a larger
+change than it is worth today.
+
+### Wildlife and the random tier
+
+Everything that can surprise you obeys one rule:
+
+> **Randomness decides *when* and *how spectacular*. Damage state decides
+> *whether it can happen at all*. Nothing that can end a run happens without a
+> prior visible cause.**
+
+Deer are the telegraphed half. They are placed from the stage id, so they stand
+in the same places on every load and a stage can be learned. They graze head-down
+and side-on until the car is inside 60 m, then lift their head and turn to face
+the road — the only warning there is — and then, on a roll weighted by closing
+speed, about a third of them bolt across it. A strike goes through the ordinary
+damage pipeline with a concentration factor, because a deer changes the car's
+momentum by almost nothing and still destroys the front of it. At 35 km/h it is
+a fright; at 90 it holes the radiator; at 120 the lights are gone. Never an
+instant retirement — a test pins that at 200 km/h.
+
+The random half is strictly bounded: gusts on exposed stages scaled by biome and
+weather, at a tenth of a g at the very most, and stones off loose surfaces that
+mark paint and lights and reach nothing that decides whether the car finishes.
+Nothing blows in a forest; nothing happens to a parked car.
+
+Both are gated on the damage model, so they are on in a race and off in stage
+validation — a stage must never be judged unshippable because a deer stepped in
+front of an AI that cannot see one.
 
 ### Crests
 
@@ -289,3 +400,20 @@ buried in an embankment belonging to a section it has not reached yet.
   and engine condition.
 - **P7 — Scale & ship** ✅ seeded stage generation across five biomes with
   AI-driven validation, and a Tauri desktop shell.
+- **P8 — Conditions** ✅ time of day and weather as per-stage variants, each with
+  its own record, ghost, medals and payout; grip and visibility both affected;
+  headlights that scale with the `lights` component, which until now had a
+  repair cost and no gameplay effect whatsoever.
+- **P9 — Brakes** ✅ per-corner disc temperature in real units, fade you can
+  measure, glowing discs — and the tyre-model fix that made threshold braking
+  worth doing at all.
+- **P10 — Consequences** ✅ parts that drag and then leave as collidable debris,
+  landings that cost a suspension when they land badly, and an honest answer on
+  two-wheel balance.
+- **P11 — Wildlife** ✅ deer that are always seen before they move, plus a
+  bounded random tier of gusts and stone strikes.
+
+Multiplayer — four players with car-to-car contact — is scoped but deliberately
+not built. The simulation being headless and Node-runnable means an authoritative
+server can run literally the same code, which is the expensive part most projects
+have to retrofit; the netcode is the project.
