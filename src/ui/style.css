@@ -4,6 +4,37 @@
   --accent: #f2c14e;
   --hot: #e8552f;
   --panel: rgba(12, 15, 20, 0.62);
+
+  /*
+   * Type, as a system rather than as a font.
+   *
+   * Three roles, and they are roles rather than faces on purpose: which
+   * typeface this game ends up wearing is a decision for the polish plan, and
+   * when it is made it changes here and nowhere else.
+   *
+   *   --font-display  headings, stage names, menu titles. Wants character.
+   *   --font-figure   numbers you read at a glance under load — the clock, the
+   *                   speed, split deltas. Wants tabular figures above all: a
+   *                   clock whose digits change width jitters as it counts, and
+   *                   a jittering clock is unreadable at 120 km/h.
+   *   --font-ui       everything else. Wants to disappear.
+   *
+   * All three are local stacks. A webfont would be one more thing to load
+   * before the first frame, on a page whose whole point is that it opens.
+   */
+  --font-display: "Avenir Next Condensed", "HelveticaNeue-CondensedBold",
+    "Roboto Condensed", "Liberation Sans Narrow", system-ui, sans-serif;
+  --font-figure: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  --font-ui: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+
+  /* One scale, so nothing in the game invents its own size. */
+  --step-0: 11px;
+  --step-1: 13px;
+  --step-2: 16px;
+  --step-3: 22px;
+  --step-4: 30px;
+  --track-wide: 0.22em;
+  --track-ui: 0.08em;
 }
 
 * { box-sizing: border-box; }
@@ -14,7 +45,7 @@ html, body {
   overflow: hidden;
   background: #0c0f14;
   color: var(--ink);
-  font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  font-family: var(--font-ui);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -54,6 +85,8 @@ html, body {
 .cluster { display: flex; align-items: baseline; justify-content: flex-end; gap: 14px; }
 
 .speed {
+  font-family: var(--font-figure);
+  font-variant-numeric: tabular-nums;
   font-size: 60px;
   font-weight: 700;
   line-height: 0.9;
@@ -247,6 +280,7 @@ html, body {
 }
 
 .race-clock {
+  font-family: var(--font-figure);
   font-size: 40px;
   font-weight: 700;
   line-height: 1;
@@ -492,13 +526,23 @@ html, body {
   padding-bottom: 14px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.12);
 }
-.garage-title { font-size: 22px; font-weight: 700; letter-spacing: 0.24em; }
+.garage-title {
+  font-family: var(--font-display);
+  font-size: var(--step-3);
+  font-weight: 700;
+  letter-spacing: var(--track-wide);
+}
 .garage-sub { font-size: 12px; color: var(--dim); margin-top: 4px; letter-spacing: 0.06em; }
 .garage-sub .bad { color: var(--hot); font-weight: 700; }
 
 .garage-money { text-align: right; }
 .garage-money span { display: block; font-size: 10px; letter-spacing: 0.2em; color: var(--dim); }
-.garage-money b { font-size: 30px; font-variant-numeric: tabular-nums; color: var(--accent); }
+.garage-money b {
+  font-family: var(--font-figure);
+  font-size: var(--step-4);
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
 
 .garage-cols {
   display: grid;
@@ -556,7 +600,7 @@ html, body {
   color: var(--dim);
   text-align: center;
 }
-.stage-name { font-size: 14px; font-weight: 700; letter-spacing: 0.04em; }
+.stage-name { font-family: var(--font-display); font-size: 14px; font-weight: 700; letter-spacing: 0.04em; }
 .stage-meta { font-size: 11px; color: var(--dim); margin-top: 2px; font-variant-numeric: tabular-nums; }
 .stage-pay { text-align: right; font-size: 10.5px; font-variant-numeric: tabular-nums; }
 .stage-pay b { font-size: 13px; }
@@ -815,7 +859,12 @@ html, body {
   padding-bottom: 14px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.12);
 }
-.lobby-title { font-size: 22px; font-weight: 700; letter-spacing: 0.24em; }
+.lobby-title {
+  font-family: var(--font-display);
+  font-size: var(--step-3);
+  font-weight: 700;
+  letter-spacing: var(--track-wide);
+}
 .lobby-sub { font-size: 12px; color: var(--dim); margin-top: 4px; letter-spacing: 0.06em; }
 
 .lobby h3 {
@@ -984,8 +1033,16 @@ html, body {
   color: var(--accent);
   font-weight: 700;
 }
-.menu-title { font-size: 40px; letter-spacing: 0.18em; margin: 6px 0 0; font-weight: 700; }
-.menu-title.small { font-size: 24px; letter-spacing: 0.24em; }
+.menu-title {
+  font-family: var(--font-display);
+  /* Scales with the window: a fixed size that fits a desktop wraps the title
+     onto two lines on a laptop, and a wrapped title reads as a mistake. */
+  font-size: clamp(26px, 4.2vw, 46px);
+  letter-spacing: 0.16em;
+  margin: 6px 0 0;
+  font-weight: 700;
+}
+.menu-title.small { font-size: var(--step-4); letter-spacing: var(--track-wide); }
 .menu-strap { color: var(--dim); font-size: 13px; line-height: 1.6; margin: 10px 0 30px; }
 
 .menu-choices { display: grid; gap: 12px; }
@@ -1004,7 +1061,12 @@ html, body {
   transition: background 120ms, border-color 120ms;
 }
 .menu-choice:hover { background: rgba(242, 193, 78, 0.14); border-left-color: var(--accent); }
-.menu-choice b { display: block; font-size: 19px; letter-spacing: 0.16em; }
+.menu-choice b {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 21px;
+  letter-spacing: 0.14em;
+}
 .menu-choice span { display: block; margin-top: 6px; font-size: 12px; line-height: 1.55; color: var(--dim); }
 .menu-choice em {
   display: block;
