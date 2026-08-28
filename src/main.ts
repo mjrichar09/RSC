@@ -54,6 +54,7 @@ import * as THREE from 'three';
 import { rotate } from './sim/math.js';
 import { Vision } from './sim/vision.js';
 import { VisionPass } from './render/vision.js';
+import { gradeFor } from './render/grade.js';
 import { TuningPanel } from './ui/tuningPanel.js';
 
 /**
@@ -252,6 +253,10 @@ async function main(): Promise<void> {
     // headlights matter — which is what finally gives the `lights` component
     // something to do.
     applyConditions(variant.conditions);
+    // The colour of the light. Set with the conditions, not with the weather
+    // effects: turning the windscreen effect off is asking not to be blinded,
+    // not asking for dusk to look like midday.
+    visionPass.grade = gradeFor(variant.conditions);
     precipitation.setWeather(variant.conditions.weather);
     carView.setHeadlightWeight(visibility(variant.conditions).headlightWeight);
 

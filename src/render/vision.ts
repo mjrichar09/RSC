@@ -20,6 +20,7 @@
 
 import * as THREE from 'three';
 import type { VisionState } from '../sim/vision.js';
+import { NEUTRAL_GRADE, gradeStrength, type Grade } from './grade.js';
 
 const VERTEX = /* glsl */ `
   varying vec2 vUv;
@@ -60,6 +61,12 @@ const COMPOSITE = /* glsl */ `
   uniform float uTime;
   /** How dark the darkest part of the world is allowed to get. */
   uniform float uFloor;
+  // The grade: the colour of the light, and what it does to shadows and colour.
+  uniform vec3 uGain;
+  uniform vec3 uLift;
+  uniform float uSaturation;
+  uniform float uContrast;
+  uniform float uVignette;
   varying vec2 vUv;
 
   // Cheap value noise: enough for droplets and splatter, and no texture to load.
@@ -162,6 +169,25 @@ const COMPOSITE = /* glsl */ `
     colour.rgb = mix(colour.rgb, colour.rgb * uFloor, dark * (1.0 - onCar));
     colour.rgb = mix(colour.rgb, tint * (0.16 + 0.30 * (1.0 - uDarkness)), muck * 0.6);
 
+    // The grade, last, on the finished picture — the light has to colour the
+    // weather on the windscreen too, not just the world behind it.
+    //
+    // Lift then gain then contrast then saturation, which is the order a
+    // colourist works in and the order that keeps each control doing one thing:
+    // lift moves the black point, gain colours the light, contrast pivots about
+    // the midpoint, saturation pulls toward luma last so it cannot undo the
+    // colour the light just added.
+    colour.rgb = colour.rgb * uGain + uLift;
+    colour.rgb = (colour.rgb - 0.5) * uContrast + 0.5;
+    float luma = dot(colour.rgb, vec3(0.2126, 0.7152, 0.0722));
+    colour.rgb = mix(vec3(luma), colour.rgb, uSaturation);
+
+    // A vignette, which is what makes a grade read as light rather than as a
+    // filter: the corners of a frame are always darker than the middle.
+    vec2 fromCentre = (vUv - 0.5) * vec2(uAspect, 1.0);
+    colour.rgb *= 1.0 - uVignette * smoothstep(0.35, 0.95, length(fromCentre));
+    colour.rgb = max(colour.rgb, 0.0);
+
     // Back to sRGB by hand. Rendering into a target skips the conversion three
     // does on its way to the canvas, and a ShaderMaterial gets no colour-space
     // epilogue of its own — so without this the whole game is displayed as its
@@ -228,6 +254,11 @@ export class VisionPass {
         uWiperBack: { value: 0 },
         uTime: { value: 0 },
         uFloor: { value: 0.22 },
+        uGain: { value: new THREE.Vector3(1, 1, 1) },
+        uLift: { value: new THREE.Vector3(0, 0, 0) },
+        uSaturation: { value: 1 },
+        uContrast: { value: 1 },
+        uVignette: { value: 0 },
       },
       depthTest: false,
       depthWrite: false,
@@ -246,9 +277,23 @@ export class VisionPass {
     this.compositeMaterial.uniforms.uAspect!.value = width / Math.max(height, 1);
   }
 
-  /** True when the effect would change nothing, so the pass can be skipped. */
-  idle(state: VisionState): boolean {
+  /**
+   * The colour of the light, applied to every frame this pass draws.
+   *
+   * Set once when a stage loads. It is separate from the windscreen effect and
+   * from its strength setting: a player who turns the windscreen off is asking
+   * not to be blinded, not asking for dusk to look like midday.
+   */
+  grade: Grade = NEUTRAL_GRADE;
+
+  /** True when the windscreen effect itself would change nothing. */
+  private clearScreen(state: VisionState): boolean {
     return this.strength <= 0 || (state.darkness < 0.02 && state.occlusion < 0.02);
+  }
+
+  /** True when the whole pass would change nothing, so it can be skipped. */
+  idle(state: VisionState): boolean {
+    return this.clearScreen(state) && gradeStrength(this.grade) < 0.02;
   }
 
   /**
@@ -275,22 +320,31 @@ export class VisionPass {
     this.renderer.clear();
     this.renderer.render(scene, camera);
 
-    // Two-tap separable blur at half size.
-    this.quad.material = this.blurMaterial;
-    const uniforms = this.blurMaterial.uniforms;
-    uniforms.uScene!.value = this.sceneTarget.texture;
-    (uniforms.uDirection!.value as THREE.Vector2).set(1 / this.blurA.width, 0);
-    this.renderer.setRenderTarget(this.blurA);
-    this.renderer.render(this.quadScene, this.quadCamera);
+    // The blur is only wanted when something is actually being hidden. On a
+    // clear afternoon the pass still runs, for the grade, and two half-res
+    // blur passes for a texture nothing samples would be a waste of the only
+    // per-frame budget this renderer has.
+    const blurred = !this.clearScreen(state);
+    if (blurred) {
+      // Two-tap separable blur at half size.
+      this.quad.material = this.blurMaterial;
+      const uniforms = this.blurMaterial.uniforms;
+      uniforms.uScene!.value = this.sceneTarget.texture;
+      (uniforms.uDirection!.value as THREE.Vector2).set(1 / this.blurA.width, 0);
+      this.renderer.setRenderTarget(this.blurA);
+      this.renderer.render(this.quadScene, this.quadCamera);
 
-    uniforms.uScene!.value = this.blurA.texture;
-    (uniforms.uDirection!.value as THREE.Vector2).set(0, 1 / this.blurA.height);
-    this.renderer.setRenderTarget(this.blurB);
-    this.renderer.render(this.quadScene, this.quadCamera);
+      uniforms.uScene!.value = this.blurA.texture;
+      (uniforms.uDirection!.value as THREE.Vector2).set(0, 1 / this.blurA.height);
+      this.renderer.setRenderTarget(this.blurB);
+      this.renderer.render(this.quadScene, this.quadCamera);
+    }
 
     const c = this.compositeMaterial.uniforms;
     c.uScene!.value = this.sceneTarget.texture;
-    c.uBlur!.value = this.blurB.texture;
+    // With no blur pass run, the "soft" texture is the sharp one: every mix
+    // toward it becomes a no-op rather than a sample of a stale frame.
+    c.uBlur!.value = blurred ? this.blurB.texture : this.sceneTarget.texture;
     (c.uOrigin!.value as THREE.Vector2).set(origin.x, origin.y);
     (c.uForward!.value as THREE.Vector2).set(forward.x, forward.y);
     c.uDarkness!.value = state.darkness * this.strength;
@@ -300,6 +354,13 @@ export class VisionPass {
     c.uKind!.value = state.kind === 'mud' ? 2 : state.kind === 'snow' ? 1 : 0;
     c.uWiper!.value = state.wiper ?? -1;
     c.uWiperBack!.value = state.wiperReturning ? 1 : 0;
+
+    const grade = this.grade;
+    (c.uGain!.value as THREE.Vector3).set(grade.gain[0], grade.gain[1], grade.gain[2]);
+    (c.uLift!.value as THREE.Vector3).set(grade.lift[0], grade.lift[1], grade.lift[2]);
+    c.uSaturation!.value = grade.saturation;
+    c.uContrast!.value = grade.contrast;
+    c.uVignette!.value = grade.vignette;
     c.uTime!.value = time;
     // At full strength the world outside the beams keeps about a twelfth of
     // its light; at low strength it barely dims at all. This used to bottom
