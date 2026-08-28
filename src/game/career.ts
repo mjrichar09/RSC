@@ -87,6 +87,10 @@ export class Career {
     for (const [id, health] of Object.entries(this.profile.carHealth)) {
       if (typeof health === 'number') model.health.set(id as ComponentId, health);
     }
+    // The shape of the damage as well as its price: a car that arrives at the
+    // start line with a folded wing should still have the fold.
+    model.dents.push(...this.profile.carDents.map((dent) => ({ ...dent, at: { ...dent.at } })));
+    model.dentVersion++;
     // Health is what persists; the failures it implies have to be re-derived,
     // or a car with a destroyed engine comes back looking perfectly driveable.
     model.refreshFailures();
@@ -159,6 +163,7 @@ export class Career {
     // Carry the car's condition forward, including any failed components.
     const carHealth: Partial<Record<ComponentId, number>> = {};
     for (const c of COMPONENTS) carHealth[c.id] = outcome.damage.get(c.id);
+    const carDents = outcome.damage.dents.map((dent) => ({ ...dent, at: { ...dent.at } }));
 
     let earned = 0;
     let floored = false;
@@ -185,6 +190,7 @@ export class Career {
     await this.save.update((p) => {
       p.money += earned;
       p.carHealth = carHealth;
+      p.carDents = carDents;
       p.totals.earned += earned;
       if (outcome.retired) p.totals.retirements += 1;
     });
@@ -209,6 +215,9 @@ export class Career {
     await this.save.update((p) => {
       p.money -= bill.total;
       p.carHealth = {};
+      // A full repair straightens the panels too. Anything less leaves them:
+      // paying to fix the radiator does not take the dents out of the wing.
+      p.carDents = [];
       p.totals.spentOnRepairs += bill.total;
     });
     return bill.total;

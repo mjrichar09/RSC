@@ -158,6 +158,31 @@ export const FAILURE_LABEL: Record<FailureId, string> = {
   'wheel-lost-RR': 'Lost the rear right wheel',
 };
 
+/**
+ * A dent in the bodywork: where the car was hit, in its own frame, and how hard.
+ *
+ * Component health says *what* is broken and prices it. This says *where the
+ * metal went*, which is a different question and the one the renderer needs: a
+ * panel scaled uniformly smaller reads as a smaller panel, and a panel with its
+ * vertices pushed in around the point of contact reads as crumpled.
+ *
+ * Kept in the simulation rather than the renderer because it is derived from
+ * the same impacts the damage is, it has to survive a save and be identical in
+ * a headless run, and because a car in a network race must crumple the same way
+ * on every screen showing it.
+ */
+export interface Dent {
+  /** Where it landed, car-local metres. */
+  at: Vec3;
+  /** How deep, 0..1. */
+  depth: number;
+  /** Radius of the fold, metres. Bigger hits spread wider. */
+  reach: number;
+}
+
+/** How many dents a car remembers. Beyond this the shallowest is merged away. */
+const MAX_DENTS = 10;
+
 export interface DamageEvent {
   component: ComponentId;
   label: string;
@@ -308,6 +333,16 @@ export class DamageModel {
 
   /** Coolant temperature, 0 = cold, 1 = boiling. */
   temperature = 0;
+  /** Where the car has been hit, in its own frame. Read by the renderer. */
+  readonly dents: Dent[] = [];
+  /**
+   * Bumped whenever the dents change.
+   *
+   * Rebuilding a deformed mesh costs real time, and the dents change a handful
+   * of times in a race and not at all in between, so the renderer watches this
+   * rather than reshaping the car sixty times a second.
+   */
+  dentVersion = 0;
   /** Brake disc temperature per corner, °C. */
   readonly brakeTemp: [number, number, number, number] = [0, 0, 0, 0];
   /** Ambient air temperature, °C. Set from the stage's conditions. */
@@ -391,6 +426,7 @@ export class DamageModel {
    */
   applyImpact(localPoint: Vec3, impulse: number): void {
     this.peakImpulse = Math.max(this.peakImpulse, impulse);
+    this.dent(localPoint, impulse);
     for (const def of COMPONENTS) {
       const distance = length(sub(def.at, localPoint));
       if (distance > def.reach) continue;
@@ -411,6 +447,42 @@ export class DamageModel {
 
       if (after <= 0) this.registerFailure(def.id);
     }
+  }
+
+  /**
+   * Record where the metal went.
+   *
+   * Thresholded well below the cheapest component, because a scrape that costs
+   * nothing to repair still leaves a mark, and a car that only shows damage
+   * once it is expensive looks indestructible right up until it looks wrecked.
+   *
+   * Nearby dents merge rather than stacking: a corner taken repeatedly into the
+   * same bank should deepen one fold, not accumulate ten of them.
+   */
+  private dent(at: Vec3, impulse: number): void {
+    const depth = clamp((impulse - 1200) / 26_000, 0, 1);
+    if (depth <= 0.01) return;
+    const reach = 0.5 + depth * 0.9;
+
+    for (const existing of this.dents) {
+      if (length(sub(existing.at, at)) > 0.45) continue;
+      // Deepen, and let the fold spread, but never past the width of the car.
+      existing.depth = clamp(existing.depth + depth * 0.7, 0, 1);
+      existing.reach = Math.min(Math.max(existing.reach, reach) + depth * 0.15, 1.7);
+      this.dentVersion++;
+      return;
+    }
+
+    this.dents.push({ at: { ...at }, depth, reach });
+    if (this.dents.length > MAX_DENTS) {
+      // Drop the shallowest, which is the one nobody can see anyway.
+      let shallowest = 0;
+      for (let i = 1; i < this.dents.length; i++) {
+        if (this.dents[i]!.depth < this.dents[shallowest]!.depth) shallowest = i;
+      }
+      this.dents.splice(shallowest, 1);
+    }
+    this.dentVersion++;
   }
 
   /**
@@ -747,5 +819,7 @@ export class DamageModel {
     for (let i = 0; i < 4; i++) this.brakeTemp[i] = this.ambientC;
     this.fuel = this.fuelCapacity;
     this.peakImpulse = 0;
+    this.dents.length = 0;
+    this.dentVersion++;
   }
 }

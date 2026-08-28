@@ -126,6 +126,62 @@ describe('impacts', () => {
   });
 });
 
+describe('dents', () => {
+  it('remembers where the car was hit, not just what it cost', () => {
+    // Component health prices the damage; this is what the car looks like.
+    const d = new DamageModel();
+    d.applyImpact(v3(0, 0, 1.9), 18_000);
+    expect(d.dents).toHaveLength(1);
+    expect(d.dents[0]!.at.z).toBeCloseTo(1.9, 5);
+    expect(d.dents[0]!.depth).toBeGreaterThan(0.5);
+  });
+
+  it('marks a scrape that costs nothing to repair', () => {
+    // A car that only shows damage once it is expensive looks indestructible
+    // right up until it looks wrecked.
+    const d = new DamageModel();
+    d.applyImpact(v3(0.84, 0, 0), 2600);
+    expect(d.repairBill().total).toBe(0);
+    expect(d.dents.length).toBeGreaterThan(0);
+  });
+
+  it('deepens one fold rather than stacking ten', () => {
+    const d = new DamageModel();
+    for (let i = 0; i < 6; i++) d.applyImpact(v3(0, 0, 1.9), 9000);
+    expect(d.dents).toHaveLength(1);
+    expect(d.dents[0]!.depth).toBeGreaterThan(0.5);
+    // And it spreads, but never past the width of the car.
+    expect(d.dents[0]!.reach).toBeLessThan(1.8);
+  });
+
+  it('keeps the deepest when the car runs out of room to remember', () => {
+    const d = new DamageModel();
+    // Twenty separate places, alternating heavy and light.
+    for (let i = 0; i < 20; i++) {
+      d.applyImpact(v3(-0.8 + (i % 5) * 0.4, -0.4 + (i % 3) * 0.4, -1.9 + i * 0.2), i % 2 ? 3000 : 24_000);
+    }
+    expect(d.dents.length).toBeLessThanOrEqual(10);
+    expect(Math.max(...d.dents.map((x) => x.depth))).toBeGreaterThan(0.5);
+  });
+
+  it('tells the renderer when to reshape, and only then', () => {
+    // Rebuilding fifteen deformed meshes is not a thing to do every frame.
+    const d = new DamageModel();
+    const before = d.dentVersion;
+    d.applyImpact(v3(0, 0, 1.9), 400);
+    expect(d.dentVersion).toBe(before);
+    d.applyImpact(v3(0, 0, 1.9), 18_000);
+    expect(d.dentVersion).toBeGreaterThan(before);
+  });
+
+  it('straightens out on a reset', () => {
+    const d = new DamageModel();
+    d.applyImpact(v3(0, 0, 1.9), 18_000);
+    d.reset();
+    expect(d.dents).toHaveLength(0);
+  });
+});
+
 describe('handling effects', () => {
   it('leaves an undamaged car completely unaffected', () => {
     const fx = new DamageModel({ random: () => 1 }).effects();

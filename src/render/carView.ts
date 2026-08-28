@@ -42,6 +42,18 @@ const flat = (color: number, roughness = 0.6, ghost = false) =>
       : {}),
   });
 
+/**
+ * Deterministic value noise from a position, 0..1.
+ *
+ * Keyed off the vertex rather than drawn from a stream, so the same car
+ * crumples identically on every machine rendering it — which matters the moment
+ * two people are looking at the same car in a network race.
+ */
+function hash3(x: number, y: number, z: number): number {
+  const n = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453;
+  return n - Math.floor(n);
+}
+
 /** A crazed windscreen: milky, not shattered — this car still has to be driven. */
 const WINDSCREEN_CRAZED = new THREE.Color(0xd8dee3);
 
@@ -60,6 +72,16 @@ export class CarView {
 
   private readonly ghost: boolean;
 
+  /**
+   * Undeformed vertex positions of everything that can crumple.
+   *
+   * Deformation is applied from these each time rather than accumulated onto
+   * the live geometry: a car that folded a little further on every frame would
+   * fold itself flat in about ten seconds.
+   */
+  private readonly restGeometry = new Map<THREE.Mesh, Float32Array>();
+  /** Dent set the current geometry was built from. */
+  private dentVersion = -1;
   /** Undamaged pose of each deformable part, to deform away from. */
   private readonly restPose = new Map<THREE.Mesh, { position: THREE.Vector3; scale: THREE.Vector3; color: THREE.Color }>();
   private nose!: THREE.Mesh;
@@ -83,7 +105,13 @@ export class CarView {
     const bodyColor = options.body ?? PALETTE.carBody;
     this.ghost = isGhost;
 
-    const body = new THREE.Mesh(new THREE.BoxGeometry(h.x * 2, h.y * 1.3, h.z * 2), flat(bodyColor, 0.6, isGhost));
+    // Segmented, not because the shape needs it but because a box with eight
+    // corners cannot be dented: crumple is vertices moving, and a face with no
+    // vertices in the middle of it can only ever be scaled.
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(h.x * 2, h.y * 1.3, h.z * 2, 5, 3, 7),
+      flat(bodyColor, 0.6, isGhost),
+    );
     body.position.y = -0.05;
     body.castShadow = !isGhost;
     this.chassis.add(body);
@@ -91,7 +119,7 @@ export class CarView {
     // Cabin, set back and narrowed — this is what makes the direction of travel
     // readable at a glance from a fixed isometric angle.
     const cabin = new THREE.Mesh(
-      new THREE.BoxGeometry(h.x * 1.62, h.y * 1.0, h.z * 0.92),
+      new THREE.BoxGeometry(h.x * 1.62, h.y * 1.0, h.z * 0.92, 4, 3, 4),
       flat(PALETTE.carCabin, 0.4, isGhost),
     );
     cabin.position.set(0, h.y * 1.05, -0.16);
@@ -102,7 +130,7 @@ export class CarView {
     // front" cue, which matters enormously when the car is sideways under a
     // fixed camera and you have to read its heading instantly.
     const nose = new THREE.Mesh(
-      new THREE.BoxGeometry(h.x * 1.5, h.y * 0.42, h.z * 0.34),
+      new THREE.BoxGeometry(h.x * 1.5, h.y * 0.42, h.z * 0.34, 5, 2, 2),
       flat(PALETTE.carAccent, 0.5, isGhost),
     );
     nose.position.set(0, h.y * 0.42, h.z * 0.86);
@@ -129,7 +157,9 @@ export class CarView {
     const panelMat = () => flat(bodyColor, 0.55, isGhost);
     const trimMat = () => flat(PALETTE.carCabin, 0.55, isGhost);
 
-    const box = (x: number, y: number, z: number) => new THREE.BoxGeometry(x, y, z);
+    const box = (x: number, y: number, z: number) =>
+      // Enough segments to fold, few enough that twelve panels cost nothing.
+      new THREE.BoxGeometry(x, y, z, 3, 2, 3);
     /** id, geometry, position, material, and the component that deforms it. */
     const panels: [PartId, THREE.BoxGeometry, [number, number, number], THREE.Material, ComponentId][] = [
       ['bonnet', box(h.x * 1.5, h.y * 0.12, h.z * 0.6), [0, h.y * 0.62, h.z * 0.42], panelMat(), 'bonnet'],
@@ -160,6 +190,7 @@ export class CarView {
       this.parts.set(id, mesh);
       this.partRest.set(id, mesh.position.clone());
       this.partComponent.set(id, component);
+      if (!isGhost) this.keepRestGeometry(mesh);
       this.restPose.set(mesh, {
         position: mesh.position.clone(),
         scale: mesh.scale.clone(),
@@ -227,12 +258,27 @@ export class CarView {
     this.cabin = cabin;
     this.nose = nose;
     for (const mesh of [body, cabin, nose, wing]) {
+      if (!isGhost) this.keepRestGeometry(mesh);
       this.restPose.set(mesh, {
         position: mesh.position.clone(),
         scale: mesh.scale.clone(),
         color: (mesh.material as THREE.MeshStandardMaterial).color.clone(),
       });
     }
+  }
+
+  /**
+   * Remember a mesh's undamaged vertices, and give it geometry of its own.
+   *
+   * The panels are built from a shared `box()` helper, and two panels sharing
+   * one BufferGeometry would crumple as one — a dent in the left door would
+   * appear in the right one too.
+   */
+  private keepRestGeometry(mesh: THREE.Mesh): void {
+    if (this.restGeometry.has(mesh)) return;
+    mesh.geometry = mesh.geometry.clone();
+    const position = mesh.geometry.getAttribute('position') as THREE.BufferAttribute;
+    this.restGeometry.set(mesh, Float32Array.from(position.array as Float32Array));
   }
 
   /**
@@ -284,6 +330,74 @@ export class CarView {
    *
    * Purely presentational — nothing here feeds back into the simulation.
    */
+  /**
+   * Fold the metal in where the car was actually hit.
+   *
+   * The damage model records dents — a point in the car's own frame and a
+   * depth — and this pushes every vertex within reach of one toward it, with a
+   * hashed wobble so the fold is uneven. That unevenness is the whole effect:
+   * a panel displaced smoothly reads as a dented balloon, and the same panel
+   * displaced by a couple of centimetres of noise reads as sheet metal that has
+   * been folded and cannot be unfolded.
+   *
+   * Rebuilt only when the dents change. They change a handful of times in a
+   * race and never between them, and reshaping fifteen meshes is not something
+   * to do sixty times a second for no reason.
+   */
+  private applyCrumple(damage: DamageModel): void {
+    if (damage.dentVersion === this.dentVersion) return;
+    this.dentVersion = damage.dentVersion;
+
+    for (const [mesh, rest] of this.restGeometry) {
+      const attribute = mesh.geometry.getAttribute('position') as THREE.BufferAttribute;
+      const array = attribute.array as Float32Array;
+      array.set(rest);
+
+      if (damage.dents.length > 0) {
+        for (let i = 0; i < array.length; i += 3) {
+          // The vertex in the car's frame, which is the frame the dents are in.
+          const x = rest[i]! + mesh.position.x;
+          const y = rest[i + 1]! + mesh.position.y;
+          const z = rest[i + 2]! + mesh.position.z;
+
+          let dx = 0;
+          let dy = 0;
+          let dz = 0;
+          for (const dent of damage.dents) {
+            const ox = dent.at.x - x;
+            const oy = dent.at.y - y;
+            const oz = dent.at.z - z;
+            const distance = Math.hypot(ox, oy, oz);
+            if (distance > dent.reach) continue;
+
+            // Squared falloff: sharp at the point of contact, gone by the edge.
+            const fall = (1 - distance / dent.reach) ** 2;
+            const push = fall * dent.depth * 0.85;
+            const scale = distance > 1e-4 ? push / distance : 0;
+            dx += ox * scale;
+            dy += oy * scale;
+            dz += oz * scale;
+
+            // Torn rather than pressed: a few centimetres of deterministic
+            // noise, keyed off the vertex position so the same car crumples
+            // the same way on every machine showing it.
+            const wobble = fall * dent.depth * 0.09;
+            dx += (hash3(x, y, z) - 0.5) * wobble;
+            dy += (hash3(y, z, x) - 0.5) * wobble;
+            dz += (hash3(z, x, y) - 0.5) * wobble;
+          }
+
+          array[i] = rest[i]! + dx;
+          array[i + 1] = rest[i + 1]! + dy;
+          array[i + 2] = rest[i + 2]! + dz;
+        }
+      }
+
+      attribute.needsUpdate = true;
+      mesh.geometry.computeVertexNormals();
+    }
+  }
+
   private applyDamage(damage: DamageModel): void {
     const crush = (
       mesh: THREE.Mesh,
@@ -453,7 +567,10 @@ export class CarView {
     debris: DebrisModel | null = null,
   ): void {
     if (this.ghost) return;
-    if (damage) this.applyDamage(damage);
+    if (damage) {
+      this.applyDamage(damage);
+      this.applyCrumple(damage);
+    }
     if (debris) this.applyDebris(debris);
     const { position, rotation } = transform;
     this.group.position.set(position.x, position.y, position.z);

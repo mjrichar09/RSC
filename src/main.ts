@@ -854,6 +854,7 @@ async function main(): Promise<void> {
         // Multiplayer, for the two-page check: how many cars are in this
         // world, where they are, and who this machine thinks it is talking to.
         skidQuads: skids.laid,
+        dents: (world.damage?.dents.length ?? 0) + '/' + (career.profile.carDents?.length ?? 0),
         cars: world.cars.length,
         // Simulated seconds and fixed steps: the first thing to check when a
         // car is not moving is whether the world is running at all.
@@ -1005,8 +1006,10 @@ async function main(): Promise<void> {
     }
     const health: Partial<Record<ComponentId, number>> = {};
     for (const component of COMPONENTS) health[component.id] = model.get(component.id);
+    const dents = model.dents.map((dent) => ({ ...dent, at: { ...dent.at } }));
     await save.update((profile) => {
       profile.carHealth = health;
+      profile.carDents = dents;
     });
   }
 

@@ -11,11 +11,11 @@
 
 import type { UpgradeLevels } from './garage.js';
 import type { Medal } from './race.js';
-import type { ComponentId } from '../sim/damage.js';
+import type { ComponentId, Dent } from '../sim/damage.js';
 import type { Ghost } from '../sim/replay.js';
 
 const DB_NAME = 'rsc';
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 const PROFILE_KEY = 'profile';
 
 /** Enough to enter the second stage and still afford a mistake. */
@@ -40,6 +40,15 @@ export interface Profile {
    * state, not the run's, so it follows you to the start line of the next one.
    */
   carHealth: Partial<Record<ComponentId, number>>;
+  /**
+   * Where the car has been hit, in its own frame.
+   *
+   * Health says what is broken and prices it; this says what the car looks
+   * like, and it has to persist for the same reason health does — the wreck you
+   * declined to repair is the one that turns up on the next start line, and the
+   * one on the garage turntable.
+   */
+  carDents: Dent[];
   /** Lifetime totals, for the garage summary. */
   totals: { earned: number; spentOnRepairs: number; spentOnUpgrades: number; retirements: number };
   /** Player settings that survive a reload. */
@@ -67,6 +76,7 @@ export const emptyProfile = (): Profile => ({
   money: STARTING_MONEY,
   upgrades: {},
   carHealth: {},
+  carDents: [],
   totals: { earned: 0, spentOnRepairs: 0, spentOnUpgrades: 0, retirements: 0 },
   settings: { ...DEFAULT_SETTINGS },
 });
@@ -99,6 +109,7 @@ function migrate(stored: unknown): Profile {
     money: Math.max(0, number(stored.money, base.money)),
     upgrades: isObject(stored.upgrades) ? (stored.upgrades as Profile['upgrades']) : base.upgrades,
     carHealth: isObject(stored.carHealth) ? (stored.carHealth as Profile['carHealth']) : base.carHealth,
+    carDents: Array.isArray(stored.carDents) ? (stored.carDents as Dent[]) : [],
     totals: isObject(stored.totals)
       ? {
           earned: number(stored.totals.earned, 0),
@@ -137,6 +148,26 @@ function migrate(stored: unknown): Profile {
 
   // v3 -> v4: settings were added. Nothing to migrate — an older profile
   // simply gets the defaults, which is what the block above already does.
+
+  // v4 -> v5: the shape of the damage, as well as its price. An older profile
+  // has no dents and gets a car that is broken but straight, which is the
+  // right way round: inventing folds for damage nobody saw happen would be
+  // worse than a car that reads as slightly too tidy for its repair bill.
+  out.carDents = out.carDents
+    .filter(
+      (dent): dent is Dent =>
+        isObject(dent) &&
+        isObject(dent.at) &&
+        [dent.at.x, dent.at.y, dent.at.z, dent.depth, dent.reach].every(
+          (n) => typeof n === 'number' && Number.isFinite(n),
+        ),
+    )
+    .slice(0, 16)
+    .map((dent) => ({
+      at: { x: dent.at.x, y: dent.at.y, z: dent.at.z },
+      depth: clamp01(dent.depth),
+      reach: Math.min(Math.max(dent.reach, 0.1), 2),
+    }));
 
   return out;
 }

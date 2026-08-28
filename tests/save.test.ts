@@ -175,3 +175,36 @@ describe('profile migration', () => {
     expect(out.carHealth.tyreFL).toBe(0.4);
   });
 });
+
+
+describe('carried dents', () => {
+  it('keeps the shape of the damage, not only its price', () => {
+    const profile = migrateProfile({
+      version: 5,
+      carDents: [{ at: { x: 0, y: 0, z: 1.9 }, depth: 0.6, reach: 1.1 }],
+    });
+    expect(profile.carDents).toHaveLength(1);
+    expect(profile.carDents[0]!.depth).toBe(0.6);
+  });
+
+  it('gives an older profile a car that is broken but straight', () => {
+    // Inventing folds for damage nobody saw happen would be worse than a car
+    // that reads as slightly too tidy for its repair bill.
+    expect(migrateProfile({ version: 4, carHealth: { engine: 0.3 } }).carDents).toEqual([]);
+  });
+
+  it('throws out anything that would deform the car into nonsense', () => {
+    const profile = migrateProfile({
+      version: 5,
+      carDents: [
+        { at: { x: 0, y: 0, z: 1.9 }, depth: 4, reach: 90 },
+        { at: { x: 0, y: 0 }, depth: 0.5, reach: 1 },
+        { at: { x: NaN, y: 0, z: 0 }, depth: 0.5, reach: 1 },
+        'not a dent',
+      ],
+    });
+    expect(profile.carDents).toHaveLength(1);
+    expect(profile.carDents[0]!.depth).toBe(1);
+    expect(profile.carDents[0]!.reach).toBe(2);
+  });
+});
