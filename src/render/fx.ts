@@ -14,7 +14,15 @@ import type { Vec3 } from '../sim/math.js';
 import type { WheelState } from '../sim/vehicle.js';
 
 const MAX_PARTICLES = 900;
-const MAX_SKID_QUADS = 1400;
+/**
+ * Quads in the track ring buffer, and how far the car travels per quad.
+ *
+ * 5000 at 1.15 m is about 1.4 km of track shared between four wheels — more
+ * than a stage is long, so your own line through a corner is still there when
+ * you come back to it on the next lap of the same road.
+ */
+const MAX_SKID_QUADS = 5000;
+const MIN_SEGMENT = 1.15;
 
 /** Particles look like this: soft round points that fade and shrink with age. */
 /**
@@ -159,6 +167,8 @@ export class SkidMarks {
 
   private readonly positions = new Float32Array(MAX_SKID_QUADS * 6 * 3);
   private readonly opacities = new Float32Array(MAX_SKID_QUADS * 6);
+  /** Per-vertex tint, so a rut in gravel and a skid on tarmac share one mesh. */
+  private readonly colors = new Float32Array(MAX_SKID_QUADS * 6 * 3);
   private readonly geometry = new THREE.BufferGeometry();
   private next = 0;
   /** Last contact point per wheel, so a mark can be stretched between frames. */
@@ -167,20 +177,31 @@ export class SkidMarks {
   constructor(parent: THREE.Object3D) {
     this.geometry.setAttribute('position', new THREE.BufferAttribute(this.positions, 3));
     this.geometry.setAttribute('aOpacity', new THREE.BufferAttribute(this.opacities, 1));
+    this.geometry.setAttribute('aColor', new THREE.BufferAttribute(this.colors, 3));
 
     const material = new THREE.ShaderMaterial({
       vertexShader: `
         attribute float aOpacity;
+        attribute vec3 aColor;
         varying float vOpacity;
+        varying vec3 vColor;
         void main() {
           vOpacity = aOpacity;
+          vColor = aColor;
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }`,
       fragmentShader: `
         varying float vOpacity;
-        void main() { gl_FragColor = vec4(0.03, 0.03, 0.04, vOpacity * 0.55); }`,
+        varying vec3 vColor;
+        void main() { gl_FragColor = vec4(vColor, vOpacity); }`,
       transparent: true,
       depthWrite: false,
+      // Double-sided, and this is not a detail: the quads are wound so their
+      // normals face *down*, so every skid mark this game has ever laid was
+      // back-face culled and invisible. The little discs under the wheels were
+      // the only grip cue that ever reached the screen, which is exactly why
+      // they had to be there.
+      side: THREE.DoubleSide,
       polygonOffset: true,
       polygonOffsetFactor: -4,
     });
@@ -194,14 +215,36 @@ export class SkidMarks {
    * Lay a segment of mark for one wheel between its last position and this one.
    * `strength` fades the mark in as the tyre passes its limit.
    */
-  lay(wheelIndex: number, at: Vec3, right: Vec3, width: number, strength: number): void {
+  lay(
+    wheelIndex: number,
+    at: Vec3,
+    right: Vec3,
+    width: number,
+    strength: number,
+    color: THREE.Color,
+  ): void {
     const last = this.previous[wheelIndex];
-    this.previous[wheelIndex] = { ...at };
-    if (!last || strength <= 0) return;
+    if (!last) {
+      this.previous[wheelIndex] = { ...at };
+      return;
+    }
+    if (strength <= 0) return;
 
     const span = Math.hypot(at.x - last.x, at.z - last.z);
-    // Skip micro-segments (parked) and teleports (a rescue or a restart).
-    if (span < 0.05 || span > 6) return;
+    // A teleport — a rescue, a restart — must not draw a stripe across the map.
+    if (span > 6) {
+      this.previous[wheelIndex] = { ...at };
+      return;
+    }
+    // One quad per metre and a bit, rather than one per frame.
+    //
+    // Ruts are laid continuously now, not only under a slide, so at racing
+    // speed a per-frame quad burned through the whole ring buffer in about six
+    // seconds and the tracks vanished from under the car's own tail. Holding
+    // the last point until the wheel has actually travelled makes each quad
+    // longer, and the same buffer holds well over a kilometre of track.
+    if (span < MIN_SEGMENT) return;
+    this.previous[wheelIndex] = { ...at };
 
     const h = width / 2;
     const quad = [
@@ -219,11 +262,20 @@ export class SkidMarks {
       this.positions[(base + i) * 3] = v.x;
       this.positions[(base + i) * 3 + 1] = v.y + 0.015;
       this.positions[(base + i) * 3 + 2] = v.z;
+      this.colors[(base + i) * 3] = color.r;
+      this.colors[(base + i) * 3 + 1] = color.g;
+      this.colors[(base + i) * 3 + 2] = color.b;
       this.opacities[base + i] = strength;
     }
 
     this.geometry.getAttribute('position').needsUpdate = true;
     this.geometry.getAttribute('aOpacity').needsUpdate = true;
+    this.geometry.getAttribute('aColor').needsUpdate = true;
+  }
+
+  /** Segments laid so far. The harness checks that tracks are being made. */
+  get laid(): number {
+    return this.next;
   }
 
   /** Called when a wheel stops marking, so the next mark does not bridge a gap. */
@@ -234,9 +286,11 @@ export class SkidMarks {
   clear(): void {
     this.opacities.fill(0);
     this.positions.fill(0);
+    this.colors.fill(0);
     this.previous.fill(null);
     this.geometry.getAttribute('position').needsUpdate = true;
     this.geometry.getAttribute('aOpacity').needsUpdate = true;
+    this.geometry.getAttribute('aColor').needsUpdate = true;
   }
 }
 
@@ -359,6 +413,7 @@ export class Precipitation {
 
 const SPRAY_COLOR = new THREE.Color();
 const SPARK_COLOR = new THREE.Color(0xffb648);
+const TRACK_COLOR = new THREE.Color();
 const scratch = { x: 0, y: 0, z: 0 };
 
 /**
@@ -470,16 +525,38 @@ export function updateWheelEffects(
       }
     }
 
-    // Firm surfaces take a mark. Ice cannot hold one, which is itself a useful
-    // cue that there is nothing under you to bite.
-    const marks = surface.id !== 'ice' && surface.id !== 'snow';
-    if (marks && slip > 0.05) {
+    // What the tyre leaves behind.
+    //
+    // Two different things drawn by one system. On tarmac a tyre only marks
+    // when it is sliding, and the mark is rubber: black, sharp, and absent
+    // until you overdo it. On anything loose the tyre is always displacing
+    // material, so it leaves a rut the moment it rolls — darker than the
+    // surface, because a rut is disturbed ground and a shadow in it — and the
+    // rut deepens as the tyre starts to slide.
+    //
+    // This replaces the little white discs that used to sit under each wheel.
+    // They were an honest readout of tyre saturation and they looked like a
+    // debug overlay, which is what they were.
+    const loose = surface.spray > 0.4;
+    const marking = loose ? 1 : slip > 0.05 ? 1 : 0;
+    if (surface.id !== 'ice' && marking) {
       const right = { x: 0, y: 0, z: 0 };
       // Lay the mark across the direction of travel.
       const speed = Math.hypot(carVelocity.x, carVelocity.z) || 1;
       right.x = -carVelocity.z / speed;
       right.z = carVelocity.x / speed;
-      skids.lay(i, wheel.contact, right, 0.26, Math.min(slip * 1.6, 1));
+
+      if (loose) {
+        // A rut: the surface's own colour, darkened. Faint while rolling,
+        // stronger under power or lock, which is what makes a corner read as
+        // having been driven rather than merely passed over.
+        TRACK_COLOR.setHex(surface.color).multiplyScalar(0.45);
+        const bite = 0.26 + Math.min(slip * 2.4, 0.5);
+        skids.lay(i, wheel.contact, right, 0.34, bite, TRACK_COLOR);
+      } else {
+        TRACK_COLOR.setRGB(0.03, 0.03, 0.04);
+        skids.lay(i, wheel.contact, right, 0.26, Math.min(slip * 1.6, 1) * 0.55, TRACK_COLOR);
+      }
     } else {
       skids.lift(i);
     }

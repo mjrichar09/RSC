@@ -62,6 +62,13 @@ Each of these cost real time and is easy to repeat:
 - **Assuming a perspective camera.** The game camera is orthographic. The
   particle shader's usual `1.0 / -mvPosition.z` size trick divides by a fixed
   ~140 m camera distance and yields sub-pixel points that never appear.
+- **A ground quad wound so its normal faces down.** Every skid mark the game
+  has ever laid was back-face culled and invisible; the little discs under the
+  wheels were the only grip cue that ever reached the screen. Nothing errors,
+  nothing warns, and the buffer fills with perfectly good geometry. Flat quads
+  laid on the ground want `side: THREE.DoubleSide` unless you have checked the
+  winding — and the way to check is one frame with the fragment shader forced to
+  solid red, which took three guesses off the list in one shot.
 - **Setting SVG `fill` with `setAttribute`.** A stylesheet rule outranks a
   presentation attribute, so the damage panel's zones stayed green however
   wrecked the car was. Use `style.fill`.

@@ -788,6 +788,7 @@ async function main(): Promise<void> {
         temp: d ? +d.temperature.toFixed(2) : null,
         // Multiplayer, for the two-page check: how many cars are in this
         // world, where they are, and who this machine thinks it is talking to.
+        skidQuads: skids.laid,
         cars: world.cars.length,
         // Simulated seconds and fixed steps: the first thing to check when a
         // car is not moving is whether the world is running at all.

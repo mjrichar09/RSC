@@ -57,8 +57,6 @@ export class CarView {
   private readonly chassis = new THREE.Group();
   private readonly wheels: THREE.Group[] = [];
   private readonly discs: THREE.Mesh[] = [];
-  /** Marks where each tire is actually touching, and how hard it is sliding. */
-  private readonly contactDots: THREE.Mesh[] = [];
 
   private readonly ghost: boolean;
 
@@ -219,14 +217,6 @@ export class CarView {
       this.wheels.push(wheel);
       this.group.add(wheel);
 
-      if (isGhost) continue;
-      const dot = new THREE.Mesh(
-        new THREE.CircleGeometry(0.3, 12),
-        new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0 }),
-      );
-      dot.rotation.x = -Math.PI / 2;
-      this.contactDots.push(dot);
-      parent.add(dot);
     }
 
     parent.add(this.group);
@@ -435,7 +425,6 @@ export class CarView {
 
   set visible(value: boolean) {
     this.group.visible = value;
-    for (const dot of this.contactDots) dot.visible = value;
   }
 
   /** Pose this view from a recorded ghost frame rather than from live sim state. */
@@ -480,17 +469,6 @@ export class CarView {
       view.position.set(mount.x, mount.y - drop + CAR.suspensionRestLength * 0.5, mount.z);
       view.rotation.set(w.rotation, w.steer, 0, 'YXZ');
 
-      const dot = this.contactDots[i]!;
-      const mat = dot.material as THREE.MeshBasicMaterial;
-      if (w.grounded) {
-        dot.position.set(w.contact.x, w.contact.y + 0.02, w.contact.z);
-        // Fades in as the tire passes its grip peak — a free, always-on readout
-        // of exactly which corner is letting go.
-        mat.opacity = Math.min(Math.max(w.saturation - 0.85, 0) * 1.6, 0.7);
-        mat.color.setHSL(0.14 - Math.min(w.saturation - 1, 1) * 0.14, 0.9, 0.6);
-      } else {
-        mat.opacity = 0;
-      }
     }
   }
 }
