@@ -54,6 +54,8 @@ export class Garage {
   onEnter: ((target: RaceTarget) => void) | null = null;
   /** Raised after a career reset, so the game can put a fresh car on the road. */
   onReset: (() => void) | null = null;
+  /** Raised when the player asks for the front door. */
+  onMenu: (() => void) | null = null;
 
   constructor(parent: HTMLElement, career: Career) {
     this.career = career;
@@ -110,6 +112,10 @@ export class Garage {
       case 'buy':
         await this.career.buy(id as never);
         break;
+      case 'menu':
+        this.setOpen(false);
+        this.onMenu?.();
+        return;
       case 'close':
         this.setOpen(false);
         return;
@@ -164,6 +170,7 @@ export class Garage {
         <footer class="garage-foot">
           <span><b>1</b>–<b>${Math.min(9, this.career.targets().length)}</b> enter stage · <b>Esc</b> close · <b>drag</b> the car to turn it</span>
           <span class="garage-foot-right">
+            <button data-action="menu">Main menu</button>
             ${
               this.confirmingReset
                 ? `<span class="reset-warn">Erases every record, ghost, upgrade and penny.</span>

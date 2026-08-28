@@ -53,6 +53,7 @@ npm run generate   # make new stages, validate them, calibrate their medals
 npm run perf       # simulation cost per fixed step, GPU-independent
 npm run shoot      # -> ONE composite grid PNG in shots/
 npm run netcheck   # two browsers, one race: the WebRTC path end to end
+npm run uicheck    # career, arcade and multiplayer all open from the menu
 npm run typecheck
 ```
 
@@ -419,6 +420,27 @@ three of them were exactly that until they were measured:
   coasts. It still steers and still brakes, so you can bring it to a stop, put
   it in the scenery, or roll over the finish line on momentum. The run ends when
   the car does.
+
+### Three ways to play
+
+The game opens on a start menu rather than in the garage: the first question it
+used to ask was "which stage will you spend money on", which is a fine second
+question and a strange first one, and it left the other two modes effectively
+undiscoverable.
+
+- **Career** is the game with consequences. Damage carries between races,
+  repairs cost money, stages unlock as medals are won, and every attempt on a
+  paid stage costs its fee.
+- **Arcade** is every stage under every condition, open from the start, free to
+  enter, with a fixed car each time. Nothing is banked: no payout, no repair
+  bill, no record, no ghost. Wreck the car on a night stage you have not
+  unlocked and walk away as though it never happened. Your career's best time
+  is still shown, to chase.
+- **Multiplayer** is the lobby described above.
+
+`npm run uicheck` drives all three from a real browser, because a menu that
+fails to open is a game that cannot be played at all and no unit test would
+notice.
 
 ### The ground
 

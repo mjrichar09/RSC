@@ -47,6 +47,7 @@ import { DebrisView } from './render/debrisView.js';
 import { WildlifeView } from './render/wildlifeView.js';
 import { Garage } from './ui/garage.js';
 import { MultiplayerPanel } from './ui/multiplayer.js';
+import { StartMenu } from './ui/menu.js';
 import { MultiplayerSession } from './game/multiplayer.js';
 import { LiveStageMap } from './ui/stageMap.js';
 import * as THREE from 'three';
@@ -165,6 +166,14 @@ async function main(): Promise<void> {
    * a guest swaps its own car into that slot — so everything below this point
    * is written as if there were only ever one car, exactly as it was.
    */
+  /**
+   * Which game this is.
+   *
+   * Career keeps the car: damage carries, repairs cost money, stages unlock.
+   * Arcade keeps nothing — every stage open, free entry, a fixed car every
+   * time, and no record of what you did to it.
+   */
+  let mode: 'career' | 'arcade' = 'career' as 'career' | 'arcade';
   let session: MultiplayerSession | null = null;
   /** Views for the other cars in a network race, by car index. */
   let rivalViews: CarView[] = [];
@@ -324,7 +333,7 @@ async function main(): Promise<void> {
       // distance, restart for nothing, and discard the damage with it — which
       // costs the damage economy most of its meaning.
       const attemptUsed = race.phase !== 'staging';
-      if (stage.def.entryFee > 0 && attemptUsed) {
+      if (mode === 'career' && stage.def.entryFee > 0 && attemptUsed) {
         if (!career.canEnter(currentTarget()).allowed) {
           openGarage();
           return;
@@ -365,6 +374,7 @@ async function main(): Promise<void> {
   };
   const multiplayer = new MultiplayerPanel(hudRoot);
   multiplayer.onRace = (start) => {
+    menu.setOpen(false);
     garage.setOpen(false);
     sessionHealth = { ...career.profile.carHealth };
     loadStage(start.setup.stageId, start.setup.variantId, {
@@ -402,11 +412,41 @@ async function main(): Promise<void> {
     loadStage(target.def.id, target.variant.id);
   };
 
+  garage.onMenu = () => {
+    if (race && race.phase === 'running') void settleRun(true);
+    garage.setOpen(false);
+    menu.setOpen(true);
+  };
+
   garage.onReset = () => {
     // A fresh career gets a fresh car: the world is holding the old one's
     // damage, and leaving it there would hand the new career a wreck.
     sessionHealth = {};
     if (!freeRoam) loadStage(STAGES[0]!.id);
+  };
+
+  const menu = new StartMenu(hudRoot, career);
+  menu.onCareer = () => {
+    mode = 'career';
+    sessionHealth = { ...career.profile.carHealth };
+    garage.setOpen(true);
+  };
+  menu.onArcade = (pick) => {
+    // A fixed car, every time: arcade never inherits the career's wreck and
+    // never hands one back to it.
+    mode = 'arcade';
+    if (session) {
+      session.leave();
+      session = null;
+      multiplayer.reset();
+    }
+    sessionHealth = {};
+    garage.setOpen(false);
+    loadStage(pick.def.id, pick.variant.id);
+  };
+  menu.onMultiplayer = () => {
+    garage.setOpen(false);
+    multiplayer.setOpen(true);
   };
 
   const openGarage = () => {
@@ -444,13 +484,29 @@ async function main(): Promise<void> {
   controls.onMultiplayer = () => {
     if (freeRoam) return;
     if (garage.isOpen) garage.setOpen(false);
+    if (menu.isOpen) menu.setOpen(false);
     multiplayer.toggle();
   };
 
   controls.onGarage = () => {
     if (freeRoam) return;
-    if (garage.isOpen) garage.setOpen(false);
-    else openGarage();
+    if (menu.isOpen) {
+      menu.setOpen(false);
+      // Backing out of the menu returns to whatever was already running: the
+      // garage in a career, the stage itself in arcade.
+      if (mode === 'career' && !session) garage.setOpen(true);
+      return;
+    }
+    // In a career the garage is the place you keep coming back to; Escape goes
+    // there, and again from there to the menu. Arcade has no garage, so Escape
+    // is the way out to the front door.
+    if (mode === 'career' && !garage.isOpen && !session) {
+      openGarage();
+      return;
+    }
+    if (race && race.phase === 'running') void settleRun(true);
+    garage.setOpen(false);
+    menu.setOpen(true);
   };
   controls.onSelectStage = (index) => {
     if (freeRoam) return;
@@ -464,6 +520,15 @@ async function main(): Promise<void> {
   const settleRun = async (retired: boolean) => {
     if (!stage || !race || settled || !world.damage) return;
     settled = true;
+
+    // Arcade banks nothing: no payout, no repair bill, no record, no ghost.
+    // The whole point of it is that you can wreck the car on a night stage you
+    // have not unlocked and walk away as though it never happened.
+    if (mode === 'arcade') {
+      session?.report(0, race.finishTime, retired);
+      raceHud.setLedger(null);
+      return;
+    }
 
     const time = race.finishTime;
     const previous = save.recordFor(currentKey())?.time ?? null;
@@ -945,9 +1010,21 @@ async function main(): Promise<void> {
     });
   }
 
-  // Start in the garage: the first decision the game asks for is which stage to
-  // spend money on, not which corner to take.
-  if (!freeRoam) garage.setOpen(true);
+  // Start at the front door. The game used to open in the garage, which made
+  // the first question it asked "which stage will you spend money on" — a fine
+  // second question and a strange first one.
+  //
+  // `?stage=` is the exception: an explicit stage in the URL is either the
+  // harness or somebody who has already chosen, so it drives straight there.
+  if (!freeRoam) {
+    // `?screen=garage` and `?screen=arcade` open one screen directly, which is
+    // how the visual harness photographs them.
+    const screen = params.get('screen');
+    if (screen === 'garage') garage.setOpen(true);
+    else if (screen === 'arcade') menu.setOpen(true, 'arcade');
+    else if (params.has('stage')) garage.setOpen(false);
+    else menu.setOpen(true);
+  }
 
   let last = performance.now();
   let fps = 60;

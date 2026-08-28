@@ -79,12 +79,23 @@ const cells = cellSpec.split(',').map((spec) => {
 
   // `garage` shoots the stage-select screen itself, which is the only place
   // the variant list is visible.
+  // `menu` and `menu:arcade` shoot the front door and the arcade list.
+  const menuMatch = /^menu(?::(\w+))?$/.exec(name!);
+  if (menuMatch) {
+    return {
+      url: menuMatch[1] ? `/?screen=${menuMatch[1]}` : '/',
+      label: menuMatch[1] ? `menu · ${menuMatch[1]}` : 'menu',
+    };
+  }
+
   // `garage` or `garage:<N·s>` — the second wrecks the car first, so the
   // turntable and the repair list can be seen together.
   const garageMatch = /^garage(?::(\d+))?$/.exec(name!);
   if (garageMatch) {
     return {
-      url: garageMatch[1] ? `/?wreckCar=${garageMatch[1]}` : '/',
+      url: garageMatch[1]
+        ? `/?screen=garage&wreckCar=${garageMatch[1]}`
+        : '/?screen=garage',
       label: garageMatch[1] ? `garage · wrecked ${garageMatch[1]} N·s` : 'garage',
     };
   }
