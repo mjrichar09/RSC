@@ -15,8 +15,9 @@ import { SaveStore } from './game/save.js';
 import { NEUTRAL_INPUT } from './sim/input.js';
 import { Driver } from './sim/driver.js';
 import { GhostPlayer, GhostRecorder } from './sim/replay.js';
-import { FAILURE_LABEL, type ComponentId } from './sim/damage.js';
+import { COMPONENTS, FAILURE_LABEL, type ComponentId } from './sim/damage.js';
 import { Stage, findVariant, type StageVariant, variantKey } from './sim/stage.js';
+import { cornersAhead } from './sim/corners.js';
 import { visibility } from './sim/conditions.js';
 import { TRACES, sampleTrace } from './sim/trace.js';
 import { SimWorld, initPhysics } from './sim/world.js';
@@ -38,6 +39,7 @@ import { DamagePanel } from './ui/damagePanel.js';
 import { DebrisView } from './render/debrisView.js';
 import { WildlifeView } from './render/wildlifeView.js';
 import { Garage } from './ui/garage.js';
+import { LiveStageMap } from './ui/stageMap.js';
 import { TuningPanel } from './ui/tuningPanel.js';
 
 /**
@@ -90,6 +92,8 @@ async function main(): Promise<void> {
   const carView = new CarView(scene);
   const ghostView = new CarView(scene, { ghost: true });
   const debrisView = new DebrisView(scene);
+  // The minimap. Fixed north-up, so the shape of a stage can be learned.
+  const minimap = new LiveStageMap(hudRoot, 'minimap');
   const wildlifeView = new WildlifeView(scene);
   ghostView.visible = false;
   const particles = new ParticleField(scene);
@@ -132,6 +136,12 @@ async function main(): Promise<void> {
    * a factory-fresh car — otherwise a bad crash could be undone for nothing and
    * the damage economy would mean nothing.
    */
+  /**
+   * When set, the camera stays here instead of following the car. Harness only:
+   * `drawOnce` calls `camera.follow`, so a jump made before drawing is undone
+   * by the very frame it was made for.
+   */
+  let cameraLock: { at: { x: number; y: number; z: number }; zoom: number | null } | null = null;
   let sessionHealth: Partial<Record<ComponentId, number>> = {};
   let settled = false;
 
@@ -177,6 +187,7 @@ async function main(): Promise<void> {
     settled = false;
     damagePanel.reset();
     raceHud.setStage(stage, variant.name, variant.medals);
+    minimap.setStage(stage);
     tuningPanel?.rebind(world.vehicle.tuning);
 
     camera.applyZones(stage.cameraZones, 0);
@@ -344,6 +355,9 @@ async function main(): Promise<void> {
     const transform = world.renderTransform(alpha);
     carView.update(transform, state, world.damage, world.debris);
     debrisView.update(world.loose);
+    // Turn the corner boards to face the camera. Cheap — there are a handful —
+    // and it is the only way they stay readable through a zone change.
+    for (const board of stageView?.signBoards ?? []) board.rotation.y = camera.yaw;
     wildlifeView.update(world.wildlife?.animals ?? []);
 
     if (ghost && race) {
@@ -354,7 +368,15 @@ async function main(): Promise<void> {
     }
 
     if (stage && race) camera.applyZones(stage.cameraZones, race.furthest);
-    camera.follow(dt, transform.position, state.velocity);
+    if (cameraLock) {
+      camera.jumpTo(cameraLock.at);
+      // After the jump, because `jumpTo` takes its view size from the zone the
+      // line above just applied — which is how a locked frame ended up at the
+      // stage's own zoom rather than the one asked for.
+      if (cameraLock.zoom !== null) camera.setViewSize(cameraLock.zoom);
+    } else {
+      camera.follow(dt, transform.position, state.velocity);
+    }
 
     // The shadow frustum is far too tight to cover a whole stage, so it rides
     // along with the car — and its azimuth tracks the camera, so the shadow
@@ -420,6 +442,8 @@ async function main(): Promise<void> {
       camera.applyZones(stage!.cameraZones, race!.furthest);
       camera.jumpTo(world.state().position);
       raceHud.update(race!, world.damage);
+      raceHud.setNotes(cornersAhead(stage!.corners, race!.furthest, 2));
+      minimap.update(world.state().position, race!.progress);
       damagePanel.update(world.damage!);
       hud.update(world.state(), 60);
     },
@@ -488,6 +512,10 @@ async function main(): Promise<void> {
 
       await settleRun(race.phase === 'retired');
       raceHud.update(race, world.damage);
+      // The co-driver reads from the same corner list the boards are built
+      // from, so a note can never disagree with a sign.
+      raceHud.setNotes(cornersAhead(stage.corners, race.furthest, 2));
+      minimap.update(world.state().position, race.progress);
       return this.status();
     },
     status() {
@@ -578,6 +606,20 @@ async function main(): Promise<void> {
       }
       camera.jumpTo(world!.state().position);
     }
+    // `?sign=2` puts the camera on that corner board, for reading the arrow.
+    const signIndex = params.get('sign');
+    if (signIndex) {
+      const sign = stage!.signs[Number(signIndex)];
+      // Aim at the board itself, not at the foot of its post.
+      const zoomParam = params.get('zoom');
+      if (sign) {
+        cameraLock = {
+          at: { x: sign.position.x, y: sign.position.y + 2.6, z: sign.position.z },
+          zoom: zoomParam ? Number(zoomParam) : null,
+        };
+      }
+    }
+
     const brakes = params.get('brakes');
     if (brakes) world!.damage?.brakeTemp.fill(Number(brakes));
     // `?zoom=8` pulls the orthographic camera in. Detail on the car itself —
@@ -586,6 +628,25 @@ async function main(): Promise<void> {
     if (zoom) camera.setViewSize(Number(zoom));
     window.RSC.draw();
     return;
+  }
+
+  // `?wreckCar=20000` puts a wrecked car in the garage, so the turntable and
+  // the repair list can be looked at together without crashing one first.
+  const wreckCar = params.get('wreckCar');
+  if (wreckCar) {
+    const model = career.buildDamage();
+    for (const at of [
+      { x: 0, y: 0, z: 1.9 },
+      { x: -0.9, y: 0.1, z: 0.6 },
+      { x: 0.9, y: 0.1, z: -1.2 },
+    ]) {
+      model.applyImpact(at, Number(wreckCar));
+    }
+    const health: Partial<Record<ComponentId, number>> = {};
+    for (const component of COMPONENTS) health[component.id] = model.get(component.id);
+    await save.update((profile) => {
+      profile.carHealth = health;
+    });
   }
 
   // Start in the garage: the first decision the game asks for is which stage to
@@ -653,6 +714,12 @@ async function main(): Promise<void> {
       }
 
       raceHud.update(race);
+      // The co-driver's call and the minimap both read the corner list and the
+      // progress the race is already tracking.
+      if (stage) {
+        raceHud.setNotes(cornersAhead(stage.corners, race.furthest, 2));
+        minimap.update(state.position, race.progress);
+      }
 
       // Beaching the chassis across the verge with all four wheels dangling is
       // unrecoverable by driving, so the game recovers for you.

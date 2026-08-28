@@ -16,7 +16,13 @@ export class Hud {
   private readonly surfaceEl: HTMLElement;
   private readonly fps: HTMLElement;
 
-  constructor(root: HTMLElement) {
+  constructor(parent: HTMLElement) {
+    // Its own element, appended — not `parent.innerHTML =`, which silently
+    // deleted every sibling created before it. The minimap vanished from the
+    // page that way, and the only symptom was an element with no parent.
+    const root = document.createElement('div');
+    root.className = 'hud-basic';
+    parent.appendChild(root);
     root.innerHTML = `
       <div class="hud-corner hud-tl">
         <div class="readout"><span id="hud-surface">tarmac</span></div>

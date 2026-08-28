@@ -15,6 +15,7 @@
 import { CLEAR_DAY, type Conditions, describeConditions } from './conditions.js';
 import { type Vec3, add, scale, v3 } from './math.js';
 import { type ControlPoint, Spline, type SplineSample } from './spline.js';
+import { type Corner, findCorners } from './corners.js';
 import type { SurfaceId } from './surfaces.js';
 
 export interface CameraZone {
@@ -35,6 +36,16 @@ export interface MedalTimes {
 }
 
 export type PropKind = 'tree' | 'rock' | 'bale' | 'pole';
+
+/** A corner warning board standing on the verge. */
+export interface CornerSign {
+  /** Where it stands, in metres along the stage. */
+  distance: number;
+  position: Vec3;
+  /** Facing, radians about Y — turned to face the camera, not the road. */
+  yaw: number;
+  corner: Corner;
+}
 
 export interface StageProp {
   kind: PropKind;
@@ -277,6 +288,10 @@ export class Stage {
    * computed here. See `buildCameraZones` for why.
    */
   readonly cameraZones: CameraZone[];
+  /** Corners found in the road, shared by the signs, the HUD and the map. */
+  readonly corners: Corner[];
+  /** Warning boards on the verge, one per corner. */
+  readonly signs: CornerSign[];
   readonly start: { position: Vec3; heading: number };
   readonly length: number;
 
@@ -288,6 +303,8 @@ export class Stage {
     this.checkpoints = this.buildCheckpoints(def.checkpoints ?? 3);
     this.props = this.buildProps();
     this.cameraZones = this.buildCameraZones();
+    this.corners = findCorners(this.spline, this.length);
+    this.signs = this.buildSigns();
 
     // Sit the car a few metres up the road from the start line, well inside the
     // geometry, and let the apron cover anything behind it.
@@ -495,6 +512,52 @@ export class Stage {
     // The first zone always starts at zero, whatever the walk above decided.
     zones[0]!.from = 0;
     return zones;
+  }
+
+  /**
+   * A warning board before each corner, on the outside of the bend.
+   *
+   * Outside rather than inside because that is the side you are looking at on
+   * the way in — a sign on the apex side is behind the car by the time it
+   * matters. Set back far enough to be read at pace and pulled in when the
+   * previous corner is close, so a board never appears before the corner it
+   * belongs to has been left.
+   */
+  private buildSigns(): CornerSign[] {
+    const WARNING = 55;
+    const signs: CornerSign[] = [];
+
+    for (let i = 0; i < this.corners.length; i++) {
+      const corner = this.corners[i]!;
+      const previous = this.corners[i - 1];
+      const earliest = previous ? previous.exit + 8 : 6;
+      const at = Math.max(Math.min(corner.entry - WARNING, corner.entry - 12), earliest);
+      if (at >= corner.entry) continue;
+
+      const sample = this.spline.at(at);
+      // `left` is the road's left, so the outside of a left-hander is its
+      // negation. Getting this backwards puts every board in the ditch on the
+      // inside of the bend, where nobody looks.
+      const outward = corner.direction === 'left' ? -1 : 1;
+      const offset = sample.width + VERGE_WIDTH * 0.7;
+      const base = add(sample.position, scale(sample.left, offset * outward));
+      // Facing the *camera*, not the road. A board turned to face the
+      // oncoming car is seen almost edge-on from an isometric view — it
+      // renders as a bright sliver and reads as nothing at all. The camera's
+      // yaw is fixed within a zone, so this is still a static orientation.
+      let yaw = this.cameraZones[0]!.yaw ?? 0;
+      for (const zone of this.cameraZones) {
+        if (at >= zone.from && zone.yaw !== undefined) yaw = zone.yaw;
+      }
+
+      signs.push({
+        distance: at,
+        position: v3(base.x, base.y - VERGE_DROP, base.z),
+        yaw,
+        corner,
+      });
+    }
+    return signs;
   }
 
   private buildProps(): StageProp[] {

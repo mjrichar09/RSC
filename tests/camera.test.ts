@@ -87,6 +87,54 @@ describe('pressing right goes right', () => {
   }
 });
 
+describe('corner boards', () => {
+  it('reads the same way round as the road it warns about', () => {
+    // The boards are billboarded to the camera's yaw every frame, which is what
+    // makes a texture drawn with the arrow pointing right appear pointing right
+    // on screen. If that ever stops holding, every sign on every stage lies
+    // about which way the corner goes — the worst possible failure for a thing
+    // whose entire job is to tell you that.
+    for (const def of STAGES.slice(0, 4)) {
+      const stage = new Stage(def);
+      expect(stage.signs.length).toBeGreaterThan(0);
+
+      for (const sign of stage.signs) {
+        const camera = new IsoCamera();
+        camera.resize(1600, 900);
+        camera.applyZones(stage.cameraZones, sign.distance);
+        camera.jumpTo(sign.position);
+        camera.camera.updateMatrixWorld(true);
+
+        const board = new THREE.Object3D();
+        board.position.set(sign.position.x, sign.position.y + 2.6, sign.position.z);
+        board.rotation.y = camera.yaw;
+        board.updateMatrixWorld(true);
+
+        // The board's own right-hand edge, projected. The texture's right is
+        // this direction, so it has to land on the right of the screen.
+        const middle = board.localToWorld(new THREE.Vector3(0, 0, 0)).project(camera.camera);
+        const right = board.localToWorld(new THREE.Vector3(1, 0, 0)).project(camera.camera);
+        expect(right.x - middle.x, `${def.id} board at ${sign.distance.toFixed(0)} m`).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('warns before the corner, on the outside of the bend', () => {
+    for (const def of STAGES.slice(0, 4)) {
+      const stage = new Stage(def);
+      for (const sign of stage.signs) {
+        expect(sign.distance).toBeLessThan(sign.corner.entry);
+        // Outside of the bend: a left-hander's board is on the right verge,
+        // which is `lateral` negative, because lateral is positive to the left.
+        const here = stage.progressAt(sign.position);
+        expect(here.onRoad).toBe(false);
+        const side = Math.sign(here.lateral);
+        expect(side).toBe(sign.corner.direction === 'left' ? -1 : 1);
+      }
+    }
+  });
+});
+
 describe('camera orientation', () => {
   for (const def of STAGES) {
     it(`never mirrors the steering on ${def.id}`, () => {

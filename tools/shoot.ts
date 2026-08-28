@@ -34,6 +34,8 @@ const grip = arg('grip', '0.6');
 /** `--loosen=15000` works the nose mounts loose, in N·s, then runs `--after` seconds. */
 const loosenArg = arg('loosen', '');
 const afterArg = arg('after', '');
+/** `--sign=2` centres the camera on that corner board. */
+const signArg = arg('sign', '');
 /** `--zoom=9` pulls the camera in, for questions about the car itself. */
 const zoomArg = arg('zoom', '');
 /** `--brakes=650` preheats the brake discs, in °C, for the glow. */
@@ -67,7 +69,15 @@ const cells = cellSpec.split(',').map((spec) => {
 
   // `garage` shoots the stage-select screen itself, which is the only place
   // the variant list is visible.
-  if (name === 'garage') return { url: '/', label: 'garage' };
+  // `garage` or `garage:<N·s>` — the second wrecks the car first, so the
+  // turntable and the repair list can be seen together.
+  const garageMatch = /^garage(?::(\d+))?$/.exec(name!);
+  if (garageMatch) {
+    return {
+      url: garageMatch[1] ? `/?wreckCar=${garageMatch[1]}` : '/',
+      label: garageMatch[1] ? `garage · wrecked ${garageMatch[1]} N·s` : 'garage',
+    };
+  }
 
   const raw = isTrace || withGhost
     ? name!.slice(6)
@@ -80,7 +90,7 @@ const cells = cellSpec.split(',').map((spec) => {
         withGhost ? '&ghost=1' : ''
       }${crashFor ? `&crash=${crashFor}` : ''}${hotFor ? `&brakes=${hotFor}` : ''}${zoomArg ? `&zoom=${zoomArg}` : ''}${looseFor ? `&loosen=${looseFor}` : ''}${afterFor ? `&after=${afterFor}` : ''}${
         wreckMatch ? `&wreck=${wreckMatch[1]}` : ''
-      }`;
+      }${signArg ? `&sign=${signArg}` : ''}`;
   return {
     url,
     label: `${id}${useVariant ? ` ${useVariant}` : ''} @ ${seconds}s${withGhost ? ' + ghost' : ''}${
@@ -150,7 +160,15 @@ try {
 
   for (const cell of cells) {
     await page.goto(`${origin}${cell.url}`, { waitUntil: 'load' });
-    await page.waitForFunction(() => window.RSC?.rendered === true, undefined, { timeout: 90_000 });
+    try {
+      await page.waitForFunction(() => window.RSC?.rendered === true, undefined, { timeout: 90_000 });
+    } catch (error) {
+      // A page that never renders has almost always thrown, and the exception
+      // is far more useful than the timeout that hid it.
+      console.error(`\n${cell.label} never rendered.`);
+      for (const problem of problems) console.error(`  ${problem}`);
+      throw error;
+    }
     // Audio only builds on a gesture, so press a key before the frame: it is
     // the only way this harness ever exercises the sound graph at all.
     await page.keyboard.press('KeyM');

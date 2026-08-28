@@ -8,6 +8,9 @@
  */
 
 import { Career, type RaceTarget } from '../game/career.js';
+import { GarageCar } from '../render/garageCar.js';
+import { Stage, type StageDef } from '../sim/stage.js';
+import { stageMapSvg } from './stageMap.js';
 import { UPGRADES, levelOf, maxLevel, nextCost } from '../game/garage.js';
 import { formatTime } from './raceHud.js';
 
@@ -19,11 +22,30 @@ const MEDAL_TINT: Record<string, string> = {
   finish: '#8b95a5',
 };
 
+/**
+ * Stage maps for the list, cached by stage id.
+ *
+ * Building a Stage costs about 3 ms, and the garage re-renders on every repair
+ * and every purchase — fifteen rows would spend 40 ms redrawing shapes that
+ * cannot have changed.
+ */
+const MAP_CACHE = new Map<string, string>();
+
+function stageThumb(def: StageDef): string {
+  const cached = MAP_CACHE.get(def.id);
+  if (cached !== undefined) return cached;
+  const svg = stageMapSvg(new Stage(def), { size: 100, markers: true, corners: true, stroke: 3.4 });
+  MAP_CACHE.set(def.id, svg);
+  return svg;
+}
+
 const money = (n: number): string => `${n < 0 ? '−' : ''}${Math.abs(n).toLocaleString('en-GB')}`;
 
 export class Garage {
   private readonly root: HTMLElement;
   private readonly career: Career;
+  /** The turntable. Lives across re-renders and is moved into each new one. */
+  private readonly car = new GarageCar();
   private open = false;
 
   /** Raised when the player commits to a stage under particular conditions. */
@@ -88,6 +110,9 @@ export class Garage {
     // frozen clock ghosting through the garage reads like a bug.
     this.root.parentElement?.classList.toggle('in-garage', open);
     if (open) this.render();
+    // Nothing renders while the garage is shut: a second WebGL context turning
+    // a car nobody is looking at is pure waste.
+    this.car.setActive(open);
   }
 
   get isOpen(): boolean {
@@ -109,6 +134,7 @@ export class Garage {
             <div class="garage-title">GARAGE</div>
             <div class="garage-sub">${this.conditionLine()} · ${this.career.medalsHeld} medal${this.career.medalsHeld === 1 ? '' : 's'}</div>
           </div>
+          <div class="garage-car-slot" id="garage-car-slot"></div>
           <div class="garage-money"><span>FUNDS</span><b>${money(this.career.money)}</b></div>
         </header>
         ${this.warningsPanel()}
@@ -118,10 +144,16 @@ export class Garage {
           <section>${this.upgradesPanel()}</section>
         </div>
         <footer class="garage-foot">
-          <span><b>1</b>–<b>${Math.min(9, this.career.targets().length)}</b> enter stage · <b>Esc</b> close</span>
+          <span><b>1</b>–<b>${Math.min(9, this.career.targets().length)}</b> enter stage · <b>Esc</b> close · <b>drag</b> the car to turn it</span>
           <button data-action="close">Close</button>
         </footer>
       </div>`;
+
+    // The turntable survives the re-render and is moved into the new DOM: a
+    // canvas keeps its WebGL context when it is re-parented, and rebuilding one
+    // on every repair would drop the context each time.
+    this.root.querySelector('#garage-car-slot')?.appendChild(this.car.root);
+    this.car.setCondition(this.career.buildDamage());
   }
 
   /**
@@ -181,6 +213,7 @@ export class Garage {
         return `
           <div class="stage-row ${check.allowed ? '' : 'locked'}">
             <div class="stage-key">${key}</div>
+            <div class="stage-map-thumb">${stageThumb(def)}</div>
             <div class="stage-body">
               <div class="stage-name">${def.name} <span class="dim">· ${variant.name}</span></div>
               <div class="stage-meta">${def.biome} · ${variant.entryFee === 0 ? 'free entry' : `entry ${money(variant.entryFee)}`}${

@@ -22,6 +22,16 @@ function mottle(index: number): number {
 
 export interface StageView {
   group: THREE.Group;
+  /**
+   * Corner boards, which have to be turned to face the camera every frame.
+   *
+   * A board facing down the road is seen edge-on from an isometric view — it
+   * renders as a bright sliver a few pixels wide and reads as nothing. Facing
+   * them at the camera's zone yaw when the stage is built is not enough either:
+   * the zone at the board is not the zone at the car, so a board goes edge-on
+   * exactly when the car is far enough away for it to matter.
+   */
+  signBoards: THREE.Mesh[];
   dispose: () => void;
 }
 
@@ -61,9 +71,12 @@ export function buildStageView(stage: Stage): StageView {
   group.add(buildGates(stage));
   group.add(buildEdgeMarkers(stage));
   group.add(buildProps(stage));
+  const signs = buildSigns(stage);
+  group.add(signs.group);
 
   return {
     group,
+    signBoards: signs.boards,
     dispose: () => {
       geometry.dispose();
       (road.material as THREE.Material).dispose();
@@ -212,6 +225,107 @@ function buildProps(stage: Stage): THREE.Group {
 }
 
 /** Start line, checkpoint gates and finish line, as paired posts plus a banner. */
+/**
+ * Corner warning boards.
+ *
+ * Drawn into a canvas rather than built from geometry: an arrow with a number
+ * on it is a picture, and a picture is one texture and two triangles instead of
+ * a dozen extruded shapes. One texture per direction-and-severity pair, cached,
+ * so a stage with eight corners still uses at most a handful.
+ */
+const SIGN_TEXTURES = new Map<string, THREE.CanvasTexture>();
+
+function signTexture(direction: 'left' | 'right', severity: number): THREE.CanvasTexture {
+  const key = `${direction}${severity}`;
+  const cached = SIGN_TEXTURES.get(key);
+  if (cached) return cached;
+
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+
+  // Colour carries the severity before the number is legible: a tight corner
+  // is red at a distance where the arrow is still four pixels wide.
+  const accent = severity <= 2 ? '#e8552f' : severity <= 4 ? '#f2c14e' : '#7fd6a0';
+  ctx.fillStyle = accent;
+  ctx.fillRect(0, 0, size, size);
+  ctx.fillStyle = '#12161c';
+  ctx.fillRect(7, 7, size - 14, size - 14);
+
+  // The arrow, bent the way the road goes. Severity decides how sharply.
+  const bend = 1 - (severity - 1) / 6;
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = 13;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.save();
+  if (direction === 'left') {
+    ctx.translate(size, 0);
+    ctx.scale(-1, 1);
+  }
+  ctx.beginPath();
+  ctx.moveTo(34, size - 24);
+  ctx.lineTo(34, size * (0.62 - bend * 0.16));
+  ctx.quadraticCurveTo(34, 30, 34 + 26 + bend * 30, 30);
+  ctx.stroke();
+  // Arrow head.
+  const tipX = 34 + 26 + bend * 30;
+  ctx.beginPath();
+  ctx.moveTo(tipX + 22, 30);
+  ctx.lineTo(tipX - 4, 14);
+  ctx.lineTo(tipX - 4, 46);
+  ctx.closePath();
+  ctx.fillStyle = accent;
+  ctx.fill();
+  ctx.restore();
+
+  ctx.fillStyle = accent;
+  ctx.font = "700 46px ui-monospace, 'SF Mono', monospace";
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText(String(severity), size / 2, size - 22);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 4;
+  SIGN_TEXTURES.set(key, texture);
+  return texture;
+}
+
+function buildSigns(stage: Stage): { group: THREE.Group; boards: THREE.Mesh[] } {
+  const group = new THREE.Group();
+  const boards: THREE.Mesh[] = [];
+  const postGeo = new THREE.BoxGeometry(0.12, 1.9, 0.12);
+  const postMat = new THREE.MeshStandardMaterial({ color: 0x6b7280, roughness: 0.9 });
+  // 1.9 m across: larger than a real corner board, because at race distance
+  // under an orthographic camera a real one is about eight pixels.
+  const boardGeo = new THREE.PlaneGeometry(1.9, 1.9);
+
+  for (const sign of stage.signs) {
+    const post = new THREE.Mesh(postGeo, postMat);
+    post.position.set(sign.position.x, sign.position.y + 0.95, sign.position.z);
+    post.castShadow = true;
+    group.add(post);
+
+    const board = new THREE.Mesh(
+      boardGeo,
+      new THREE.MeshBasicMaterial({
+        map: signTexture(sign.corner.direction, sign.corner.severity),
+        // Visible from behind too: with a camera that changes zone the board
+        // would otherwise vanish on half the stage.
+        side: THREE.DoubleSide,
+      }),
+    );
+    board.position.set(sign.position.x, sign.position.y + 2.6, sign.position.z);
+    board.rotation.y = sign.yaw;
+    group.add(board);
+    boards.push(board);
+  }
+  return { group, boards };
+}
+
 function buildGates(stage: Stage): THREE.Group {
   const gates = new THREE.Group();
 

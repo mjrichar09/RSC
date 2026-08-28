@@ -221,7 +221,8 @@ html, body {
 .tuning td.hot { color: var(--hot); font-weight: 700; }
 
 /* Keep the HUD clear of the tuning panel while it is open. */
-#hud.has-tuning .hud-br { right: 330px; }
+#hud.has-tuning .hud-br,
+#hud.has-tuning .minimap { right: 330px; }
 #hud.has-tuning .hud-tl { left: 0; }
 
 /* ---- Race HUD (P2) ------------------------------------------------------ */
@@ -539,7 +540,7 @@ html, body {
 
 .stage-row {
   display: grid;
-  grid-template-columns: 26px 1fr auto auto;
+  grid-template-columns: 26px 54px 1fr auto auto;
   gap: 12px;
   align-items: center;
   padding: 11px 12px;
@@ -631,6 +632,7 @@ html, body {
 /* The garage replaces the HUD rather than sitting on top of it. */
 #hud.in-garage .race,
 #hud.in-garage .damage,
+#hud.in-garage .minimap,
 #hud.in-garage .hud-corner,
 #hud.in-garage .tuning { display: none; }
 
@@ -673,3 +675,122 @@ html, body {
 .race-pace.medal-finish { color: var(--dim); }
 
 .locked-note { color: var(--hot); letter-spacing: 0.08em; }
+
+/* --- Co-driver notes -------------------------------------------------------
+   Bottom-left, above the controls line: far enough from the car that reading
+   them does not mean looking away from it, and on the opposite side of the
+   screen from the speed. */
+.race-notes {
+  position: absolute;
+  left: 18px;
+  bottom: 74px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.note {
+  display: grid;
+  grid-template-columns: 26px 22px auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 6px 8px;
+  border-radius: 6px;
+  background: rgba(12, 15, 20, 0.72);
+  border-left: 3px solid var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The next corner is the one being driven; the one after is context. */
+.note.next { transform: scale(1); opacity: 1; }
+.note.after { transform: scale(0.82); transform-origin: left center; opacity: 0.6; }
+
+.note b { font-size: 19px; font-weight: 700; color: var(--ink); }
+.note span { font-size: 11px; color: var(--ink-dim); }
+
+.note.tight { border-left-color: var(--hot); }
+.note.mid { border-left-color: #f2c14e; }
+.note.fast { border-left-color: #7fd6a0; }
+.note.tight b { color: var(--hot); }
+.note.mid b { color: #f2c14e; }
+.note.fast b { color: #7fd6a0; }
+
+/* The arrow is drawn rather than typed: a glyph that bends the right way at
+   this size does not exist in a monospace font. */
+.note-arrow {
+  width: 26px;
+  height: 22px;
+  background: currentColor;
+  color: var(--ink);
+  -webkit-mask: var(--arrow) center / contain no-repeat;
+  mask: var(--arrow) center / contain no-repeat;
+  --arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 26 22'%3E%3Cpath d='M6 21 L6 11 Q6 4 13 4 L19 4' fill='none' stroke='black' stroke-width='3.4' stroke-linecap='round'/%3E%3Cpath d='M17 0 L24 4 L17 8 Z' fill='black'/%3E%3C/svg%3E");
+}
+.note-arrow.left { transform: scaleX(-1); }
+.note.tight .note-arrow { color: var(--hot); }
+.note.mid .note-arrow { color: #f2c14e; }
+.note.fast .note-arrow { color: #7fd6a0; }
+
+/* --- Stage maps ------------------------------------------------------------
+   The same SVG in the garage and on the HUD, so a stage looks like itself in
+   both places. */
+.stage-map { width: 100%; height: 100%; display: block; overflow: visible; }
+.map-route {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.22);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.map-done {
+  fill: none;
+  stroke: #f2c14e;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.map-cp { fill: rgba(255, 255, 255, 0.5); }
+.map-start { fill: #4fd6a0; }
+.map-finish { fill: var(--hot); }
+.map-car { fill: #ffffff; stroke: #0c0f14; stroke-width: 1; }
+
+/* HUD minimap: top-right. The bottom-right corner belongs to the speed and
+   gear, which must never be covered. */
+.minimap {
+  position: absolute;
+  right: 18px;
+  top: 18px;
+  width: 132px;
+  height: 132px;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(12, 15, 20, 0.55);
+  pointer-events: none;
+}
+
+/* Garage: a thumbnail in each stage row, so the list is browsable by shape. */
+.stage-map-thumb {
+  width: 54px;
+  height: 54px;
+  opacity: 0.85;
+}
+.stage-map-thumb .map-done { display: none; }
+
+/* The basic readouts own an element rather than the whole HUD root. */
+.hud-basic { position: absolute; inset: 0; pointer-events: none; }
+
+/* --- The garage turntable -------------------------------------------------- */
+.garage-car-slot {
+  /* In the header, so the car and its condition are the first thing the garage
+     shows — the repair list underneath is then a list of things you can see. */
+  width: 300px;
+  height: 150px;
+  margin: 0 24px -14px;
+  border-radius: 6px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(0, 0, 0, 0.25));
+  overflow: hidden;
+}
+.garage-car { width: 100%; height: 100%; cursor: grab; }
+.garage-car:active { cursor: grabbing; }
+.garage-car canvas { display: block; width: 100%; height: 100%; }

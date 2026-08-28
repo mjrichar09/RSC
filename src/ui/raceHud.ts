@@ -11,6 +11,7 @@ import type { SettleResult } from '../game/career.js';
 import type { Medal, Race } from '../game/race.js';
 import type { DamageModel } from '../sim/damage.js';
 import type { Stage } from '../sim/stage.js';
+import type { UpcomingCorner } from '../sim/corners.js';
 
 export const formatTime = (seconds: number): string => {
   const m = Math.floor(seconds / 60);
@@ -36,6 +37,9 @@ export class RaceHud {
   private readonly delta: HTMLElement;
   private readonly pace: HTMLElement;
   private readonly best: HTMLElement;
+  private readonly notes: HTMLElement;
+  /** What the notes currently say, so the DOM is only touched when it changes. */
+  private notesKey = '';
   private lastSplitCount = -1;
   private lastPhase = '';
   private ghostTime: number | null = null;
@@ -57,6 +61,7 @@ export class RaceHud {
         <div class="race-progress"><div id="race-progress-fill"></div></div>
         <div class="race-cps" id="race-cps"></div>
       </div>
+      <div class="race-notes" id="race-notes"></div>
       <div class="race-panel" id="race-panel"></div>`;
     parent.appendChild(this.root);
 
@@ -68,6 +73,43 @@ export class RaceHud {
     this.delta = this.root.querySelector('#race-delta')!;
     this.pace = this.root.querySelector('#race-pace')!;
     this.best = this.root.querySelector('#race-best')!;
+    this.notes = this.root.querySelector('#race-notes')!;
+  }
+
+  /**
+   * The co-driver's call: the next two corners and how far away they are.
+   *
+   * Reads the same corner list the roadside boards are built from, so the HUD
+   * and the signs can never disagree — a note that contradicts a board is worse
+   * than no note at all.
+   */
+  setNotes(upcoming: UpcomingCorner[]): void {
+    const key = upcoming
+      .map((u) => `${u.corner.entry}:${Math.max(Math.round(u.distance / 10) * 10, 0)}`)
+      .join('|');
+    if (key === this.notesKey) return;
+    this.notesKey = key;
+
+    if (upcoming.length === 0) {
+      this.notes.innerHTML = '';
+      return;
+    }
+
+    this.notes.innerHTML = upcoming
+      .map((u, i) => {
+        const { corner, distance } = u;
+        const tier = corner.severity <= 2 ? 'tight' : corner.severity <= 4 ? 'mid' : 'fast';
+        // The distance is what turns a note into a call. Under twenty metres it
+        // is no longer a warning — you are in the corner — so it reads "now".
+        const away = distance <= 15 ? 'now' : `${Math.round(distance / 10) * 10} m`;
+        return `
+          <div class="note ${tier} ${i === 0 ? 'next' : 'after'}">
+            <i class="note-arrow ${corner.direction}"></i>
+            <b>${corner.severity}</b>
+            <span>${away}</span>
+          </div>`;
+      })
+      .join('');
   }
 
   /** Personal best for this stage, shown under the clock. Null hides it. */
