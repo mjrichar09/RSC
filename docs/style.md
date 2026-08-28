@@ -75,29 +75,35 @@ at all. The kind of thing that would look right on a rally programme cover.
 - **Risk**: it hides damage. Dents read through shading, and a flat-colour world
   has none — it would need outlines that thicken and break where metal is folded.
 
-## What carries style in every direction
+## What carries style in every direction — built
 
-Worth doing whichever way the plan goes:
+These did not need the direction decided first, so they are in. What is left
+below them is the part that does.
 
-1. **Car identity.** Liveries, numbers, a choice of two or three body shapes.
-   The car is on screen for the entire game and is currently anonymous. The
-   panels are already separate meshes, so a livery is a texture atlas and a
-   number plate is a decal.
-2. **A colour grade per time of day.** Dawn is not day with the lights on. One
-   LUT-ish curve in the existing composite pass, keyed off `Conditions`, would
-   do more for the look than any amount of geometry.
-3. **Typography with a point of view.** The HUD is legible and anonymous. A
-   condensed face for numbers, a stencil for stage names, or period-correct
-   Letraset — a font is the cheapest personality available.
-4. **Sound.** Already synthesised and already good; what is missing is *place* —
-   birds in the forest, wind on the moor, water on the coast, the hollow quiet of
-   snow. Ambience is where a stage becomes a country.
-5. **Spectators and marshals.** Half a dozen instanced figures at the corners
-   that a stage's crowd actually gathers at. Nothing says "this is an event"
-   faster, and they are the same instanced scatter the vegetation uses.
-6. **A replay and a photo mode.** The ghost system already records a run. Free
-   camera, slow motion, and a still with the grade on it — and every screenshot
-   a player posts is marketing.
+1. **Car identity** ✅ — six liveries, each a set of three colours with an accent
+   that keeps the nose reading as the front, plus a competition number on the
+   roof (the panel a fixed isometric camera sees most) and on both doors. Picked
+   beside the garage turntable so the car changes as you press. *Not done: body
+   shape variants, which touch the damage model's panel layout, the debris parts
+   and the turntable, and are a class-structure decision rather than a visual
+   one.*
+2. **A colour grade per time of day** ✅ — lift, gain, contrast, saturation and
+   vignette per time of day, with weather layered on top, riding in the pass the
+   game already runs for the windscreen. Dawn is cold in the shadows and low in
+   contrast; night is blue and nearly colourless; fog is almost all lift.
+3. **Typography** ✅ *as a system* — display, figure and UI roles, one size
+   scale, tabular figures wherever a number changes under load. The actual face
+   is still open, and is now a one-line change.
+4. **Sound of the place** ✅ — wind by biome and weather, surf on a swell for the
+   coast, rain and snowfall hiss, and synthesised birdsong in daylight when the
+   car is not shouting over it. It ducks with speed and keeps breathing quietly
+   behind a menu.
+5. **Spectators and marshals** ✅ — crowds on the outside of the corners,
+   weighted by pacenote severity so a hairpin draws a knot of people and a kink
+   draws nobody, and marshals either side of every gate.
+6. **Replay and photo mode** ✅ — `P`, mid-run or after. Scrub, slow to an
+   eighth, turn the camera in eighths of a turn, zoom, hide the chrome, save a
+   PNG.
 
 ## Cheap wins, ranked
 
@@ -105,14 +111,15 @@ By what they buy per hour spent, best first:
 
 | Idea | Size | What it buys |
 | --- | --- | --- |
-| Colour grade per time of day | S | Dawn, dusk and night stop being the same picture at different brightness |
-| Ambient sound per biome | S | Place, immediately, for no geometry |
-| Livery + number on the car | S/M | The car becomes *your* car |
-| Marshals and spectators at corners | M | It becomes an event rather than an empty road |
-| Skid/rut colour per surface (done) | — | Already in |
+| ~~Colour grade per time of day~~ | S | ✅ in |
+| ~~Ambient sound per biome~~ | S | ✅ in |
+| ~~Livery + number on the car~~ | S/M | ✅ in |
+| ~~Marshals and spectators at corners~~ | M | ✅ in |
+| ~~Replay and photo mode~~ | M | ✅ in |
 | Outline pass | M | The whole screen-print direction, and it makes damage read better |
 | Depth of field | M | The whole diorama direction |
-| Film grade + grain | M | The whole Group B direction |
+| Film grain over the existing grade | S/M | Most of the Group B direction, now that the grade is in |
+| Period signage, barriers and marshal props | M | Where a stage stops being a biome and becomes a country |
 | Car body variants | L | Class structure, and a reason to buy one |
 | Weather on the road surface (wet sheen, ruts filling) | L | Rain stops being a filter and becomes a surface |
 

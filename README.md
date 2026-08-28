@@ -442,6 +442,34 @@ undiscoverable.
 fails to open is a game that cannot be played at all and no unit test would
 notice.
 
+### The look, so far
+
+Four things carry the game's style whichever visual direction it eventually
+takes, so they are built and the direction is still open (see `docs/style.md`):
+
+- **A colour grade per time of day**, riding in the pass that already draws the
+  windscreen. Lift, gain, contrast, saturation and vignette per time of day with
+  weather layered on top — dawn cold in the shadows and low in contrast, night
+  blue and nearly colourless, fog almost all lift. The order is a colourist's:
+  lift moves the black point, gain colours the light, contrast pivots about the
+  midpoint, saturation pulls toward luma last so it cannot undo the colour the
+  light just added.
+- **Ambience by biome**, synthesised like the engine. Wind that rises with the
+  weather, surf on a seven-second swell, rain and snowfall hiss, and birdsong in
+  daylight when the car is not shouting over it. It ducks with speed, because
+  the engine is three metres away, and keeps breathing quietly behind a menu.
+- **Paint and a number.** Six liveries, each a set of three colours whose accent
+  keeps the nose reading as the front, plus a competition number on the roof —
+  the largest panel a fixed isometric camera ever sees — and on both doors.
+- **Crowds.** Spectators on the outside of the corners, weighted by pacenote
+  severity so a hairpin draws a knot of people and a flat-out kink draws nobody,
+  and marshals either side of every gate. An empty road is a test track.
+
+**Photo mode** (`P`) plays back the run's own recording: scrub, slow it to an
+eighth, turn the camera an eighth of a turn at a time, zoom, hide the chrome,
+save a PNG. The camera rule is intact — still orthographic, still fixed, still
+eighths — photo mode only lets the player choose which eighth.
+
 ### Places, not one place in five colours
 
 Every stage used to be the same wood at the same spacing with the ground tinted
