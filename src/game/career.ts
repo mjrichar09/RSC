@@ -249,6 +249,56 @@ export class Career {
     return total;
   }
 
+  /**
+   * What it would cost to make the car able to start at all.
+   *
+   * Separate from `repairEssentials` because the garage has to say the number
+   * before the player can decide whether they can pay it.
+   */
+  essentialsCost(): number {
+    const damage = this.buildDamage();
+    if (!damage.retired) return 0;
+    const broken = new Set(COMPONENTS.filter((c) => damage.get(c.id) <= 0).map((c) => c.id));
+    return this.repairBill()
+      .lines.filter((l) => broken.has(l.id))
+      .reduce((total, line) => total + line.cost, 0);
+  }
+
+  /**
+   * The dead end, and the way out of it.
+   *
+   * A big enough accident can leave the car unable to start and the player
+   * unable to afford the repair that would let them earn the money for it.
+   * Every other tight spot in this game is a decision; that one is just over.
+   *
+   * So: a salvage job. It takes whatever money is left and puts the failed
+   * components back together badly — a quarter health, which drives, overheats,
+   * pulls and will need doing properly the moment there is money for it. It is
+   * deliberately the worst deal in the game, and it is only ever offered when
+   * the alternative is not playing.
+   */
+  get canSalvage(): boolean {
+    return !this.carIsDriveable && this.essentialsCost() > this.money;
+  }
+
+  async salvage(): Promise<boolean> {
+    if (!this.canSalvage) return false;
+    const damage = this.buildDamage();
+    const broken = COMPONENTS.filter((c) => damage.get(c.id) <= 0).map((c) => c.id);
+    const spent = this.money;
+    await this.save.update((p) => {
+      p.money = 0;
+      for (const id of broken) p.carHealth[id] = 0.25;
+      p.totals.spentOnRepairs += spent;
+    });
+    return true;
+  }
+
+  /** Start the career again from nothing. Keeps the player's settings. */
+  async reset(): Promise<void> {
+    await this.save.clear({ keepSettings: true });
+  }
+
   canBuy(id: UpgradeId): boolean {
     const cost = nextCost(this.upgrades, id);
     return cost !== null && cost <= this.money;

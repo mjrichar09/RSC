@@ -402,6 +402,13 @@ async function main(): Promise<void> {
     loadStage(target.def.id, target.variant.id);
   };
 
+  garage.onReset = () => {
+    // A fresh career gets a fresh car: the world is holding the old one's
+    // damage, and leaving it there would hand the new career a wreck.
+    sessionHealth = {};
+    if (!freeRoam) loadStage(STAGES[0]!.id);
+  };
+
   const openGarage = () => {
     if (freeRoam) return;
     // Bank whatever happened before leaving, so damage is never lost by walking

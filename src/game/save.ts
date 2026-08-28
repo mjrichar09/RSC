@@ -266,9 +266,17 @@ export class SaveStore {
     return stored;
   }
 
-  /** Wipe everything. Used by the reset control and by tests. */
-  async clear(): Promise<void> {
+  /**
+   * Wipe everything and start again.
+   *
+   * `keepSettings` holds on to the things that are about the player rather
+   * than about their career — the windscreen strength is a taste setting, and
+   * silently resetting it as part of a career reset would be a small betrayal.
+   */
+  async clear(options: { keepSettings?: boolean } = {}): Promise<void> {
+    const settings = options.keepSettings ? { ...this.profile.settings } : null;
     this.profile = emptyProfile();
+    if (settings) this.profile.settings = settings;
     this.memoryGhosts.clear();
     if (!this.db) return;
     for (const store of ['profile', 'ghosts']) {

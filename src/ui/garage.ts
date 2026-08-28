@@ -47,9 +47,13 @@ export class Garage {
   /** The turntable. Lives across re-renders and is moved into each new one. */
   private readonly car = new GarageCar();
   private open = false;
+  /** Two-step, because there is no undo behind it. */
+  private confirmingReset = false;
 
   /** Raised when the player commits to a stage under particular conditions. */
   onEnter: ((target: RaceTarget) => void) | null = null;
+  /** Raised after a career reset, so the game can put a fresh car on the road. */
+  onReset: (() => void) | null = null;
 
   constructor(parent: HTMLElement, career: Career) {
     this.career = career;
@@ -85,6 +89,20 @@ export class Garage {
         break;
       case 'repair-essentials':
         await this.career.repairEssentials();
+        break;
+      case 'salvage':
+        await this.career.salvage();
+        break;
+      case 'reset':
+        this.confirmingReset = true;
+        break;
+      case 'reset-cancel':
+        this.confirmingReset = false;
+        break;
+      case 'reset-confirm':
+        await this.career.reset();
+        this.confirmingReset = false;
+        this.onReset?.();
         break;
       case 'repair':
         await this.career.repairComponent(id as never);
@@ -145,7 +163,16 @@ export class Garage {
         </div>
         <footer class="garage-foot">
           <span><b>1</b>–<b>${Math.min(9, this.career.targets().length)}</b> enter stage · <b>Esc</b> close · <b>drag</b> the car to turn it</span>
-          <button data-action="close">Close</button>
+          <span class="garage-foot-right">
+            ${
+              this.confirmingReset
+                ? `<span class="reset-warn">Erases every record, ghost, upgrade and penny.</span>
+                   <button class="warn" data-action="reset-confirm">Yes, start again</button>
+                   <button data-action="reset-cancel">Keep my career</button>`
+                : `<button data-action="reset">Reset career</button>`
+            }
+            <button data-action="close">Close</button>
+          </span>
         </footer>
       </div>`;
 
@@ -216,7 +243,7 @@ export class Garage {
             <div class="stage-map-thumb">${stageThumb(def)}</div>
             <div class="stage-body">
               <div class="stage-name">${def.name} <span class="dim">· ${variant.name}</span></div>
-              <div class="stage-meta">${def.biome} · ${variant.entryFee === 0 ? 'free entry' : `entry ${money(variant.entryFee)}`}${
+              <div class="stage-meta">${def.biome}${
                 check.reason === 'locked' ? ` · <span class="locked-note">locked</span>` : ''
               }</div>
               <div class="stage-meta">${best}</div>
@@ -224,9 +251,18 @@ export class Garage {
             <div class="stage-pay">
               <div><b style="color:${MEDAL_TINT.gold}">${money(variant.payouts.gold)}</b> gold</div>
               <div class="dim">${money(variant.payouts.finish)} finish</div>
+              <div class="stage-fee ${variant.entryFee > this.career.money ? 'bad' : ''}">
+                ${variant.entryFee === 0 ? 'free to enter' : `entry ${money(variant.entryFee)}`}
+              </div>
             </div>
             <button data-action="enter" data-id="${this.career.keyFor(target)}" ${check.allowed ? '' : 'disabled'}>
-              ${check.allowed ? 'Enter' : reason}
+              ${
+                check.allowed
+                  ? variant.entryFee === 0
+                    ? 'Enter · free'
+                    : `Enter · ${money(variant.entryFee)}`
+                  : reason
+              }
             </button>
           </div>`;
       })
@@ -254,9 +290,24 @@ export class Garage {
       .join('');
 
     // Fixing only what stops the car starting is the move when money is tight.
+    const cost = this.career.essentialsCost();
     const essentials = this.career.carIsDriveable
       ? ''
-      : `<button class="wide warn" data-action="repair-essentials">Repair essentials only</button>`;
+      : this.career.canSalvage
+        ? // The dead end: the car cannot start and the repair that would let it
+          // costs more than there is. Salvage is the way out, and it is meant
+          // to hurt — everything you have, for a car that only just runs.
+          `<p class="dim pad">
+             The car cannot start, and the ${money(cost)} to make it start is more
+             than you have. A salvage job takes everything left and puts the broken
+             parts back together at a quarter strength — enough to earn again.
+           </p>
+           <button class="wide warn" data-action="salvage">
+             Salvage the car · ${money(this.career.money)}
+           </button>`
+        : `<button class="wide warn" data-action="repair-essentials">
+             Repair essentials only · ${money(cost)}
+           </button>`;
 
     return `
       <h3>REPAIRS</h3>

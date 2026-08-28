@@ -953,3 +953,10 @@ html, body {
 .standing span { margin-left: auto; color: var(--dim); font-variant-numeric: tabular-nums; }
 .standing.you { border-left-color: var(--accent); }
 .standing.you b { color: var(--accent); }
+
+/* Entry fee, said where the decision is made rather than in the small print. */
+.stage-fee { font-size: 11px; letter-spacing: 0.06em; color: var(--dim); margin-top: 2px; }
+.stage-fee.bad { color: var(--hot); }
+
+.garage-foot-right { display: flex; gap: 8px; align-items: center; }
+.reset-warn { color: var(--hot); font-size: 11px; letter-spacing: 0.06em; }

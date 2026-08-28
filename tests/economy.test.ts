@@ -13,7 +13,7 @@ import { CAR } from '../src/data/tuning.js';
 import { Career, type RaceTarget } from '../src/game/career.js';
 import { RECOVERY_FLOOR, canEnter, ledger, payout } from '../src/game/economy.js';
 import { UPGRADES, investedIn, nextCost, rollcageMitigation, tuneFor } from '../src/game/garage.js';
-import { SaveStore } from '../src/game/save.js';
+import { SaveStore, STARTING_MONEY } from '../src/game/save.js';
 import { impactPointFromForce } from '../src/sim/damage.js';
 import { v3 } from '../src/sim/math.js';
 import { stageVariants } from '../src/sim/stage.js';
@@ -361,6 +361,79 @@ describe('career', () => {
 
     for (const d of [bare, caged]) d.applyImpact(impactPointFromForce(HEAD_ON), 26_000);
     expect(caged.get('engine')).toBeGreaterThan(bare.get('engine'));
+  });
+});
+
+describe('the dead end, and the ways out of it', () => {
+  let career: Career;
+  let save: SaveStore;
+
+  beforeEach(async () => {
+    save = new SaveStore();
+    await save.open();
+    await save.clear();
+    career = new Career(save, STAGES);
+  });
+
+  /** Wreck the engine and empty the wallet: the one state with no move in it. */
+  const stranded = async () => {
+    await save.update((p) => {
+      p.money = 40;
+      p.carHealth = { engine: 0, cooling: 0 };
+    });
+  };
+
+  it('recognises a car that cannot start and cannot be afforded', async () => {
+    await stranded();
+    expect(career.carIsDriveable).toBe(false);
+    expect(career.essentialsCost()).toBeGreaterThan(career.money);
+    // Every stage is refused, including the free one — which is the dead end.
+    expect(career.targets().every((t) => !career.canEnter(t).allowed)).toBe(true);
+    expect(career.canSalvage).toBe(true);
+  });
+
+  it('salvages the car back to something that runs, for everything you have', async () => {
+    await stranded();
+    expect(await career.salvage()).toBe(true);
+
+    expect(career.money).toBe(0);
+    expect(career.carIsDriveable).toBe(true);
+    // Badly: a quarter health is a car that overheats, pulls and wants doing
+    // properly. It is the worst deal in the game and that is the point.
+    expect(career.profile.carHealth.engine).toBe(0.25);
+    // And the free stage is enterable again, which is the whole purpose.
+    const free = career.targets().find((t) => t.variant.entryFee === 0)!;
+    expect(career.canEnter(free).allowed).toBe(true);
+  });
+
+  it('is not offered when the player can simply pay', async () => {
+    await save.update((p) => {
+      p.money = 20_000;
+      p.carHealth = { engine: 0 };
+    });
+    expect(career.canSalvage).toBe(false);
+    expect(await career.salvage()).toBe(false);
+    expect(await career.repairEssentials()).toBeGreaterThan(0);
+    expect(career.carIsDriveable).toBe(true);
+  });
+
+  it('resets a career without resetting the player', async () => {
+    await save.update((p) => {
+      p.money = 12;
+      p.carHealth = { engine: 0.1 };
+      p.upgrades = { rollcage: 2 } as never;
+      p.records['pine-loop:day-clear'] = { time: 61.2, medal: 'gold', setAt: 1 };
+      p.settings.vision = 0.35;
+    });
+
+    await career.reset();
+
+    expect(career.money).toBe(STARTING_MONEY);
+    expect(career.profile.records).toEqual({});
+    expect(career.profile.upgrades).toEqual({});
+    expect(career.profile.carHealth).toEqual({});
+    // The windscreen strength is a taste setting, not a career achievement.
+    expect(career.profile.settings.vision).toBe(0.35);
   });
 });
 

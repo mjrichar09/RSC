@@ -354,6 +354,20 @@ unlock order is checked by a test: with N stages open a player can hold at most
 N medals, so a requirement above a stage's own position in the order would
 dead-end the career with money in the bank and nothing to spend it on.
 
+**Entry fees are shown where the decision is made** — on the button you press,
+not in the small print under the biome.
+
+**Two ways out of a hole.** A big enough accident can leave the car unable to
+start and the player unable to afford the repair that would let them earn the
+money for it. Every other tight spot here is a decision; that one is just over.
+So the garage offers a *salvage job* when — and only when — the essential repair
+costs more than the player has: it takes every penny left and puts the failed
+parts back together at a quarter health. The car runs, badly, and wants doing
+properly the moment there is money. It is deliberately the worst deal in the
+game. Failing that, **Reset career** at the foot of the garage starts again from
+nothing, behind a two-step confirmation, and keeps the player's own settings
+because a windscreen preference is not a career achievement.
+
 **Damage belongs to the car, not the run.** It follows you to the next start
 line unless you pay to put it right, and a failed component stops you entering
 at all — which is what makes declining a repair a real gamble rather than free
@@ -378,6 +392,33 @@ enough to stop you sliding and abrasive enough to punish it; ice barely wears a
 tyre at all. This is what connects driving style directly to the repair bill: a
 careful lap costs a few percent of tyre life, while a committed lap on soft
 compounds can cost ten times that.
+
+### Damage you can feel
+
+A component that changes nothing you can feel is a tax, not a consequence, and
+three of them were exactly that until they were measured:
+
+- **The steering rack** pulls hard when it is bent — 12 m of deviation in two
+  seconds, hands-off, at half health. Nothing ever bent it: `npm run crash` had
+  it surviving a 95 km/h nose-on impact at 87%, a pull of about a degree and a
+  half. It sits across the front subframe behind a radiator made of foil, so it
+  is reachable now: 77% at 51 km/h, 37% at 95. The pull is signed by whichever
+  front wing is worse, so it agrees with the bodywork rather than always going
+  the same way.
+- **A flat tyre** drags and pulls. The drag is real rolling resistance at that
+  corner and costs a third of the car's speed. The pull needed a second
+  mechanism: measured, 0.3 of extra rolling resistance on one front corner moved
+  the car 0.1 m sideways in two seconds, because the tyres simply take the yaw
+  moment. What a driver feels in a real car is the wheel fighting them, so a
+  deflated front tyre offsets the steering — 6.6 m of pull in two seconds,
+  correctable but constant. A rear flat drags and does not pull, which is the
+  difference worth keeping, and the corner sits down on its rim.
+- **A terminal failure no longer teleports you to a results screen.** Steam
+  comes out of the bonnet about eight seconds before a holed radiator finishes
+  the engine. Then the engine stops — no torque, no revs, silent — and the car
+  coasts. It still steers and still brakes, so you can bring it to a stop, put
+  it in the scenery, or roll over the finish line on momentum. The run ends when
+  the car does.
 
 ### Ghosts
 
