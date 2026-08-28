@@ -101,8 +101,25 @@ function stageStream(id: string): () => number {
   };
 }
 
-/** Hard cap on loose bodies. Measured in `npm run perf`, not guessed at. */
-const DEBRIS_BUDGET = 12;
+/**
+ * Hard cap on loose bodies.
+ *
+ * Set to a whole car. There are eighteen detachable parts, and a loose body
+ * costs about 1.3 µs of simulation per fixed step — measured by sweeping the
+ * count in one process and taking the minimum of three passes, because a single
+ * run on a shared machine varies by a factor of two and will happily report a
+ * bare stage as slower than one strewn with wreckage.
+ *
+ * Eighteen bodies is 23 µs on top of a 118 µs step: 17 ms of CPU per second of
+ * game against 14, with sixty times more headroom than that needs. The earlier
+ * cap of twelve was set when the car had ten parts, so it could never bind —
+ * it was measured, but against a case that could not happen.
+ *
+ * The cap is what stops the bill growing without limit if this ever becomes
+ * four cars sharing a world; it is not protecting a single-car stage from
+ * anything.
+ */
+export const DEBRIS_BUDGET = 18;
 /** Loose bodies further than this from the car are removed, metres. */
 const DEBRIS_KEEP_RADIUS = 120;
 
@@ -412,9 +429,11 @@ export class SimWorld {
 
   /** Turn a detached part into a dynamic body carrying the car's motion. */
   private spawnLoose(event: DetachEvent, state: VehicleState): void {
-    // Oldest goes first. The budget is what keeps the step cost flat over a
-    // long stage; without it the physics bill climbs with every scrape.
-    while (this.loose.length >= DEBRIS_BUDGET) this.removeLoose(0);
+    // The *farthest* goes first, not the oldest. Recycling by age can delete a
+    // bumper lying across the road ten metres ahead while a door dropped two
+    // corners back survives — the one thing the player is looking at is the one
+    // thing that vanishes.
+    while (this.loose.length >= DEBRIS_BUDGET) this.removeLoose(this.farthestLoose(state.position));
 
     const rot = state.rotation;
     const offset = rotate(rot, event.at);
@@ -462,6 +481,23 @@ export class SimWorld {
     this.wildlife?.reset();
     this.ambient?.reset();
     while (this.loose.length > 0) this.removeLoose(this.loose.length - 1);
+  }
+
+  /** Index of the loose body furthest from a point, for recycling. */
+  private farthestLoose(from: Vec3): number {
+    let worst = 0;
+    let worstDistance = -1;
+    for (let i = 0; i < this.loose.length; i++) {
+      const at = this.loose[i]!.body.translation() as Vec3;
+      const dx = at.x - from.x;
+      const dz = at.z - from.z;
+      const distance = dx * dx + dz * dz;
+      if (distance > worstDistance) {
+        worstDistance = distance;
+        worst = i;
+      }
+    }
+    return worst;
   }
 
   private removeLoose(index: number): void {

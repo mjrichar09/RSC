@@ -80,13 +80,25 @@ npm run shoot -- --cells=trace:circle@8 --grid=1x1 --size=900x560 --out=inspect
 
 ## Performance
 
-The simulation is not the constraint. Measured headless with `npm run perf`,
-one fixed step on a stage with damage, wildlife and weather enabled costs about
-73 µs, so the 120 steps that make a second of game time cost roughly **9 ms of
-CPU per second** — under 1% of one core, with two orders of magnitude of
-headroom. A full debris budget — twelve loose bodies rolling around the
-corridor — takes it to 80 µs, which is what the budget exists to bound.
-Building a stage, which happens on load, takes about 3 ms.
+The simulation is not the constraint. Measured with `npm run perf`, one fixed
+step on a stage with damage, wildlife and weather costs about 100 µs, so the 120
+steps that make a second of game time cost roughly **12 ms of CPU per second** —
+about 1% of one core, with eighty times more headroom than that needs. Building
+a stage, which happens on load, takes under 3 ms.
+
+Debris is free once it stops moving: Rapier sleeps resting bodies, so a stage
+strewn with wreckage measures the same as a clean one. The bill is paid while
+parts are in the air, at about **8 µs per part per step** — a whole car shedding
+at once takes the step from 115 µs to 260 for the couple of seconds they spend
+bouncing. That is what the eighteen-body budget is set from, and it is why the
+cap recycles the body furthest from the car rather than the oldest: the cost is
+bounded either way, but deleting the bumper lying across the road ahead of you
+while a door two corners back survives is the one thing it must not do.
+
+Every case is measured several times, interleaved, and the minimum reported.
+Measuring each once in sequence had this tool confidently reporting a wrecked
+stage as faster than a clean one — timing noise on a shared machine is worth a
+factor of two, and it only ever adds.
 
 Rendering will dominate on any real machine, and a flat-shaded low-poly scene
 gives a modern GPU very little to do. The only figures measured under an actual

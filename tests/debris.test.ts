@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { DebrisModel, PARTS, PART_BY_ID, type PartId } from '../src/sim/debris.js';
-import { createWorld } from '../src/sim/world.js';
+import { DEBRIS_BUDGET, createWorld } from '../src/sim/world.js';
 import { v3 } from '../src/sim/math.js';
 
 const NEUTRAL = { throttle: 0, brake: 0, steer: 0, handbrake: 0 };
@@ -113,19 +113,45 @@ describe('debris in the world', () => {
     expect(Math.abs(body.linvel().z)).toBeGreaterThan(1);
   });
 
-  it('keeps within its budget however much comes off', async () => {
+  it('has room for every part of one car', async () => {
+    // The budget is a whole car, so nothing a single car can do to itself ever
+    // makes a part disappear. It costs about 1.3 µs of step time per body.
+    expect(DEBRIS_BUDGET).toBeGreaterThanOrEqual(PARTS.length);
+
     const world = await createWorld({ baseSurface: 'tarmac', damage: true });
     for (let i = 0; i < 60; i++) world.step(NEUTRAL);
-    // More parts than the budget: a completely destroyed car sheds twenty-odd
-    // pieces and only the most recent twelve stay in the world.
-    expect(PARTS.length).toBeGreaterThan(12);
     for (const part of PARTS) world.debris!.detach(part);
     world.step(NEUTRAL);
-    expect(world.loose).toHaveLength(12);
-    // Oldest recycled first, so what is on the road is what just came off.
-    const shed = world.loose.map((l) => l.id);
-    expect(shed).toContain(PARTS[PARTS.length - 1]!.id);
-    expect(shed).not.toContain(PARTS[0]!.id);
+    expect(world.loose).toHaveLength(PARTS.length);
+  });
+
+  it('recycles the furthest body, not the oldest', async () => {
+    // When the cap does bite, what gets deleted must never be the thing the
+    // player is looking at. Overflowing it takes two carloads: shedding
+    // everything, putting the parts back on, and shedding them again 200 m
+    // later — which is also roughly what four cars in one world would do.
+    const world = await createWorld({ baseSurface: 'tarmac', damage: true });
+    for (let i = 0; i < 60; i++) world.step(NEUTRAL);
+
+    for (const part of PARTS) world.debris!.detach(part);
+    world.step(NEUTRAL);
+    const firstBatch = world.loose.map((l) => l.body.translation().z);
+
+    // Far enough to be a different part of the stage, but inside the radius
+    // that would have cleaned the first batch up on its own.
+    world.vehicle.reset(v3(0, 1.2, 80), 0);
+    world.debris!.reset();
+    for (const part of PARTS) world.debris!.detach(part);
+    world.step(NEUTRAL);
+
+    expect(world.loose).toHaveLength(DEBRIS_BUDGET);
+    // Everything left is the batch that was just shed, near the car; the
+    // distant first batch is what went.
+    const here = world.state().position;
+    for (const body of world.loose) {
+      expect(Math.abs(body.body.translation().z - here.z)).toBeLessThan(40);
+    }
+    expect(Math.min(...firstBatch)).toBeLessThan(40);
   });
 
   it('clears what is far behind, and everything on a restart', async () => {
