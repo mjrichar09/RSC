@@ -36,11 +36,12 @@ jobs:
       # published site.
       - run: npm run build
 
+      # Pages itself has to be switched on once, by hand, under
+      # Settings -> Pages -> Source: GitHub Actions. The workflow token is not
+      # allowed to do it (`Resource not accessible by integration`), so asking
+      # it to only turns the first run red for a reason nobody can act on from
+      # the log.
       - uses: actions/configure-pages@v5
-        with:
-          # Turn Pages on the first time this runs, rather than needing someone
-          # to find the setting.
-          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
