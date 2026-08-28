@@ -23,7 +23,14 @@ import { TRACES, sampleTrace } from './sim/trace.js';
 import { SimWorld, initPhysics } from './sim/world.js';
 import { Mixer } from './audio/mixer.js';
 import { CarView } from './render/carView.js';
-import { ParticleField, Precipitation, SkidMarks, emitDragSparks, updateWheelEffects } from './render/fx.js';
+import {
+  ParticleField,
+  Precipitation,
+  SkidMarks,
+  emitDragSparks,
+  emitSteam,
+  updateWheelEffects,
+} from './render/fx.js';
 import { IsoCamera } from './render/camera.js';
 import {
   keyLightOffset,
@@ -165,6 +172,15 @@ async function main(): Promise<void> {
   tagLayer.className = 'tags';
   hudRoot.appendChild(tagLayer);
   let stuckFor = 0;
+  /**
+   * A failure the car cannot continue from, and how long it has been stopped.
+   *
+   * The race does not end at the moment something breaks. The engine dies, and
+   * the car coasts: it still steers, still brakes, and if the line is close
+   * enough it still crosses it. Ending the run the instant a component failed
+   * threw away the most dramatic twenty seconds a race can have.
+   */
+  let terminal: { label: string; stopped: number } | null = null;
   let ghost: GhostPlayer | null = null;
   const recorder = new GhostRecorder();
 
@@ -245,6 +261,7 @@ async function main(): Promise<void> {
     applyCarCondition();
     race = new Race(stage, variant.medals);
     settled = false;
+    terminal = null;
     damagePanel.reset();
     raceHud.setStage(stage, variant.name, variant.medals);
     minimap.setStage(stage);
@@ -330,6 +347,7 @@ async function main(): Promise<void> {
       particles.clear();
       skids.clear();
       settled = false;
+      terminal = null;
       raceHud.setLedger(null);
       damagePanel.reset();
       camera.applyZones(stage.cameraZones, 0);
@@ -935,8 +953,21 @@ async function main(): Promise<void> {
         damagePanel.report(world.damage.drainEvents());
         damagePanel.update(world.damage);
 
+        // A terminal failure stops the engine; it does not stop the race. The
+        // run ends when the car does — or does not end at all, if the car
+        // rolls over the line first.
         const failure = [...world.damage.failures][0];
-        if (failure && race.phase === 'running') race.retire(FAILURE_LABEL[failure]);
+        if (failure && race.phase === 'running' && !terminal) {
+          terminal = { label: FAILURE_LABEL[failure], stopped: 0 };
+          damagePanel.notice(`${FAILURE_LABEL[failure]} — coasting, brake to stop`);
+        }
+      }
+
+      if (terminal && race.phase === 'running') {
+        terminal.stopped = Math.abs(state.speed) < 0.8 ? terminal.stopped + dt : 0;
+        // Half a second of genuinely stopped, so a car pausing against a rock
+        // on its way down a hill is not called a retirement.
+        if (terminal.stopped > 0.5) race.retire(terminal.label);
       }
 
       if (race.phase === 'running') {
@@ -974,7 +1005,9 @@ async function main(): Promise<void> {
 
       // Beaching the chassis across the verge with all four wheels dangling is
       // unrecoverable by driving, so the game recovers for you.
-      if (race.phase === 'running' && Math.abs(state.speed) < 1) {
+      // A car with a dead engine is not stuck, it is finished coasting, and
+      // putting it back on the road would be putting a corpse on the road.
+      if (race.phase === 'running' && !terminal && Math.abs(state.speed) < 1) {
         stuckFor += dt;
         if (stuckFor > AUTO_RESCUE_AFTER) {
           world.rescue(race.furthest);
@@ -989,6 +1022,20 @@ async function main(): Promise<void> {
     // number the physics uses — so what you see and hear is what is happening.
     if (!garage.isOpen) {
       updateWheelEffects(particles, skids, state.wheels, state.velocity, dt);
+      // Steam from a boiling radiator, out of the bonnet vents.
+      const boiling = world.damage?.boiling ?? 0;
+      if (boiling > 0) {
+        const t = world.renderTransform(1);
+        const vent = rotate(t.rotation, { x: 0, y: 0.55, z: 1.15 });
+        emitSteam(
+          particles,
+          { x: t.position.x + vent.x, y: t.position.y + vent.y, z: t.position.z + vent.z },
+          state.velocity,
+          boiling,
+          dt,
+        );
+      }
+
       // Anything scraping along the road throws sparks from where it touches.
       for (const id of world.debris?.dragging() ?? []) {
         const at = carView.dragPoint(id);

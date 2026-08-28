@@ -160,8 +160,11 @@ export class EngineVoice {
     // A misfire is a momentary cut, and so is a gearshift — the note has to
     // break, or shifts are invisible to the ear and the car sounds like a
     // single-speed.
+    // A stalled engine is silent, and that silence is information: the moment
+    // the note stops is the moment the player knows they are coasting.
+    const dead = input.rpm <= 1;
     const cut = input.misfiring || input.shifting;
-    const level = cut ? 0.02 : 0.05 + load * 0.09 + revs * 0.05;
+    const level = dead ? 0 : cut ? 0.02 : 0.05 + load * 0.09 + revs * 0.05;
     this.out.gain.setTargetAtTime(
       level * (0.55 + 0.45 * input.health),
       now,

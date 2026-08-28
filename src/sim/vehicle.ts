@@ -128,10 +128,13 @@ const PRISTINE: DamageEffects = {
   wheelBrake: [1, 1, 1, 1],
   wheelSuspension: [1, 1, 1, 1],
   wheelLost: [false, false, false, false],
+  wheelDrag: [0, 0, 0, 0],
+  wheelSink: [0, 0, 0, 0],
   steeringOffset: 0,
   steeringRange: 1,
   dragScale: 1,
   shiftFailure: 0,
+  stalled: false,
   retired: false,
 };
 
@@ -299,7 +302,9 @@ export class Vehicle {
       const w = this.wheels[i]!;
       const mountLocal = t.wheelPositions[i]!;
       const mount = add(pos, rotate(rot, mountLocal));
-      const maxToi = t.suspensionRestLength + t.wheelRadius;
+      // A deflated tyre sits the corner down on its sidewall, so the car
+      // leans on that corner and the ride height goes with it.
+      const maxToi = t.suspensionRestLength + t.wheelRadius - fx.wheelSink[i]!;
 
       if (fx.wheelLost[i]) {
         // A detached wheel carries no load and generates no force at all.
@@ -423,7 +428,12 @@ export class Vehicle {
     const driveInput = inReverse ? input.brake : input.throttle;
     const brakeInput = inReverse ? input.throttle : input.brake;
 
-    const engineTorque = this.engineTorque(driveInput) * fx.engineTorque * (fx.misfiring ? 0 : 1);
+    // A stalled engine makes nothing and brakes nothing: it is disconnected,
+    // not seized to the driveline. The car rolls, steers and brakes exactly as
+    // it did — which is what lets a dead car coast over a finish line.
+    const engineTorque = fx.stalled
+      ? 0
+      : this.engineTorque(driveInput) * fx.engineTorque * (fx.misfiring ? 0 : 1);
     // How hard the engine is working, signed, each direction normalised to what
     // it can actually do that way: peak torque on power, and full engine
     // braking at these revs on the overrun. Normalising both against peak
@@ -509,7 +519,8 @@ export class Vehicle {
       w.slipRatio = sr;
       w.saturation = f.saturation;
 
-      const rolling = -Math.sign(vForward) * w.surface.rollingResistance * susp[i]!;
+      const rolling =
+        -Math.sign(vForward) * (w.surface.rollingResistance + fx.wheelDrag[i]!) * susp[i]!;
       const tireForce = add(scale(forward, f.longitudinal + rolling), scale(right, f.lateral));
       body.addForceAtPoint(tireForce, h.point, true);
 
@@ -673,7 +684,11 @@ export class Vehicle {
 
     const ratio = t.gearRatios[this.gearIndex] ?? 1;
     const rawRpm = Math.abs(avgSpin * ratio * t.finalDrive) * RPM_PER_RAD_S;
-    this.engineRpm = clamp(Math.max(rawRpm, t.idleRpm), t.idleRpm, t.maxRpm);
+    // A stalled engine is not idling: it is stopped, and the rev counter says
+    // so. Without this the HUD keeps a dead car ticking over at idle.
+    this.engineRpm = this.effects.stalled
+      ? 0
+      : clamp(Math.max(rawRpm, t.idleRpm), t.idleRpm, t.maxRpm);
 
     // Reverse engages from a near-stop when braking with no throttle, and is
     // left again by applying throttle once the car has stopped rolling back.

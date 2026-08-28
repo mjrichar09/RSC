@@ -92,7 +92,12 @@ export const COMPONENTS: ComponentDef[] = [
   corner('transmission', 'Gearbox', v3(0, -0.2, 0.6), 19000, 34000, 2600, 1.1),
   corner('driveshaft', 'Driveshaft', v3(0, -0.32, 0), 26000, 22000, 1400, 1.6),
   corner('differential', 'Differential', v3(0, -0.3, -1.25), 19000, 34000, 1900, 1.0),
-  corner('steering', 'Steering rack', v3(0, -0.24, 1.15), 14000, 26000, 1100, 1.0),
+  // The rack was tough enough to be theoretical: measured with `npm run crash`
+  // it survived a 95 km/h nose-on impact at 87%, which is a 1.5° pull nobody
+  // will ever notice. It sits across the front subframe behind a radiator made
+  // of foil, and a hit hard enough to fold the nose bends it. Widened too, so a
+  // corner strike on a front wheel reaches it — that is how racks actually die.
+  corner('steering', 'Steering rack', v3(0, -0.24, 1.15), 8500, 17000, 1100, 1.45),
   corner('fuelLine', 'Fuel line', v3(0, -0.32, -0.8), 15000, 26000, 340, 1.0),
   corner('lights', 'Lights', v3(0, 0.12, 1.94), 4000, 9000, 260, 0.9),
 
@@ -172,6 +177,18 @@ export interface DamageEffects {
   wheelSuspension: [number, number, number, number];
   /** Wheels that have detached. Those corners have no grip and no suspension. */
   wheelLost: [boolean, boolean, boolean, boolean];
+  /**
+   * Extra rolling resistance at each corner, on top of the surface's own.
+   *
+   * This is what a flat tyre actually does: a deflated carcass folds under load
+   * and drags. Applied at the contact point, so one flat front corner yaws the
+   * car toward itself without any explicit "pull" term — the pull is the drag,
+   * which is why it gets stronger the faster you go and disappears when you
+   * stop.
+   */
+  wheelDrag: [number, number, number, number];
+  /** How far each corner sits down on a deflated tyre, metres. */
+  wheelSink: [number, number, number, number];
   /** Constant steering offset from a bent rack, radians. Pulls to one side. */
   steeringOffset: number;
   steeringRange: number;
@@ -179,6 +196,14 @@ export interface DamageEffects {
   dragScale: number;
   /** Chance per shift that the gearbox refuses. */
   shiftFailure: number;
+  /**
+   * The engine has stopped and will not restart.
+   *
+   * Set by any terminal failure. The car still rolls, still steers and still
+   * brakes — it is a dead car with momentum, not a car that vanishes, which is
+   * what makes coasting over the line on a seized engine possible.
+   */
+  stalled: boolean;
   retired: boolean;
 }
 
@@ -318,6 +343,18 @@ export class DamageModel {
   }
 
   /** True once the car can no longer complete the stage. */
+  /**
+   * How hard the cooling system is boiling over, 0..1.
+   *
+   * Above 0 there is steam coming out of the bonnet, and this is the only
+   * warning that arrives before the engine stops. It starts well before the
+   * failure — about twenty seconds of racing at pace — because a warning that
+   * arrives with the failure is not a warning.
+   */
+  get boiling(): number {
+    return clamp((this.temperature - 0.82) / 0.28, 0, 1);
+  }
+
   get retired(): boolean {
     return this.failures.size > 0;
   }
@@ -541,11 +578,20 @@ export class DamageModel {
     const wheelSuspension: [number, number, number, number] = [1, 1, 1, 1];
     const wheelLost: [boolean, boolean, boolean, boolean] = [false, false, false, false];
 
+    const wheelDrag: [number, number, number, number] = [0, 0, 0, 0];
+    const wheelSink: [number, number, number, number] = [0, 0, 0, 0];
+
     WHEEL_KEYS.forEach((key, i) => {
       const tyre = this.get(`tyre${key}` as ComponentId);
       const hub = this.get(`hub${key}` as ComponentId);
       // A punctured tyre keeps a little grip on the rim, and not much.
       wheelGrip[i] = tyre <= 0 ? 0.22 : 0.45 + 0.55 * tyre;
+      // Below about a fifth of tread the carcass starts folding under load;
+      // at zero it is running on the rim. Rolling resistance is what the
+      // driver feels first — the car pulls, and it will not hold top speed.
+      const deflation = clamp((0.2 - tyre) / 0.2, 0, 1);
+      wheelDrag[i] = deflation * 0.16;
+      wheelSink[i] = deflation * 0.055;
       // Fade is folded in here rather than in the vehicle, so every consumer of
       // `wheelBrake` — including the AI — feels hot brakes without knowing why.
       wheelBrake[i] = this.get(`brake${key}` as ComponentId) * this.brakeFade(i);
@@ -554,8 +600,21 @@ export class DamageModel {
     });
 
     // A bent rack pulls the car to one side by an amount you have to hold out.
+    // Which side is not a coin flip: it is whichever front corner took the
+    // hit, so the pull agrees with the damage you can see on the car.
     const steering = this.get('steering');
     const damage = 1 - steering;
+    const side = this.get('wingFL') <= this.get('wingFR') ? -1 : 1;
+
+    // A flat front tyre pulls, and in a game with no force feedback the only
+    // honest way to say so is the same one the bent rack uses: the wheel sits
+    // off centre and you hold it straight yourself. Drag alone does not do it —
+    // measured, 0.3 of extra rolling resistance on one front corner moved the
+    // car 0.1 m sideways in two seconds, because the tyres simply take the yaw
+    // moment. What the driver of a real car feels there is the wheel fighting
+    // them, not the car leaving the road.
+    const deflated = (id: ComponentId) => clamp((0.2 - this.get(id)) / 0.2, 0, 1);
+    const pull = (deflated('tyreFL') - deflated('tyreFR')) * 0.055;
 
     const panels =
       (this.get('panelFront') + this.get('panelRear') + this.get('panelLeft') + this.get('panelRight')) / 4;
@@ -568,12 +627,17 @@ export class DamageModel {
       wheelBrake,
       wheelSuspension,
       wheelLost,
+      wheelDrag,
+      wheelSink,
       // Signed by which side the rack bent toward, kept deterministic by
       // deriving it from the component id rather than from a coin flip.
-      steeringOffset: damage * 0.12,
+      // `|| 0` because a signed zero is still a zero, and a test that compares
+      // against +0 should not fail because the undamaged side came out -0.
+      steeringOffset: damage * 0.12 * side - pull || 0,
       steeringRange: 1 - damage * 0.45,
       dragScale: 1 + (1 - panels) * 0.35,
       shiftFailure: (1 - this.get('transmission')) * 0.4,
+      stalled: this.retired,
       retired: this.retired,
     };
   }

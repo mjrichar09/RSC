@@ -384,6 +384,42 @@ export function emitDragSparks(
   }
 }
 
+const STEAM_COLOR = new THREE.Color(0xd7e2e8);
+
+/**
+ * Steam from a boiling cooling system.
+ *
+ * The point is warning. An overheat used to arrive as a line of text and then
+ * a dead engine; a plume out of the bonnet gives the player the twenty seconds
+ * before that to decide whether to lift, and makes the decision visible from
+ * the car rather than from the damage panel.
+ *
+ * It rises and drifts backwards over the car rather than being left behind,
+ * because it is coming from under a bonnet moving through its own air.
+ */
+export function emitSteam(
+  particles: ParticleField,
+  at: Vec3,
+  carVelocity: Vec3,
+  intensity: number,
+  dt: number,
+): void {
+  if (intensity <= 0) return;
+  const count = Math.min(Math.round(intensity * 26 * dt * 60), 6);
+  for (let n = 0; n < count; n++) {
+    scratch.x = -carVelocity.x * 0.25 + (Math.random() - 0.5) * 1.4;
+    scratch.y = 2.2 + Math.random() * 2.2;
+    scratch.z = -carVelocity.z * 0.25 + (Math.random() - 0.5) * 1.4;
+    particles.emit(
+      at,
+      scratch,
+      STEAM_COLOR,
+      0.5 + Math.random() * 0.7,
+      0.7 + Math.random() * 0.6,
+    );
+  }
+}
+
 /**
  * Emit spray and lay marks for the current wheel states.
  *

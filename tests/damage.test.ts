@@ -159,8 +159,45 @@ describe('handling effects', () => {
     const d = new DamageModel({ random: () => 1 });
     d.health.set('steering', 0.3);
     const fx = d.effects();
-    expect(fx.steeringOffset).toBeGreaterThan(0);
+    expect(Math.abs(fx.steeringOffset)).toBeGreaterThan(0);
     expect(fx.steeringRange).toBeLessThan(1);
+  });
+
+  it('pulls toward whichever front corner took the hit', () => {
+    // Not a coin flip: the pull has to agree with the bodywork, or the first
+    // time it disagrees it reads as a bug in the steering.
+    const bent = (wingFL: number, wingFR: number) => {
+      const d = new DamageModel({ random: () => 1 });
+      d.health.set('steering', 0.3);
+      d.health.set('wingFL', wingFL);
+      d.health.set('wingFR', wingFR);
+      return d.effects().steeringOffset;
+    };
+    expect(Math.sign(bent(0.2, 1))).toBe(-Math.sign(bent(1, 0.2)));
+  });
+
+  it('pulls toward a flat front tyre, and not toward a flat rear one', () => {
+    const offset = (id: 'tyreFL' | 'tyreFR' | 'tyreRL') => {
+      const d = new DamageModel({ random: () => 1 });
+      d.health.set(id, 0);
+      return d.effects().steeringOffset;
+    };
+    expect(offset('tyreFL')).toBeLessThan(0);
+    expect(offset('tyreFR')).toBeGreaterThan(0);
+    expect(offset('tyreRL')).toBe(0);
+  });
+
+  it('makes a deflating tyre drag before it is flat', () => {
+    // A puncture is not a switch. Below about a fifth of tread the carcass
+    // starts folding, and the drag is what the driver notices first.
+    const drag = (health: number) => {
+      const d = new DamageModel({ random: () => 1 });
+      d.health.set('tyreFL', health);
+      return d.effects().wheelDrag[0];
+    };
+    expect(drag(0.5)).toBe(0);
+    expect(drag(0.1)).toBeGreaterThan(0);
+    expect(drag(0)).toBeGreaterThan(drag(0.1));
   });
 
   it('detaches a wheel when its hub is destroyed', () => {
