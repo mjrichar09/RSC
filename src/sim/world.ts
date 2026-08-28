@@ -501,9 +501,18 @@ export class SimWorld {
       const state = car.vehicle.state();
       const speed = Math.abs(state.speed);
 
-      if (this.markers) {
+      // Where this car is on the road, worked out once and shared.
+      //
+      // A spline query is the most expensive thing in this loop, and both the
+      // markers and the wildlife want the answer: asking twice put 20 µs a step
+      // on the bill, which is a fifth of the whole simulation.
+      const here =
+        this.markers || this.wildlife
+          ? this.stage.progressAt(state.position, this.splineHint)
+          : null;
+
+      if (this.markers && here) {
         if (local) this.markers.update(this.dt);
-        const here = this.stage.progressAt(state.position, this.splineHint);
         const clipped = this.markers.strike(here.distance, state.position, state.velocity, state.rotation);
         if (clipped) {
           // Through the same pipeline as everything else: a marker pole is a
@@ -518,10 +527,7 @@ export class SimWorld {
         // Only the local car advances the animals: they are placed from the
         // stage seed and stepped once, or four cars would step them four times
         // and every deer would bolt at four times the rate.
-        if (local) {
-          const here = this.stage.progressAt(state.position, this.splineHint);
-          this.wildlife.update(this.dt, here.distance, speed);
-        }
+        if (local && here) this.wildlife.update(this.dt, here.distance, speed);
 
         const hit = this.wildlife.strike(state.position, state.velocity, state.rotation);
         if (hit) {

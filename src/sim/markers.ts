@@ -104,9 +104,17 @@ export class Markers {
   ): { impulse: number; at: Vec3 } | null {
     const speed = Math.hypot(carVelocity.x, carVelocity.z);
 
-    for (const marker of this.all) {
+    // Straight to the poles either side of the car. They are laid out in pairs
+    // at a fixed spacing, so their index falls out of the arithmetic — and a
+    // linear scan over eighty of them, four cars, a hundred and twenty times a
+    // second, measured at 7 µs a step for an event that happens twice a lap.
+    const row = Math.round(nearDistance / SPACING) - 1;
+    const from = Math.max((row - 2) * 2, 0);
+    const to = Math.min((row + 3) * 2, this.all.length);
+
+    for (let i = from; i < to; i++) {
+      const marker = this.all[i]!;
       if (marker.fallen > 0) continue;
-      if (Math.abs(marker.distance - nearDistance) > SPACING * 2) continue;
 
       const local = rotateInverse(carRotation, {
         x: marker.position.x - carPosition.x,
