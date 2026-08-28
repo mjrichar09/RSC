@@ -16,6 +16,13 @@ is a source file.
 
 ## Running it
 
+**In a browser, with nothing installed:** <https://mjrichar09.github.io/RSC/> —
+published from this branch on every push. Progress is stored per browser, so a
+career started there is separate from a local one.
+
+**Locally**, which is the only way to use the tuning panel's Copy setup and the
+verification tools:
+
 ```bash
 npm install
 npm run dev        # http://localhost:5173
