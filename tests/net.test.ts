@@ -22,6 +22,7 @@ import { RaceHost } from '../src/net/host.js';
 import { RaceGuest } from '../src/net/guest.js';
 import { LoopbackWire } from '../src/net/loopback.js';
 import { MAX_PLAYERS, PROTOCOL_VERSION, type NetMessage } from '../src/net/protocol.js';
+import { MultiplayerSession } from '../src/game/multiplayer.js';
 
 const DT = 1 / 120;
 
@@ -53,7 +54,9 @@ async function pair(options: { latency?: number; loss?: number; cars?: number } 
   wire.flush();
 
   const hostWorld = await createWorld({ baseSurface: 'tarmac', cars });
-  guestWorld = await createWorld({ baseSurface: 'tarmac', cars });
+  // The guest builds its world the way the game does: its own car at index 0,
+  // in the grid slot the host has it in.
+  guestWorld = await createWorld({ baseSurface: 'tarmac', cars, slots: guest.slots });
   host.start(SETUP, hostWorld);
   wire.flush();
   guest.attach(guestWorld);
@@ -73,10 +76,10 @@ async function pair(options: { latency?: number; loss?: number; cars?: number } 
   return { wire, host, guest, hostWorld, guestWorld, run };
 }
 
-/** How far apart the two copies of one car are. */
-function disagreement(a: SimWorld, b: SimWorld, car: number): number {
-  const p = a.cars[car]!.vehicle.body.translation();
-  const q = b.cars[car]!.vehicle.body.translation();
+/** How far apart the host's car `hostCar` is from the guest's `guestCar`. */
+function disagreement(a: SimWorld, b: SimWorld, hostCar: number, guestCar = hostCar): number {
+  const p = a.cars[hostCar]!.vehicle.body.translation();
+  const q = b.cars[guestCar]!.vehicle.body.translation();
   return Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z);
 }
 
@@ -153,6 +156,22 @@ describe('the lobby', () => {
   });
 });
 
+describe('the grid, as two copies of it', () => {
+  it('spawns the guest on its own slot rather than on pole', async () => {
+    // The guest keeps its own car at index 0 locally, which would put it on
+    // pole in its own world if the permutation stopped at the wire.
+    const { hostWorld, guestWorld, guest } = await pair();
+    const mine = guestWorld.cars[0]!.vehicle.body.translation();
+    const truth = hostWorld.cars[guest.car]!.vehicle.body.translation();
+    expect(Math.hypot(mine.x - truth.x, mine.z - truth.z)).toBeLessThan(1e-6);
+
+    // And the host's car is where the host has it, one slot over.
+    const theirs = guestWorld.cars[1]!.vehicle.body.translation();
+    const host0 = hostWorld.cars[0]!.vehicle.body.translation();
+    expect(Math.hypot(theirs.x - host0.x, theirs.z - host0.z)).toBeLessThan(1e-6);
+  });
+});
+
 describe('inputs going up', () => {
   it('drives the guest car on the host', async () => {
     const { host, hostWorld, run } = await pair();
@@ -216,8 +235,9 @@ describe('snapshots coming down', () => {
   it('carry everyone condition and progress', async () => {
     const { guest, run } = await pair();
     run(240, { ...NEUTRAL_INPUT, throttle: 1 }, NEUTRAL_INPUT);
-    expect(guest.progressOf(0)).toBeGreaterThan(guest.progressOf(1));
-    expect(guest.healthOf(0)).toBe(1);
+    // Local numbering: 0 is us, 1 is the host, who has been driving.
+    expect(guest.progressOf(1)).toBeGreaterThan(guest.progressOf(0));
+    expect(guest.healthOf(1)).toBe(1);
   });
 });
 
@@ -231,12 +251,73 @@ describe('snapshots coming down', () => {
  */
 const CIRCLE: DriverInput = { throttle: 0.7, brake: 0, steer: 0.35, handbrake: 0 };
 
+describe('results', () => {
+  it('carries a guest finish to the host and to the other guests', async () => {
+    // Only the machine running a car's race rules knows it crossed the line;
+    // only the host can tell everybody. So it goes up and comes back down.
+    const results: Array<[number, number | null, boolean]> = [];
+    const host = new RaceHost({ onResult: (p, t, r) => results.push([p, t, r]) });
+
+    const wireA = new LoopbackWire();
+    host.accept(wireA.a);
+    const first = new RaceGuest(wireA.b, { name: 'First' });
+    wireA.flush();
+
+    const heard: Array<[number, number | null, boolean]> = [];
+    const wireB = new LoopbackWire();
+    host.accept(wireB.a);
+    new RaceGuest(wireB.b, { name: 'Second', onResult: (p, t, r) => heard.push([p, t, r]) });
+    wireB.flush();
+
+    first.report(87.42, false);
+    wireA.flush();
+    wireB.flush();
+
+    expect(results).toEqual([[1, 87.42, false]]);
+    expect(heard).toEqual([[1, 87.42, false]]);
+  });
+});
+
+describe('the session', () => {
+  it('drives the world from either side without the game knowing which', async () => {
+    const { host, guest, hostWorld, guestWorld, wire } = await pair();
+    const hostSide = new MultiplayerSession(
+      { host },
+      { world: hostWorld, setup: { ...SETUP, players: host.players }, progressOf: () => 0 },
+    );
+    const guestSide = new MultiplayerSession(
+      { guest },
+      { world: guestWorld, setup: { ...SETUP, players: guest.players }, progressOf: () => 0 },
+    );
+
+    // A second of wall clock, in whatever steps the accumulator decides on.
+    for (let i = 0; i < 60; i++) {
+      hostSide.advance(1 / 60, { ...NEUTRAL_INPUT, throttle: 1 });
+      guestSide.advance(1 / 60, { ...NEUTRAL_INPUT, throttle: 1 });
+      wire.advance(1000 / 60);
+    }
+    expect(hostWorld.steps).toBe(120);
+    expect(guestWorld.steps).toBe(120);
+
+    // Both are driving their own car, which each of them calls index 0.
+    expect(hostWorld.cars[0]!.vehicle.body.linvel().z).toBeGreaterThan(1);
+    expect(guestWorld.cars[0]!.vehicle.body.linvel().z).toBeGreaterThan(1);
+
+    // The guest's names are in its own numbering, so a tag over a car is the
+    // right name and not the one sitting in that slot on the host.
+    expect(hostSide.names[0]).toBe('Host');
+    expect(guestSide.names[0]).toBe('Guest');
+    expect(guestSide.names[1]).toBe('Host');
+    expect(guestSide.toHost(0)).toBe(1);
+  });
+});
+
 describe('prediction', () => {
   it('keeps the guest car where the host says it is, at 80 ms', async () => {
     const { hostWorld, guestWorld, guest, run } = await pair({ latency: 40 });
     run(120 * 20, CIRCLE, CIRCLE);
 
-    const off = disagreement(hostWorld, guestWorld, guest.car);
+    const off = disagreement(hostWorld, guestWorld, guest.car, 0);
     // Twenty seconds of full throttle, and the two copies of the car are still
     // within a car length of each other.
     expect(off).toBeLessThan(4);
@@ -247,7 +328,7 @@ describe('prediction', () => {
   it('survives one packet in five going missing', async () => {
     const { hostWorld, guestWorld, guest, run } = await pair({ latency: 40, loss: 0.2 });
     run(120 * 20, NEUTRAL_INPUT, CIRCLE);
-    expect(disagreement(hostWorld, guestWorld, guest.car)).toBeLessThan(6);
+    expect(disagreement(hostWorld, guestWorld, guest.car, 0)).toBeLessThan(6);
   });
 
   it('follows the other car closely enough to race it', async () => {
@@ -260,7 +341,9 @@ describe('prediction', () => {
     // times the delay and would fail on a faster car for no good reason.
     const v = hostWorld.cars[0]!.vehicle.body.linvel();
     const speed = Math.hypot(v.x, v.y, v.z);
-    const behind = disagreement(hostWorld, guestWorld, 0) / Math.max(speed, 1);
+    // The host's car 0 is the guest's car 1, because the guest keeps its own
+    // car first — so this also checks the permutation is applied at the wire.
+    const behind = disagreement(hostWorld, guestWorld, 0, 1) / Math.max(speed, 1);
     expect(behind).toBeLessThan(0.25);
   });
 });

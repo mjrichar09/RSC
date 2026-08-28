@@ -52,6 +52,7 @@ npm run crash      # drive into a wall at known speeds -> what breaks, what it c
 npm run generate   # make new stages, validate them, calibrate their medals
 npm run perf       # simulation cost per fixed step, GPU-independent
 npm run shoot      # -> ONE composite grid PNG in shots/
+npm run netcheck   # two browsers, one race: the WebRTC path end to end
 npm run typecheck
 ```
 
@@ -397,6 +398,63 @@ the corridor runs into itself. That last check matters: a centreline that
 doubles back within ~27 m produces two overlapping ribbons, and the car ends up
 buried in an embankment belonging to a section it has not reached yet.
 
+### Multiplayer
+
+Up to four cars in one world, hitting each other, over a connection with no
+server behind it. Press **N**.
+
+**Why the simulation being headless paid for this.** `src/sim/` never imported
+three.js, so the host runs *literally the same code* as every client, and four
+cars is a loop rather than a redesign: a car is a vehicle with its own damage
+and its own attachment state, and being rammed by a player goes through the
+identical impact path as hitting a rock. The damage model needed no changes at
+all. Measured, a T-bone at 60 km/h costs the rammer its lights and the victim
+31% of a door — the same numbers a crash into scenery produces, because it is
+the same code.
+
+**Host-authoritative, not lockstep.** Rapier is deterministic for a given build
+on a given machine and not across machines or browser versions, so lockstep
+would desync within seconds with no way to tell which copy was right. One player
+runs the truth; everyone else predicts and is corrected.
+
+**Prediction on your own car, interpolation on everyone else's.** Your car is
+simulated locally from your own input with no waiting, and the authoritative
+position is folded in as a correction spread over a quarter of a second — past
+2.5 m or 0.7 rad the disagreement is too large to have come from timing, so it
+snaps instead. Other cars are played back 0.1 s behind the newest snapshot,
+which covers a lost packet from the buffer instead of showing as a stutter.
+They stay real rigid bodies with real velocities, so you can still hit them.
+
+Measured over twenty seconds at 80 ms round trip: your car ends within 4 m of
+where the host has it, reached by blending rather than teleporting, and it holds
+under 20% packet loss. Other cars run 0.16 s behind — the interpolation delay
+plus the latency plus half a snapshot interval, with nothing unaccounted for.
+
+**A guest's own car is index 0 in its own world.** The whole game above the
+simulation — camera, HUD, damage panel, rescue — is written around the local car
+being the first one, so a guest swaps its car with car zero and undoes the swap
+at the wire. The grid takes the same permutation, so both copies of the race
+line up identically with nobody spawning on pole and being dragged sideways by
+the first snapshot.
+
+**No server, and no bill.** The game is static files on GitHub Pages, so the
+players are the signalling channel: the host makes an invite code, sends it
+however they already talk, and pastes back the reply. Two data channels — one
+ordered and reliable for the lobby, one unordered with no retransmits for inputs
+and snapshots, because a late input is worse than a lost one.
+
+```bash
+npm run netcheck   # two real browsers, one race, over a real data channel
+```
+
+That check drives the lobby through its own DOM and then verifies that what one
+page drives, the other one sees: 27.7 m driven, 27.6 m seen.
+
+**What is not built.** Standings and finish order are exchanged but not shown on
+the HUD; there is no rejoin after a disconnect (a dropped player's car coasts,
+and the race carries on); and only the host's economy is authoritative for its
+own run — everyone settles their own race locally.
+
 ## Roadmap
 
 - **P0 — Scaffold** ✅ fixed-timestep sim, raycast-suspension car, tire model,
@@ -432,7 +490,6 @@ buried in an embankment belonging to a section it has not reached yet.
 - **P11 — Wildlife** ✅ deer that are always seen before they move, plus a
   bounded random tier of gusts and stone strikes.
 
-Multiplayer — four players with car-to-car contact — is scoped but deliberately
-not built. The simulation being headless and Node-runnable means an authoritative
-server can run literally the same code, which is the expensive part most projects
-have to retrofit; the netcode is the project.
+- **P12 — Multiplayer** ✅ four cars in one world, host-authoritative netcode
+  with prediction and interpolation, WebRTC data channels with no server, and a
+  lobby that connects two players by copy-pasting two codes.

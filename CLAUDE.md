@@ -29,6 +29,7 @@ npm run crash -- --balance=45,66              # can it sit on two wheels?
 npm run crash -- --deer=60,90,120             # what a deer strike costs
 npm run perf       # simulation cost per step
 npm run shoot      # ONE composite grid PNG, only for visual questions
+npm run netcheck   # two browsers, one race — the only test of the real transport
 ```
 
 `shoot` always emits a single labelled grid rather than a burst of images, and
@@ -79,6 +80,26 @@ Each of these cost real time and is easy to repeat:
   frustum** (`light.shadow.camera.updateProjectionMatrix()`), and needing the
   key light on the opposite azimuth from the camera or the car sits on its own
   shadow.
+
+## Multiplayer
+
+`src/net/` is the protocol, the host, the guest and the transports; `src/sim/`
+knows nothing about any of it. Two things there are easy to get wrong twice:
+
+- **A guest's own car is index 0 in its own world**, and the host's numbering is
+  a swap away (`RaceGuest.swap`). Everything above the simulation assumes the
+  local car is the first one; the permutation lives at the wire and in
+  `WorldOptions.slots`.
+- **Test the protocol over `LoopbackWire`, not over WebRTC.** It has simulated
+  latency, loss and a manual clock, so "what does a client do with a snapshot
+  that arrives 200 ms late" is a test rather than a hope. `npm run netcheck` is
+  the only thing that needs two real browsers, and it exists to prove the
+  transport and the lobby, not the netcode.
+
+Two browsers on one machine both render through software WebGL and only one of
+them is ever in front, so a page can run at two frames a second: `netcheck`
+turns off the vision pass, uses a small viewport, and enables CDP focus
+emulation. Without that the "host" barely moves and the netcode gets the blame.
 
 ## Tuning and calibration
 

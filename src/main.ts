@@ -39,6 +39,8 @@ import { DamagePanel } from './ui/damagePanel.js';
 import { DebrisView } from './render/debrisView.js';
 import { WildlifeView } from './render/wildlifeView.js';
 import { Garage } from './ui/garage.js';
+import { MultiplayerPanel } from './ui/multiplayer.js';
+import { MultiplayerSession } from './game/multiplayer.js';
 import { LiveStageMap } from './ui/stageMap.js';
 import * as THREE from 'three';
 import { rotate } from './sim/math.js';
@@ -151,6 +153,17 @@ async function main(): Promise<void> {
   const currentTarget = (): RaceTarget => ({ def: stage!.def, variant: variant! });
   const currentKey = (): string => variantKey(stage!.def.id, variant!.id);
   let tuningPanel: TuningPanel | null = null;
+  /**
+   * The network race, when there is one. The local car is index 0 either way —
+   * a guest swaps its own car into that slot — so everything below this point
+   * is written as if there were only ever one car, exactly as it was.
+   */
+  let session: MultiplayerSession | null = null;
+  /** Views for the other cars in a network race, by car index. */
+  let rivalViews: CarView[] = [];
+  const tagLayer = document.createElement('div');
+  tagLayer.className = 'tags';
+  hudRoot.appendChild(tagLayer);
   let stuckFor = 0;
   let ghost: GhostPlayer | null = null;
   const recorder = new GhostRecorder();
@@ -183,7 +196,26 @@ async function main(): Promise<void> {
     ghostView.visible = ghost !== null;
   };
 
-  const loadStage = (stageId: string, variantId?: string) => {
+  /**
+   * Paint for the other cars. Distinct hues rather than shades: at a fixed
+   * isometric distance, in a dust cloud, hue is the only thing that reads.
+   */
+  const RIVAL_PAINT = [0xd8563a, 0x4d86d6, 0x5fbf7a];
+
+  const buildRivalViews = (cars: number) => {
+    for (const view of rivalViews) scene.remove(view.group);
+    rivalViews = [];
+    for (let i = 1; i < cars; i++) {
+      rivalViews.push(new CarView(scene, { body: RIVAL_PAINT[(i - 1) % RIVAL_PAINT.length]! }));
+    }
+    tagLayer.innerHTML = '';
+  };
+
+  const loadStage = (
+    stageId: string,
+    variantId?: string,
+    grid?: { cars: number; slots?: number[] },
+  ) => {
     stageView?.dispose();
     if (stageView) scene.remove(stageView.group);
 
@@ -207,7 +239,9 @@ async function main(): Promise<void> {
       tuning: career.tuning(),
       damage: { rollcage: rollcageMitigation(career.upgrades) },
       conditions: variant.conditions,
+      ...(grid ? { cars: grid.cars, ...(grid.slots ? { slots: grid.slots } : {}) } : {}),
     });
+    buildRivalViews(grid?.cars ?? 1);
     applyCarCondition();
     race = new Race(stage, variant.medals);
     settled = false;
@@ -303,11 +337,42 @@ async function main(): Promise<void> {
     world.rescue(race?.furthest);
     stuckFor = 0;
   };
+  const multiplayer = new MultiplayerPanel(hudRoot);
+  multiplayer.onRace = (start) => {
+    garage.setOpen(false);
+    sessionHealth = { ...career.profile.carHealth };
+    loadStage(start.setup.stageId, start.setup.variantId, {
+      cars: start.cars,
+      ...(start.slots ? { slots: start.slots } : {}),
+    });
+
+    // The host is the authority and starts the clock; a guest hands its world
+    // over and is corrected toward the host's from the first snapshot.
+    if (start.host) start.host.start(start.setup, world);
+    else start.guest!.attach(world);
+
+    session = new MultiplayerSession(
+      { ...(start.host ? { host: start.host } : {}), ...(start.guest ? { guest: start.guest } : {}) },
+      {
+        world,
+        setup: start.setup,
+        progressOf: (car) => stage!.progressAt(world.state(car).position).distance,
+      },
+    );
+  };
+
   const garage = new Garage(hudRoot, career);
   garage.onEnter = (target) => {
     // The fee is taken by the garage; this is the condition the attempt starts
     // from, and the one a restart returns to.
     sessionHealth = { ...career.profile.carHealth };
+    // Entering from the garage is a solo run: hang up whatever was connected
+    // rather than leaving a race running behind a menu.
+    if (session) {
+      session.leave();
+      session = null;
+      multiplayer.reset();
+    }
     loadStage(target.def.id, target.variant.id);
   };
 
@@ -343,6 +408,12 @@ async function main(): Promise<void> {
     });
   };
 
+  controls.onMultiplayer = () => {
+    if (freeRoam) return;
+    if (garage.isOpen) garage.setOpen(false);
+    multiplayer.toggle();
+  };
+
   controls.onGarage = () => {
     if (freeRoam) return;
     if (garage.isOpen) garage.setOpen(false);
@@ -372,6 +443,10 @@ async function main(): Promise<void> {
       ...(retired || time === null ? {} : { ghost: recorder.finish(currentKey(), time) }),
     });
 
+    // Everyone else wants to know you are done, and the host is the only one
+    // who can say so — so a guest sends it up and the host passes it on.
+    session?.report(0, time, retired);
+
     raceHud.setLedger(result);
     if (result.newRecord && time !== null) {
       raceHud.setBest(time);
@@ -395,11 +470,60 @@ async function main(): Promise<void> {
   window.addEventListener('resize', onResize);
   onResize();
 
+  /**
+   * Name tags over the rival cars, in screen space.
+   *
+   * Projected through the same camera the cars are drawn with, so a tag is
+   * exactly over its car whatever a zone's yaw and zoom are.
+   */
+  const updateTags = () => {
+    const names = session?.names ?? [];
+    while (tagLayer.children.length < rivalViews.length) {
+      const tag = document.createElement('div');
+      tag.className = 'tag';
+      tagLayer.appendChild(tag);
+    }
+    for (const [i, node] of [...tagLayer.children].entries()) {
+      const tag = node as HTMLElement;
+      const index = i + 1;
+      const car = world.cars[index];
+      if (!car || i >= rivalViews.length) {
+        tag.style.display = 'none';
+        continue;
+      }
+      const p = car.vehicle.body.translation();
+      SCRATCH.set(p.x, p.y + 1.6, p.z).project(camera.camera);
+      // Behind the camera, or off the edge: no tag rather than a wrong one.
+      const onScreen = Math.abs(SCRATCH.x) < 1.1 && Math.abs(SCRATCH.y) < 1.1 && SCRATCH.z < 1;
+      tag.style.display = onScreen ? 'block' : 'none';
+      tag.style.left = `${(SCRATCH.x * 0.5 + 0.5) * window.innerWidth}px`;
+      tag.style.top = `${(-SCRATCH.y * 0.5 + 0.5) * window.innerHeight}px`;
+      tag.style.color = `#${(RIVAL_PAINT[(i % RIVAL_PAINT.length)] ?? 0xffffff).toString(16)}`;
+      tag.textContent = names[index] ?? `P${index + 1}`;
+    }
+  };
+
   const drawOnce = (alpha: number, dt: number) => {
     const state = world.state();
     const transform = world.renderTransform(alpha);
     carView.update(transform, state, world.damage, world.debris);
     debrisView.update(world.loose);
+
+    // The other cars, and a name over each. Everything else about them — their
+    // damage, their shed panels, their brake glow — is the same code the local
+    // car uses, because on this side of the wire they are just cars.
+    for (const [i, view] of rivalViews.entries()) {
+      const index = i + 1;
+      const car = world.cars[index];
+      if (!car) continue;
+      view.update(
+        world.renderTransform(alpha, index),
+        world.state(index),
+        car.damage,
+        car.debris,
+      );
+    }
+    updateTags();
     // Turn the corner boards to face the camera. Cheap — there are a handful —
     // and it is the only way they stay readable through a zone change.
     for (const board of stageView?.signBoards ?? []) board.rotation.y = camera.yaw;
@@ -611,6 +735,28 @@ async function main(): Promise<void> {
         dragging: world.debris?.dragging() ?? [],
         shed: world.loose.map((l) => l.id),
         temp: d ? +d.temperature.toFixed(2) : null,
+        // Multiplayer, for the two-page check: how many cars are in this
+        // world, where they are, and who this machine thinks it is talking to.
+        cars: world.cars.length,
+        // Simulated seconds and fixed steps: the first thing to check when a
+        // car is not moving is whether the world is running at all.
+        worldTime: +world.time.toFixed(2),
+        steps: world.steps,
+        // Ground position per car, x and z. Not z alone: a stage's start
+        // heading is whatever the road does, so a car driving hard down the
+        // road can barely change its z at all.
+        carsAt: world.cars.map((car) => {
+          const p = car.vehicle.body.translation();
+          return [+p.x.toFixed(2), +p.z.toFixed(2)];
+        }),
+        net: session
+          ? {
+              role: session.role,
+              players: session.names,
+              connected: session.connected,
+              ping: session.ping,
+            }
+          : null,
       };
     },
   };
@@ -736,8 +882,10 @@ async function main(): Promise<void> {
 
     // The world keeps stepping behind the garage so the scene stays alive, but
     // it takes no input while a menu is up.
-    const input = garage.isOpen ? NEUTRAL_INPUT : controls.sample(dt);
-    const alpha = world.advance(dt, input);
+    const input = garage.isOpen || multiplayer.isOpen ? NEUTRAL_INPUT : controls.sample(dt);
+    // In a network race every fixed step goes through the host or the guest:
+    // that is what puts inputs on the wire and takes snapshots off it.
+    const alpha = session ? session.advance(dt, input) : world.advance(dt, input);
 
     const state = world.state();
     if (race && stage) {

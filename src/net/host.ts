@@ -141,6 +141,11 @@ export class RaceHost {
           guest.input = message.input;
         }
         break;
+      case 'result':
+        // A guest is the only one who knows it crossed the line; the host is
+        // the only one who can tell everybody else.
+        this.report(guest.id, message.time, message.retired);
+        break;
       case 'ping':
         guest.link.send({ t: 'pong', sent: message.sent, hostTime: this.world?.time ?? 0 });
         break;

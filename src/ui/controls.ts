@@ -36,6 +36,8 @@ export class Controls {
   onMute: (() => void) | null = null;
   /** Cycle the windscreen effect through its settings. */
   onVision: (() => void) | null = null;
+  /** Fires on the multiplayer lobby key. */
+  onMultiplayer: (() => void) | null = null;
 
   constructor(target: EventTarget = window) {
     target.addEventListener('keydown', (e) => {
@@ -47,6 +49,7 @@ export class Controls {
       if (ev.code === 'KeyQ') this.onRescue?.();
       if (ev.code === 'KeyM') this.onMute?.();
       if (ev.code === 'KeyV') this.onVision?.();
+      if (ev.code === 'KeyN') this.onMultiplayer?.();
       if (ev.code === 'Escape' || ev.code === 'Tab') {
         ev.preventDefault();
         this.onGarage?.();

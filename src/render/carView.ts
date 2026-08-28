@@ -23,6 +23,12 @@ export interface CarViewOptions {
    * never mistaken for the car you are driving.
    */
   ghost?: boolean;
+  /**
+   * Body colour. Rival cars in a network race are told apart by paint, which
+   * is the only cue that survives all four of them being sideways in a cloud
+   * of gravel at once.
+   */
+  body?: number;
 }
 
 const flat = (color: number, roughness = 0.6, ghost = false) =>
@@ -76,9 +82,10 @@ export class CarView {
   constructor(parent: THREE.Object3D, options: CarViewOptions = {}) {
     const h = CAR.halfExtents;
     const isGhost = options.ghost === true;
+    const bodyColor = options.body ?? PALETTE.carBody;
     this.ghost = isGhost;
 
-    const body = new THREE.Mesh(new THREE.BoxGeometry(h.x * 2, h.y * 1.3, h.z * 2), flat(PALETTE.carBody, 0.6, isGhost));
+    const body = new THREE.Mesh(new THREE.BoxGeometry(h.x * 2, h.y * 1.3, h.z * 2), flat(bodyColor, 0.6, isGhost));
     body.position.y = -0.05;
     body.castShadow = !isGhost;
     this.chassis.add(body);
@@ -121,7 +128,7 @@ export class CarView {
     // the car was hit. One body mesh can only say "damaged"; twelve say "the
     // front left is folded in and the mirror is gone", which is a thing you can
     // look at and price.
-    const panelMat = () => flat(PALETTE.carBody, 0.55, isGhost);
+    const panelMat = () => flat(bodyColor, 0.55, isGhost);
     const trimMat = () => flat(PALETTE.carCabin, 0.55, isGhost);
 
     const box = (x: number, y: number, z: number) => new THREE.BoxGeometry(x, y, z);

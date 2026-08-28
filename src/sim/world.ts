@@ -75,6 +75,17 @@ export interface WorldOptions {
    * hitting a rock, which is why multiplayer needed no new damage code.
    */
   cars?: number;
+  /**
+   * Which grid slot each car takes, by car index. Defaults to `[0, 1, 2, ...]`.
+   *
+   * A guest in a network race keeps *its own* car at index 0 — the whole game
+   * above the simulation is written around the local car being the first one —
+   * so its car indices are a permutation of the host's. Handing that
+   * permutation to the grid is what lets both copies of the race line up
+   * identically without the guest's car spawning on pole and then being
+   * dragged sideways by the first snapshot.
+   */
+  slots?: readonly number[];
 }
 
 /** Merge overrides over the baseline car setup. */
@@ -226,6 +237,7 @@ export class SimWorld {
     return this.cars[0]!.debris;
   }
 
+  private readonly slots: readonly number[];
   private readonly patches: GroundPatch[];
   private readonly baseSurface: SurfaceId;
 
@@ -294,6 +306,7 @@ export class SimWorld {
 
     this.conditions = options.conditions ?? CLEAR_DAY;
     this.carCount = Math.max(1, Math.floor(options.cars ?? 1));
+    this.slots = options.slots ?? [];
 
     const wantsDamage = options.damage !== undefined && options.damage !== false;
     this.wildlife =
@@ -356,11 +369,12 @@ export class SimWorld {
     spawn: { position: Vec3; heading?: number },
     index: number,
   ): { position: Vec3; heading?: number } {
-    if (index === 0 || this.carCount === 1) return spawn;
+    const slot = this.slots[index] ?? index;
+    if (slot === 0 || this.carCount === 1) return spawn;
     const heading = spawn.heading ?? 0;
     // Alternate sides so the grid grows outward from the racing line.
-    const side = index % 2 === 0 ? 1 : -1;
-    const rank = Math.ceil(index / 2);
+    const side = slot % 2 === 0 ? 1 : -1;
+    const rank = Math.ceil(slot / 2);
     const across = side * rank * 3.0;
     const back = rank * 5.5;
     return {
@@ -684,8 +698,8 @@ export class SimWorld {
     return this.accumulator / this.dt;
   }
 
-  state(): VehicleState {
-    return this.vehicle.state();
+  state(car = 0): VehicleState {
+    return (this.cars[car] ?? this.cars[0]!).vehicle.state();
   }
 
   /**

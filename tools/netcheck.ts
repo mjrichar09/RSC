@@ -1,0 +1,162 @@
+/**
+ * Two browsers, one race.
+ *
+ * Everything else about the netcode is tested headlessly over a loopback wire,
+ * which is the right way to test a protocol. This tests the part a loopback
+ * cannot: that two real pages exchange two codes, open a real WebRTC data
+ * channel, and that what one of them drives, the other one sees.
+ *
+ *   npm run netcheck
+ *
+ * It drives the lobby through its own DOM rather than through a back door, so
+ * a broken button fails this too.
+ */
+
+import { existsSync, readdirSync } from 'node:fs';
+import { chromium, type Page } from '@playwright/test';
+import { createServer } from 'vite';
+
+/** The same preinstalled-Chromium lookup the screenshot harness uses. */
+function findChromium(): string | undefined {
+  const root = process.env.PLAYWRIGHT_BROWSERS_PATH;
+  if (!root || !existsSync(root)) return undefined;
+  for (const dir of readdirSync(root)
+    .filter((d) => d.startsWith('chromium-'))
+    .sort()
+    .reverse()) {
+    const exe = `${root}/${dir}/chrome-linux/chrome`;
+    if (existsSync(exe)) return exe;
+  }
+  return undefined;
+}
+
+const WAIT = { timeout: 30_000 };
+
+/** The game's own status JSON, which is cheaper to check than a screenshot. */
+async function status(page: Page): Promise<Record<string, unknown>> {
+  return (await page.evaluate(() => window.RSC!.status())) as Record<string, unknown>;
+}
+
+async function openLobby(page: Page): Promise<void> {
+  await page.waitForFunction(() => window.RSC?.ready === true, WAIT);
+  await page.keyboard.press('n');
+  await page.waitForSelector('.lobby.is-open', WAIT);
+}
+
+async function main(): Promise<void> {
+  const server = await createServer({ server: { port: 5178 }, logLevel: 'error' });
+  await server.listen();
+  // Small and plain: two pages rendering a full-size scene through software
+  // WebGL run at a few frames a second, and the simulation is capped at a
+  // quarter-second per frame, so a big window makes this a test of SwiftShader.
+  const url = 'http://localhost:5178/?vision=0';
+
+  const executablePath = findChromium();
+  const browser = await chromium.launch({
+    ...(executablePath ? { executablePath } : {}),
+    args: [
+      '--use-gl=angle',
+      '--use-angle=swiftshader',
+      '--enable-unsafe-swiftshader',
+      '--no-sandbox',
+      // Two pages, both racing: without these Chromium throttles the one that
+      // is not in front down to about a frame a second, and the "host" sits
+      // still while the test blames the netcode.
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
+      // Headless Chromium hides local IPs behind mDNS names that nothing in a
+      // test rig can resolve, so the two pages would gather candidates they
+      // could never use. This is the flag that lets loopback WebRTC work.
+      '--disable-features=WebRtcHideLocalIpsWithMdns',
+    ],
+  });
+
+  const fail = (message: string): never => {
+    throw new Error(message);
+  };
+
+  try {
+    const host = await browser.newPage({ viewport: { width: 480, height: 320 } });
+    const guest = await browser.newPage({ viewport: { width: 480, height: 320 } });
+    for (const page of [host, guest]) {
+      page.on('pageerror', (error) => console.error('page error:', error.message));
+      // Only one page can be in front, and Chromium does not run
+      // requestAnimationFrame for a hidden one at all — so without this the
+      // "host" advances about half a second of simulation in four seconds of
+      // wall clock and the test blames the network for it.
+      const cdp = await page.context().newCDPSession(page);
+      await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true });
+      await page.goto(url);
+    }
+
+    await openLobby(host);
+    await openLobby(guest);
+
+    // Host: make an invite.
+    await host.click('[data-act="host"]');
+    await host.click('[data-act="invite"]');
+    await host.waitForSelector('[data-act="code"]', WAIT);
+    const invite = await host.inputValue('[data-act="code"]');
+    console.log(`invite code: ${invite.length} characters`);
+
+    // Guest: take it, and hand back a reply.
+    await guest.click('[data-act="join"]');
+    await guest.fill('[data-act="invite-in"]', invite);
+    await guest.click('[data-act="use-invite"]');
+    try {
+      await guest.waitForSelector('[data-act="code"]', WAIT);
+    } catch (error) {
+      console.error('guest lobby says:', await guest.innerText('.lobby-inner'));
+      throw error;
+    }
+    const reply = await guest.inputValue('[data-act="code"]');
+    console.log(`reply code:  ${reply.length} characters`);
+
+    // Host: accept it, and wait for the guest to appear on the grid.
+    await host.fill('[data-act="reply"]', reply);
+    await host.click('[data-act="accept"]');
+    await host.waitForSelector('.lobby-players li:nth-child(2)', WAIT);
+    console.log('connected: the guest is on the grid');
+
+    await host.click('[data-act="start"]');
+    for (const page of [host, guest]) {
+      await page.waitForFunction(() => (window.RSC!.status() as { cars: number }).cars === 2, WAIT);
+    }
+
+    // Drive the host's car and watch it move on the guest's screen. This is the
+    // whole point: snapshots crossing a real data channel.
+    type Ground = [number, number];
+    const gap = (a: Ground, b: Ground) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+    const before = (await status(guest)).carsAt as Ground[];
+    await host.keyboard.down('w');
+    await host.waitForTimeout(8000);
+    await host.keyboard.up('w');
+    await guest.waitForTimeout(500);
+
+    const hostState = await status(host);
+    const guestState = await status(guest);
+    const after = guestState.carsAt as Ground[];
+
+    console.log('host: ', JSON.stringify(hostState));
+    console.log('guest:', JSON.stringify({ carsAt: after, net: guestState.net }));
+
+    // The host is car 0 in its own world and car 1 in the guest's.
+    const drove = gap((hostState.carsAt as Ground[])[0]!, before[1]!);
+    const seen = gap(after[1]!, before[1]!);
+    console.log(`host drove ${drove.toFixed(1)} m; the guest saw ${seen.toFixed(1)} m of it`);
+
+    if (seen < 3) fail('the guest never saw the host move — no snapshots got through');
+    // Some lag is the interpolation delay doing its job; a lot of it is a bug.
+    if (Math.abs(seen - drove) > 4) fail(`the guest is ${(drove - seen).toFixed(1)} m out of date`);
+    console.log('OK — two browsers, one race.');
+  } finally {
+    await browser.close();
+    await server.close();
+  }
+}
+
+main().catch((error: Error) => {
+  console.error(error.message);
+  process.exit(1);
+});

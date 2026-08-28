@@ -794,3 +794,138 @@ html, body {
 .garage-car { width: 100%; height: 100%; cursor: grab; }
 .garage-car:active { cursor: grabbing; }
 .garage-car canvas { display: block; width: 100%; height: 100%; }
+
+/* ---- Multiplayer lobby ---------------------------------------------------- */
+
+.lobby {
+  position: absolute;
+  inset: 0;
+  display: none;
+  background: rgba(8, 10, 14, 0.97);
+  pointer-events: auto;
+  overflow-y: auto;
+}
+.lobby.is-open { display: block; }
+
+.lobby-inner { max-width: 900px; margin: 0 auto; padding: 28px 32px 32px; }
+.lobby-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+.lobby-title { font-size: 22px; font-weight: 700; letter-spacing: 0.24em; }
+.lobby-sub { font-size: 12px; color: var(--dim); margin-top: 4px; letter-spacing: 0.06em; }
+
+.lobby h3 {
+  margin: 18px 0 10px;
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  color: var(--accent);
+  font-weight: 600;
+}
+.lobby-hint { font-size: 12px; line-height: 1.6; color: var(--dim); margin: 10px 0; }
+.lobby-status {
+  margin-top: 18px;
+  padding: 10px 12px;
+  border-left: 2px solid var(--accent);
+  background: rgba(242, 193, 78, 0.08);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+.lobby-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 26px;
+  margin-top: 18px;
+  align-items: start;
+}
+@media (max-width: 820px) {
+  .lobby-cols { grid-template-columns: 1fr; }
+}
+
+.lobby button {
+  font: inherit;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+  padding: 8px 14px;
+  cursor: pointer;
+  letter-spacing: 0.08em;
+}
+.lobby button:hover:not(:disabled) { background: rgba(242, 193, 78, 0.22); border-color: var(--accent); }
+.lobby button:disabled { opacity: 0.35; cursor: not-allowed; }
+.lobby button.wide { display: block; width: 100%; margin-top: 12px; padding: 10px; }
+.lobby-actions { display: flex; gap: 12px; margin-top: 20px; }
+
+/* The codes are long, so the box is big enough to see one has arrived without
+   being big enough to fill the screen with base64. */
+.lobby textarea {
+  display: block;
+  width: 100%;
+  height: 92px;
+  margin: 6px 0 10px;
+  padding: 8px;
+  font: 11px/1.35 ui-monospace, monospace;
+  color: var(--dim);
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 3px;
+  resize: vertical;
+  word-break: break-all;
+}
+.lobby-field { display: block; font-size: 12px; color: var(--dim); margin-bottom: 10px; }
+.lobby-field select {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 7px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+}
+
+.lobby-players { list-style: none; margin: 0; padding: 0; }
+.lobby-players li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 7px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 13px;
+}
+.lobby-players li b { color: var(--accent); letter-spacing: 0.1em; }
+.lobby-players li span { margin-left: auto; font-size: 11px; color: var(--dim); letter-spacing: 0.1em; }
+
+/* Name tags over the other cars. Kept out of the way of the HUD readouts. */
+.tags { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.tag {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(8, 10, 14, 0.6);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+#hud.in-garage .tags { display: none; }
+.lobby-field input {
+  display: block;
+  width: 100%;
+  max-width: 260px;
+  margin-top: 4px;
+  padding: 7px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+}

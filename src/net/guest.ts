@@ -22,6 +22,13 @@
  *     driving costs nothing; being a tenth of a second wrong about where it is
  *     costs a collision.
  *
+ * One wrinkle that is worth the trouble it saves: the host numbers the cars and
+ * a guest is rarely car zero, but the whole game above the simulation — the
+ * camera, the HUD, the damage panel, the rescue — is written around the local
+ * car being the first one. So the guest swaps its own car with car zero in its
+ * own world and undoes the swap at the wire. `slots` hands the same permutation
+ * to the grid, so both copies of the race line up identically.
+ *
  * The remote cars are still real rigid bodies rather than ghosts, so you can
  * hit them. Their state is written from the buffer each step, velocity
  * included, because a body moved by hand with no velocity behaves like a wall
@@ -110,7 +117,7 @@ function angleBetween(a: Quat, b: Quat): number {
 export class RaceGuest {
   /** Our own player id, once the host has told us. Null until then. */
   you: PlayerId | null = null;
-  /** Which car in the world is ours. */
+  /** Which car we are in the *host's* numbering. Ours is always 0 locally. */
   car = 0;
   players: PlayerInfo[] = [];
   setup: RaceSetup | null = null;
@@ -160,6 +167,25 @@ export class RaceGuest {
     return this.started;
   }
 
+  /**
+   * Grid slots for our copy of the world, so `new SimWorld({ cars, slots })`
+   * puts every car where the host has it while ours stays index 0.
+   */
+  get slots(): number[] {
+    const count = Math.max(this.players.length, this.car + 1);
+    return Array.from({ length: count }, (_, i) => this.swap(i));
+  }
+
+  /**
+   * Our car and car zero trade places. Its own inverse, which is why one
+   * function serves both directions.
+   */
+  private swap(index: number): number {
+    if (index === 0) return this.car;
+    if (index === this.car) return 0;
+    return index;
+  }
+
   /** Tell the host whether we are ready to start. */
   ready(ready: boolean): void {
     this.link.send({ t: 'ready', ready });
@@ -170,6 +196,18 @@ export class RaceGuest {
     this.world = world;
     this.buffers.clear();
     this.correction = { x: 0, y: 0, z: 0 };
+  }
+
+  /**
+   * Tell the host we finished or retired, so it can publish it to everyone.
+   *
+   * The host cannot work this out for itself: it knows how far along the stage
+   * a car is, but crossing the line and retiring are decided by the race rules
+   * running on the machine whose car it is.
+   */
+  report(time: number | null, retired: boolean): void {
+    if (!this.open || this.you === null) return;
+    this.link.send({ t: 'result', player: this.you, time, retired });
   }
 
   leave(): void {
@@ -249,10 +287,13 @@ export class RaceGuest {
     this.newest = time;
 
     for (const snapshot of cars) {
-      let buffer = this.buffers.get(snapshot.car);
+      // Filed under our own numbering, so nothing downstream has to know that
+      // the host calls this car something else.
+      const index = this.swap(snapshot.car);
+      let buffer = this.buffers.get(index);
       if (!buffer) {
         buffer = [];
-        this.buffers.set(snapshot.car, buffer);
+        this.buffers.set(index, buffer);
       }
       buffer.push({
         time,
@@ -278,9 +319,9 @@ export class RaceGuest {
   private reconcile(): void {
     const world = this.world;
     if (!world) return;
-    const buffer = this.buffers.get(this.car);
+    const buffer = this.buffers.get(0);
     const latest = buffer?.[buffer.length - 1];
-    const car = world.cars[this.car];
+    const car = world.cars[0];
     if (!latest || !car) return;
 
     const body = car.vehicle.body;
@@ -334,7 +375,7 @@ export class RaceGuest {
     if (!world) return;
 
     const inputs: DriverInput[] = new Array(world.cars.length).fill(NEUTRAL_INPUT);
-    if (this.car < inputs.length) inputs[this.car] = localInput;
+    inputs[0] = localInput;
     world.step(inputs);
 
     this.applyCorrection(dt);
@@ -344,7 +385,7 @@ export class RaceGuest {
   /** Walk our own car toward the authority, a slice at a time. */
   private applyCorrection(dt: number): void {
     const world = this.world;
-    const car = world?.cars[this.car];
+    const car = world?.cars[0];
     if (!car) return;
     const remaining = length(this.correction);
     if (remaining < 1e-4) return;
@@ -381,7 +422,7 @@ export class RaceGuest {
     this.playback += (target - this.playback) * Math.min(1, dt * 2);
 
     for (const [index, buffer] of this.buffers) {
-      if (index === this.car) continue;
+      if (index === 0) continue;
       const car = world.cars[index];
       if (!car || buffer.length === 0) continue;
       const state = this.sampleAt(buffer, this.playback);
