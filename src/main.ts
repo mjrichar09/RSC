@@ -254,8 +254,6 @@ async function main(): Promise<void> {
     applyConditions(variant.conditions);
     precipitation.setWeather(variant.conditions.weather);
     carView.setHeadlightWeight(visibility(variant.conditions).headlightWeight);
-    stageView = buildStageView(stage);
-    scene.add(stageView.group);
 
     // Damage is on for stages and off for the proving ground: the handling
     // tests and the tuning sweep are measuring the car, not the crashing.
@@ -267,6 +265,11 @@ async function main(): Promise<void> {
       ...(grid ? { cars: grid.cars, ...(grid.slots ? { slots: grid.slots } : {}) } : {}),
     });
     buildRivalViews(grid?.cars ?? 1);
+
+    // Built after the world, and given the world's own marker poles: what is
+    // drawn lying flat has to be exactly what the car knocked over.
+    stageView = buildStageView(stage, world.markers!);
+    scene.add(stageView.group);
     applyCarCondition();
     race = new Race(stage, variant.medals);
     settled = false;
@@ -642,6 +645,7 @@ async function main(): Promise<void> {
     // Turn the corner boards to face the camera. Cheap — there are a handful —
     // and it is the only way they stay readable through a zone change.
     for (const board of stageView?.signBoards ?? []) board.rotation.y = camera.yaw;
+    if (world.markers && stageView) stageView.markers.sync(world.markers);
     wildlifeView.update(world.wildlife?.animals ?? []);
 
     if (ghost && race) {
@@ -855,6 +859,7 @@ async function main(): Promise<void> {
         // world, where they are, and who this machine thinks it is talking to.
         skidQuads: skids.laid,
         dents: (world.damage?.dents.length ?? 0) + '/' + (career.profile.carDents?.length ?? 0),
+        markersDown: world.markers?.flattened ?? 0,
         cars: world.cars.length,
         // Simulated seconds and fixed steps: the first thing to check when a
         // car is not moving is whether the world is running at all.
@@ -980,6 +985,25 @@ async function main(): Promise<void> {
         particles.update(world!.dt);
       }
       camera.jumpTo(world!.state().position);
+    }
+
+    // `?knock=6` lays down the six marker poles nearest the car. Clipping one
+    // for real needs the AI to run wide at exactly the right place, and the
+    // question here — does a fallen pole read as a fallen pole — deserves a
+    // cheaper answer than that.
+    const knock = params.get('knock');
+    if (knock && world!.markers) {
+      const here = world!.state().position;
+      const nearest = [...world!.markers.all].sort(
+        (a, b) =>
+          Math.hypot(a.position.x - here.x, a.position.z - here.z) -
+          Math.hypot(b.position.x - here.x, b.position.z - here.z),
+      );
+      for (const marker of nearest.slice(0, Number(knock))) {
+        marker.fallen = 1;
+        marker.knockedToward = Math.random() * Math.PI * 2;
+      }
+      world!.markers.version++;
     }
 
     const brakes = params.get('brakes');

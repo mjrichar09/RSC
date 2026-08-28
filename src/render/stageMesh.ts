@@ -12,6 +12,7 @@
 
 import * as THREE from 'three';
 import type { PropKind, Stage } from '../sim/stage.js';
+import type { Markers } from '../sim/markers.js';
 import { SURFACES } from '../sim/surfaces.js';
 
 /** Slight per-vertex value jitter so large flat areas do not read as dead. */
@@ -32,10 +33,18 @@ export interface StageView {
    * exactly when the car is far enough away for it to matter.
    */
   signBoards: THREE.Mesh[];
+  /** The marker poles, which have to be re-synced whenever one goes over. */
+  markers: MarkerView;
   dispose: () => void;
 }
 
-export function buildStageView(stage: Stage): StageView {
+/**
+ * Build everything visible about a stage.
+ *
+ * The marker poles come from the simulation's own set rather than a copy, so
+ * what is drawn lying flat is exactly what the car knocked over.
+ */
+export function buildStageView(stage: Stage, markers: Markers): StageView {
   const group = new THREE.Group();
   const { vertices, indices, vertexSurfaces, vertexShade } = stage.geometry;
 
@@ -69,7 +78,8 @@ export function buildStageView(stage: Stage): StageView {
 
   group.add(buildTerrain(stage));
   group.add(buildGates(stage));
-  group.add(buildEdgeMarkers(stage));
+  const markerView = buildEdgeMarkers(markers);
+  group.add(markerView.group);
   group.add(buildProps(stage));
   const signs = buildSigns(stage);
   group.add(signs.group);
@@ -77,6 +87,7 @@ export function buildStageView(stage: Stage): StageView {
   return {
     group,
     signBoards: signs.boards,
+    markers: markerView,
     dispose: () => {
       geometry.dispose();
       (road.material as THREE.Material).dispose();
@@ -372,35 +383,96 @@ function buildGates(stage: Stage): THREE.Group {
  * they are what makes the road's direction and width readable at a glance —
  * the same job real rally stage marker poles do.
  */
-function buildEdgeMarkers(stage: Stage): THREE.Group {
-  const spacing = 18;
-  const samples = stage.spline.samples;
-  const count = Math.floor(stage.length / spacing) * 2;
+function buildEdgeMarkers(markers: Markers): MarkerView {
+  const count = Math.max(markers.all.length, 1);
 
-  const geo = new THREE.BoxGeometry(0.22, 1.1, 0.22);
-  const mat = new THREE.MeshStandardMaterial({ color: 0xe8e2d4, roughness: 0.7, flatShading: true });
-  const mesh = new THREE.InstancedMesh(geo, mat, Math.max(count, 1));
-  mesh.castShadow = true;
-
-  const m = new THREE.Matrix4();
-  let n = 0;
-  const step = stage.length / Math.max(samples.length - 1, 1);
-  for (let d = spacing; d < stage.length && n + 1 < mesh.count; d += spacing) {
-    const s = samples[Math.min(Math.round(d / step), samples.length - 1)]!;
-    for (const side of [-1, 1]) {
-      const off = s.width + 0.7;
-      m.setPosition(
-        s.position.x + s.left.x * off * side,
-        s.position.y + 0.55,
-        s.position.z + s.left.z * off * side,
-      );
-      mesh.setMatrixAt(n++, m);
-    }
-  }
-  mesh.count = n;
-  mesh.instanceMatrix.needsUpdate = true;
+  // A pole with a band near the top, not a stake: the band is what makes it
+  // read as a marker placed by somebody rather than a stick in the ground, and
+  // it is the part that stays visible when the pole is lying down.
+  const pole = new THREE.InstancedMesh(
+    new THREE.CylinderGeometry(0.075, 0.09, 1.15, 6),
+    new THREE.MeshStandardMaterial({ color: 0xf0ece0, roughness: 0.75, flatShading: true }),
+    count,
+  );
+  const band = new THREE.InstancedMesh(
+    new THREE.CylinderGeometry(0.095, 0.095, 0.3, 6),
+    new THREE.MeshStandardMaterial({ color: 0xe8552f, roughness: 0.6, flatShading: true }),
+    count,
+  );
+  pole.castShadow = true;
+  band.castShadow = true;
 
   const group = new THREE.Group();
-  group.add(mesh);
-  return group;
+  group.add(pole, band);
+
+  const view = new MarkerView(group, pole, band);
+  view.sync(markers);
+  return view;
+}
+
+/**
+ * The marker poles on screen, following the simulation's own idea of them.
+ *
+ * Two instanced meshes and one rebuild whenever something changes, which is a
+ * couple of times a lap — the poles stand still the rest of the time, and
+ * rewriting a hundred and sixty matrices every frame to say so would be a
+ * waste of the only per-frame budget this renderer has.
+ */
+export class MarkerView {
+  readonly group: THREE.Group;
+  private readonly pole: THREE.InstancedMesh;
+  private readonly band: THREE.InstancedMesh;
+  private version = -1;
+
+  constructor(group: THREE.Group, pole: THREE.InstancedMesh, band: THREE.InstancedMesh) {
+    this.group = group;
+    this.pole = pole;
+    this.band = band;
+  }
+
+  /** Redraw if the poles have changed since last time. */
+  sync(markers: Markers): void {
+    if (markers.version === this.version) return;
+    this.version = markers.version;
+
+    const matrix = new THREE.Matrix4();
+    const quaternion = new THREE.Quaternion();
+    const position = new THREE.Vector3();
+    const scale = new THREE.Vector3(1, 1, 1);
+    const axis = new THREE.Vector3();
+
+    markers.all.forEach((marker, i) => {
+      // A fallen pole rotates about the axis across the direction it was hit,
+      // so it goes over the way the car pushed it rather than in some default
+      // direction that will be wrong three times out of four.
+      const tip = (marker.fallen * Math.PI) / 2;
+      axis.set(Math.cos(marker.knockedToward), 0, -Math.sin(marker.knockedToward)).normalize();
+      quaternion.setFromAxisAngle(axis, tip);
+
+      // Its centre swings down as it falls: upright it is half a pole above the
+      // ground, flat it is a pole-radius above it.
+      const half = 0.575;
+      const lift = Math.cos(tip) * half + 0.09;
+      const lean = Math.sin(tip) * half;
+      const push = { x: Math.sin(marker.knockedToward), z: Math.cos(marker.knockedToward) };
+
+      for (const [mesh, height] of [
+        [this.pole, 0] as const,
+        [this.band, 0.42] as const,
+      ]) {
+        // The band rides near the top of the pole, so it swings furthest.
+        const along = height;
+        position.set(
+          marker.position.x + push.x * (lean + Math.sin(tip) * along),
+          marker.position.y + lift + Math.cos(tip) * along,
+          marker.position.z + push.z * (lean + Math.sin(tip) * along),
+        );
+        matrix.compose(position, quaternion, scale);
+        mesh.setMatrixAt(i, matrix);
+      }
+    });
+
+    this.pole.instanceMatrix.needsUpdate = true;
+    this.band.instanceMatrix.needsUpdate = true;
+  }
 }

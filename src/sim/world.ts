@@ -16,6 +16,7 @@ import { DamageModel, type DamageOptions, impactPointFromForce } from './damage.
 import { DebrisModel, type DetachEvent, type PartId } from './debris.js';
 import { Ambient } from './ambient.js';
 import { DEER_MASS, Wildlife } from './wildlife.js';
+import { Markers } from './markers.js';
 import { type Quat, type Vec3, add, lerpVec, rotate, rotateInverse, slerp, v3 } from './math.js';
 import { type Stage } from './stage.js';
 import { type SurfaceId, surface } from './surfaces.js';
@@ -185,6 +186,13 @@ export class SimWorld {
    * which cannot see one.
    */
   readonly wildlife: Wildlife | null;
+  /**
+   * Roadside marker poles: how the road's width reads, and now things that go
+   * over when you clip them. Built for any stage, though only a car with a
+   * damage model can knock one down — there is nowhere to put the damage
+   * otherwise, and stage validation has no use for flattened posts.
+   */
+  readonly markers: Markers | null;
   readonly ambient: Ambient | null;
   readonly conditions: Conditions;
   readonly dt = 1 / SIM.hz;
@@ -318,6 +326,7 @@ export class SimWorld {
           })
         : null;
     this.events = wantsDamage ? new RAPIER.EventQueue(true) : null;
+    this.markers = this.stage ? new Markers(this.stage.spline, this.stage.length) : null;
 
     const tuning = resolveTuning(options.tuning);
     for (let i = 0; i < this.carCount; i++) {
@@ -492,6 +501,19 @@ export class SimWorld {
       const state = car.vehicle.state();
       const speed = Math.abs(state.speed);
 
+      if (this.markers) {
+        if (local) this.markers.update(this.dt);
+        const here = this.stage.progressAt(state.position, this.splineHint);
+        const clipped = this.markers.strike(here.distance, state.position, state.velocity, state.rotation);
+        if (clipped) {
+          // Through the same pipeline as everything else: a marker pole is a
+          // very small crash, and the dent it leaves is the point of it.
+          car.damage.applyImpact(clipped.at, clipped.impulse);
+          car.debris?.applyImpact(clipped.at, clipped.impulse);
+          if (local) this.lastImpact = Math.max(this.lastImpact, clipped.impulse);
+        }
+      }
+
       if (this.wildlife) {
         // Only the local car advances the animals: they are placed from the
         // stage seed and stepped once, or four cars would step them four times
@@ -609,6 +631,7 @@ export class SimWorld {
       car.loose.length = 0;
     }
     this.wildlife?.reset();
+    this.markers?.reset();
     this.ambient?.reset();
     while (this.loose.length > 0) this.removeLoose(this.loose.length - 1);
   }
