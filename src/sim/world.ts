@@ -14,6 +14,8 @@ import { NEUTRAL_INPUT } from './input.js';
 import { CLEAR_DAY, type Conditions, ambientTemperature } from './conditions.js';
 import { DamageModel, type DamageOptions, impactPointFromForce } from './damage.js';
 import { DebrisModel, type DetachEvent, type PartId } from './debris.js';
+import { Ambient } from './ambient.js';
+import { DEER_MASS, Wildlife } from './wildlife.js';
 import { type Quat, type Vec3, add, lerpVec, rotate, rotateInverse, slerp, v3 } from './math.js';
 import { type Stage } from './stage.js';
 import { type SurfaceId, surface } from './surfaces.js';
@@ -82,6 +84,23 @@ export interface LooseBody {
   half: Vec3;
 }
 
+/** Deterministic stream keyed to a stage id, for anything placed along it. */
+function stageStream(id: string): () => number {
+  let h = 2166136261;
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  let a = h >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 /** Hard cap on loose bodies. Measured in `npm run perf`, not guessed at. */
 const DEBRIS_BUDGET = 12;
 /** Loose bodies further than this from the car are removed, metres. */
@@ -102,6 +121,16 @@ export class SimWorld {
    * an obstacle on the road.
    */
   readonly loose: LooseBody[] = [];
+  /**
+   * Animals at the roadside, and the weather's own mischief.
+   *
+   * Both are gated on the damage model being present, which means they are on
+   * in the game and off in stage validation. That is deliberate: a stage must
+   * not be judged unshippable because a deer stepped out in front of the AI,
+   * which cannot see one.
+   */
+  readonly wildlife: Wildlife | null;
+  readonly ambient: Ambient | null;
   readonly conditions: Conditions;
   readonly dt = 1 / SIM.hz;
 
@@ -211,6 +240,22 @@ export class SimWorld {
     this.debris = this.damage
       ? new DebrisModel({ random: () => this.damage!.nextRandom() })
       : null;
+    this.wildlife =
+      this.damage && this.stage
+        ? new Wildlife(this.stage.spline, this.stage.length, {
+            // Seeded from the stage id, so a stage's animals stand in the same
+            // places on every load — the same rule its hazards follow.
+            random: stageStream(this.stage.def.id),
+          })
+        : null;
+    this.ambient =
+      this.damage && this.stage
+        ? new Ambient({
+            biome: this.stage.def.biome,
+            conditions: this.conditions,
+            random: () => this.damage!.nextRandom(),
+          })
+        : null;
     this.events = this.damage ? new RAPIER.EventQueue(true) : null;
 
     this.vehicle = new Vehicle(RAPIER, this.world, resolveTuning(options.tuning), spawn, {
@@ -293,6 +338,56 @@ export class SimWorld {
     }
   }
 
+  /**
+   * Wildlife and weather: the two things in the game that happen *to* the car
+   * rather than because of it.
+   */
+  private updateWorldEvents(): void {
+    if (!this.damage || !this.stage) return;
+    const state = this.vehicle.state();
+    const speed = Math.abs(state.speed);
+
+    if (this.wildlife) {
+      const here = this.stage.progressAt(state.position, this.splineHint);
+      this.wildlife.update(this.dt, here.distance, speed);
+
+      const hit = this.wildlife.strike(state.position, state.velocity);
+      if (hit) {
+        // Through the nose, like any other frontal impact — a deer strike is
+        // not a special case in the damage model, it is just a heavy one.
+        this.damage.applyImpact(v3(0, 0, 1.8), hit.impulse);
+        this.debris?.applyImpact(v3(0, 0, 1.8), hit.impulse);
+        // And the car loses the momentum it gave the deer, which at speed is
+        // a couple of metres per second and a very unwelcome shove.
+        this.vehicle.body.applyImpulse(
+          {
+            x: -hit.push.x * DEER_MASS * speed,
+            y: 0,
+            z: -hit.push.z * DEER_MASS * speed,
+          },
+          true,
+        );
+      }
+    }
+
+    if (this.ambient) {
+      this.ambient.update(this.dt, speed, this.surfaceIdAt(state.position));
+      if (this.ambient.gust !== 0) {
+        // A crosswind, applied across the car's own heading so it pushes the
+        // line wide rather than shoving it up or down the road.
+        const right = rotate(state.rotation, v3(1, 0, 0));
+        const impulse = CAR.mass * this.ambient.gust * this.dt;
+        this.vehicle.body.applyImpulse(
+          { x: right.x * impulse, y: 0, z: right.z * impulse },
+          true,
+        );
+      }
+      for (const stone of this.ambient.drainStones()) {
+        this.damage.applyImpact(stone.at, stone.impulse);
+      }
+    }
+  }
+
   /** Turn a detached part into a dynamic body carrying the car's motion. */
   private spawnLoose(event: DetachEvent, state: VehicleState): void {
     // Oldest goes first. The budget is what keeps the step cost flat over a
@@ -334,6 +429,8 @@ export class SimWorld {
   /** Put every part back on the car and clear the road. Used on a restart. */
   clearDebris(): void {
     this.debris?.reset();
+    this.wildlife?.reset();
+    this.ambient?.reset();
     while (this.loose.length > 0) this.removeLoose(this.loose.length - 1);
   }
 
@@ -371,6 +468,7 @@ export class SimWorld {
     this.world.step(this.events ?? undefined);
     this.processImpacts();
     this.updateDebris();
+    this.updateWorldEvents();
     this.time += this.dt;
     this.steps++;
   }

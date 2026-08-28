@@ -26,6 +26,7 @@ npm run crash      # what an impact at a given speed breaks and costs
 npm run telemetry -- --trace=stops --damage   # brake temperature
 npm run crash -- --drop=1,3,5 --pitch=0.35    # what a landing costs
 npm run crash -- --balance=45,66              # can it sit on two wheels?
+npm run crash -- --deer=60,90,120             # what a deer strike costs
 npm run perf       # simulation cost per step
 npm run shoot      # ONE composite grid PNG, only for visual questions
 ```

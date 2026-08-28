@@ -36,6 +36,7 @@ import { Hud } from './ui/hud.js';
 import { RaceHud } from './ui/raceHud.js';
 import { DamagePanel } from './ui/damagePanel.js';
 import { DebrisView } from './render/debrisView.js';
+import { WildlifeView } from './render/wildlifeView.js';
 import { Garage } from './ui/garage.js';
 import { TuningPanel } from './ui/tuningPanel.js';
 
@@ -89,6 +90,7 @@ async function main(): Promise<void> {
   const carView = new CarView(scene);
   const ghostView = new CarView(scene, { ghost: true });
   const debrisView = new DebrisView(scene);
+  const wildlifeView = new WildlifeView(scene);
   ghostView.visible = false;
   const particles = new ParticleField(scene);
   const skids = new SkidMarks(scene);
@@ -242,6 +244,7 @@ async function main(): Promise<void> {
       world.damage?.reset();
       world.clearDebris();
       debrisView.clear();
+      wildlifeView.clear();
       applyCarCondition();
       particles.clear();
       skids.clear();
@@ -341,6 +344,7 @@ async function main(): Promise<void> {
     const transform = world.renderTransform(alpha);
     carView.update(transform, state, world.damage, world.debris);
     debrisView.update(world.loose);
+    wildlifeView.update(world.wildlife?.animals ?? []);
 
     if (ghost && race) {
       const sample = ghost.sampleAt(race.time);

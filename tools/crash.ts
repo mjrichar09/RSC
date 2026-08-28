@@ -15,6 +15,7 @@
 
 import { COMPONENTS } from '../src/sim/damage.js';
 import { createWorld } from '../src/sim/world.js';
+import { DEER_MASS, STRIKE_CONCENTRATION } from '../src/sim/wildlife.js';
 
 function arg(name: string, fallback: string): string {
   const hit = process.argv.find((a) => a.startsWith(`--${name}=`));
@@ -44,6 +45,45 @@ const WALL_AT = 260;
  * possible. This drops the car with a roll angle and a sideways nudge and
  * reports how long it actually stays on two wheels.
  */
+/**
+ * Deer strike calibration.
+ *
+ * A deer barely changes the car's momentum and still destroys the front of it,
+ * so the strike carries a concentration factor. This is where that factor gets
+ * checked against outcomes anyone can judge: a fright, a bad accident, a
+ * written-off front end.
+ */
+const deerSpec = arg('deer', '');
+if (deerSpec) {
+  console.log('Deer strike calibration\n');
+  console.log(['speed', 'impulse', 'condition', 'bill', 'outcome'].map((h, i) => (i === 4 ? h : h.padStart(10))).join('  '));
+  console.log('-'.repeat(80));
+
+  for (const kph of deerSpec.split(',').map(Number)) {
+    const world = await createWorld({ baseSurface: 'tarmac', damage: true });
+    const damage = world.damage!;
+    const speed = kph / 3.6;
+    // The same call the world makes when the proximity test fires.
+    const impulse = DEER_MASS * speed * STRIKE_CONCENTRATION;
+    damage.applyImpact({ x: 0, y: 0, z: 1.8 }, impulse);
+
+    const hurt = COMPONENTS.filter((c) => damage.get(c.id) < 0.999)
+      .sort((a, b) => damage.get(a.id) - damage.get(b.id))
+      .map((c) => `${c.label} ${(damage.get(c.id) * 100).toFixed(0)}%`)
+      .slice(0, 5);
+    console.log(
+      [
+        `${kph} km/h`.padStart(10),
+        impulse.toFixed(0).padStart(10),
+        `${(damage.condition * 100).toFixed(1)}%`.padStart(10),
+        String(damage.repairBill().total).padStart(10),
+      ].join('  ') +
+        `  ${damage.failures.size > 0 ? `FAILED: ${[...damage.failures].join(', ')}` : hurt.join(', ') || 'unscathed'}`,
+    );
+  }
+  process.exit(0);
+}
+
 const balanceSpec = arg('balance', '');
 if (balanceSpec) {
   console.log('Two-wheel balance — dropped with roll and a sideways nudge\n');
