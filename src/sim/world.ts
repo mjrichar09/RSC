@@ -67,6 +67,14 @@ export interface WorldOptions {
   damageTo?: Record<string, number>;
   /** Weather and time of day. Defaults to clear daylight. */
   conditions?: Conditions;
+  /**
+   * How many cars share this world. Defaults to one.
+   *
+   * They line up across the start apron and collide with each other like
+   * anything else: being rammed goes through the same damage pipeline as
+   * hitting a rock, which is why multiplayer needed no new damage code.
+   */
+  cars?: number;
 }
 
 /** Merge overrides over the baseline car setup. */
@@ -123,15 +131,34 @@ export const DEBRIS_BUDGET = 19;
 /** Loose bodies further than this from the car are removed, metres. */
 const DEBRIS_KEEP_RADIUS = 120;
 
+/**
+ * One car in the world, with everything that belongs to it.
+ *
+ * Damage, debris and attachment are per car rather than per world: in a race
+ * with four of them, being rammed has to break *your* bumper. Single-player is
+ * the same structure with one entry, which is what keeps one code path.
+ */
+export interface Car {
+  vehicle: Vehicle;
+  damage: DamageModel | null;
+  debris: DebrisModel | null;
+  /** Loose parts this car has shed. Pooled against the world's budget. */
+  readonly loose: LooseBody[];
+}
+
 export class SimWorld {
   readonly world: RAPIER.World;
-  readonly vehicle: Vehicle;
-  readonly stage: Stage | null;
-  readonly damage: DamageModel | null;
-  /** Parts still bolted to the car, and the ones that are not. Null without damage. */
-  readonly debris: DebrisModel | null;
   /**
-   * Loose parts as physics bodies, oldest first.
+   * Every car in the world. Index 0 is the local one — the car the camera
+   * follows and the HUD is about — and in single-player it is the only one.
+   */
+  readonly cars: Car[] = [];
+  readonly stage: Stage | null;
+  /** How many cars this world was built for. */
+  readonly carCount: number;
+
+  /**
+   * Loose parts as physics bodies, oldest first, across every car.
    *
    * Capped, because a long stage otherwise accumulates bodies until the step
    * cost climbs — and everything here is collidable, so your own bumper is now
@@ -157,6 +184,8 @@ export class SimWorld {
   steps = 0;
 
   private accumulator = 0;
+  /** Transform at the start of the last fixed step, per car, for interpolation. */
+  private previousTransforms: { position: Vec3; rotation: Quat }[] = [];
   /**
    * Last spline sample the car was near. Feeding this back as a hint turns the
    * per-wheel surface lookup into a short local scan instead of a spatial query.
@@ -182,11 +211,21 @@ export class SimWorld {
    * It read as taking no damage at all.
    */
   private notices: string[] = [];
-  /** Transform at the start of the last fixed step, for render interpolation. */
-  private previous: { position: Vec3; rotation: Quat } = {
-    position: v3(),
-    rotation: { x: 0, y: 0, z: 0, w: 1 },
-  };
+  /** The local car — the one the camera follows and the HUD is about. */
+  get vehicle(): Vehicle {
+    return this.cars[0]!.vehicle;
+  }
+
+  /** The local car's damage. Every car has its own; this is the player's. */
+  get damage(): DamageModel | null {
+    return this.cars[0]!.damage;
+  }
+
+  /** The local car's attachment state. */
+  get debris(): DebrisModel | null {
+    return this.cars[0]!.debris;
+  }
+
   private readonly patches: GroundPatch[];
   private readonly baseSurface: SurfaceId;
 
@@ -254,42 +293,84 @@ export class SimWorld {
         : { position: v3(0, 1.2, 0), heading: 0 });
 
     this.conditions = options.conditions ?? CLEAR_DAY;
-    this.damage =
-      options.damage === undefined || options.damage === false
-        ? null
-        : new DamageModel({
-            // Ambient air comes from the stage's conditions, so brakes and
-            // coolant both behave differently on a winter night.
-            ambient: ambientTemperature(this.conditions),
-            ...(options.damage === true ? {} : options.damage),
-          });
-    this.debris = this.damage
-      ? new DebrisModel({ random: () => this.damage!.nextRandom() })
-      : null;
+    this.carCount = Math.max(1, Math.floor(options.cars ?? 1));
+
+    const wantsDamage = options.damage !== undefined && options.damage !== false;
     this.wildlife =
-      this.damage && this.stage
+      wantsDamage && this.stage
         ? new Wildlife(this.stage.spline, this.stage.length, {
             // Seeded from the stage id, so a stage's animals stand in the same
             // places on every load — the same rule its hazards follow.
             random: stageStream(this.stage.def.id),
           })
         : null;
+    this.events = wantsDamage ? new RAPIER.EventQueue(true) : null;
+
+    const tuning = resolveTuning(options.tuning);
+    for (let i = 0; i < this.carCount; i++) {
+      const damage = wantsDamage
+        ? new DamageModel({
+            // Ambient air comes from the stage's conditions, so brakes and
+            // coolant both behave differently on a winter night.
+            ambient: ambientTemperature(this.conditions),
+            // Each car draws from its own stream, or four cars in one world
+            // would shed their bumpers in lockstep.
+            seed: 0x5eed1e + i * 0x9e37,
+            ...(options.damage === true || options.damage === undefined ? {} : options.damage),
+          })
+        : null;
+      const debris = damage ? new DebrisModel({ random: () => damage.nextRandom() }) : null;
+
+      const vehicle = new Vehicle(RAPIER, this.world, tuning, this.gridSlot(spawn, i), {
+        surfaceAt: (p) => surface(this.surfaceIdAt(p)),
+        conditions: this.conditions,
+        ...(damage ? { damage } : {}),
+        ...(debris ? { debris } : {}),
+      });
+
+      this.cars.push({ vehicle, damage, debris, loose: [] });
+      this.previousTransforms.push({
+        position: { ...(vehicle.body.translation() as Vec3) },
+        rotation: { ...(vehicle.body.rotation() as Quat) },
+      });
+    }
+
     this.ambient =
-      this.damage && this.stage
+      wantsDamage && this.stage
         ? new Ambient({
             biome: this.stage.def.biome,
             conditions: this.conditions,
-            random: () => this.damage!.nextRandom(),
+            random: () => this.cars[0]!.damage!.nextRandom(),
           })
         : null;
-    this.events = this.damage ? new RAPIER.EventQueue(true) : null;
+  }
 
-    this.vehicle = new Vehicle(RAPIER, this.world, resolveTuning(options.tuning), spawn, {
-      surfaceAt: (p) => surface(this.surfaceIdAt(p)),
-      conditions: this.conditions,
-      ...(this.damage ? { damage: this.damage } : {}),
-      ...(this.debris ? { debris: this.debris } : {}),
-    });
+  /**
+   * Where car `index` starts.
+   *
+   * Cars line up across the road rather than one behind the other: a rally
+   * start is one at a time, but a race between four of them that begins with
+   * three of them staring at a bumper is not a race.
+   */
+  private gridSlot(
+    spawn: { position: Vec3; heading?: number },
+    index: number,
+  ): { position: Vec3; heading?: number } {
+    if (index === 0 || this.carCount === 1) return spawn;
+    const heading = spawn.heading ?? 0;
+    // Alternate sides so the grid grows outward from the racing line.
+    const side = index % 2 === 0 ? 1 : -1;
+    const rank = Math.ceil(index / 2);
+    const across = side * rank * 3.0;
+    const back = rank * 5.5;
+    return {
+      position: {
+        x: spawn.position.x + Math.cos(heading) * across - Math.sin(heading) * back,
+        y: spawn.position.y,
+        z: spawn.position.z - Math.sin(heading) * across - Math.cos(heading) * back,
+      },
+      heading,
+    };
   }
 
   /**
@@ -303,57 +384,72 @@ export class SimWorld {
    * a lot, exactly as it should.
    */
   private processImpacts(): void {
-    if (!this.events || !this.damage) return;
+    if (!this.events) return;
 
     this.lastImpact = 0;
-    const carHandle = this.vehicle.collider.handle;
-    const rotation = this.vehicle.body.rotation() as Quat;
+    // Handle to car index, rebuilt each step because a car can be added or
+    // removed between them when a player joins or drops.
+    const byHandle = new Map<number, number>();
+    for (let i = 0; i < this.cars.length; i++) {
+      byHandle.set(this.cars[i]!.vehicle.collider.handle, i);
+    }
 
     this.events.drainContactForceEvents((event) => {
-      const involvesCar = event.collider1() === carHandle || event.collider2() === carHandle;
-      if (!involvesCar) return;
+      const first = byHandle.get(event.collider1());
+      const second = byHandle.get(event.collider2());
+      if (first === undefined && second === undefined) return;
 
       const impulse = event.totalForceMagnitude() * this.dt;
       if (impulse <= 0) return;
-      this.lastImpact = Math.max(this.lastImpact, impulse);
+      // Only the local car's hits shake the local camera.
+      if (first === 0 || second === 0) this.lastImpact = Math.max(this.lastImpact, impulse);
 
       const worldDirection = event.maxForceDirection() as Vec3;
-      // Rapier's force direction points from collider1 toward collider2. When
-      // the car is collider2 that already means "the way the car was pushed";
-      // when it is collider1 the direction points away from it and has to be
-      // flipped. Getting this backwards puts a nose-first impact through the
-      // back of the car.
-      const sign = event.collider1() === carHandle ? -1 : 1;
-      const local = rotateInverse(rotation, {
-        x: worldDirection.x * sign,
-        y: worldDirection.y * sign,
-        z: worldDirection.z * sign,
-      });
 
-      const at = impactPointFromForce(local);
-      this.damage!.applyImpact(at, impulse);
-      // The same hit works the mounts loose. One impact, two consequences:
-      // what it costs to repair, and whether the part is still on the car.
-      this.debris?.applyImpact(at, impulse);
+      // Both sides of a car-to-car hit take damage, each in its own frame and
+      // each pushed its own way. Being rammed is the same event as hitting a
+      // rock, which is exactly why this needed no new damage model.
+      for (const index of [first, second]) {
+        if (index === undefined) continue;
+        const car = this.cars[index]!;
+        if (!car.damage) continue;
+
+        // Rapier's force direction points from collider1 toward collider2. For
+        // collider1 that is away from it and has to be flipped, or a nose-first
+        // impact lands through the back of the car.
+        const sign = byHandle.get(event.collider1()) === index ? -1 : 1;
+        const rotation = car.vehicle.body.rotation() as Quat;
+        const local = rotateInverse(rotation, {
+          x: worldDirection.x * sign,
+          y: worldDirection.y * sign,
+          z: worldDirection.z * sign,
+        });
+
+        const at = impactPointFromForce(local);
+        car.damage.applyImpact(at, impulse);
+        // The same hit works the mounts loose. One impact, two consequences:
+        // what it costs to repair, and whether the part is still on the car.
+        car.debris?.applyImpact(at, impulse);
+      }
     });
   }
 
   /**
-   * Advance the attachment state machines and turn anything that came off into
-   * a real body, then clear away what is far behind.
+   * Parts coming off, for every car.
+   *
+   * Cleanup runs on distance from the *local* car rather than on age: a part
+   * dropped at the finish line is worth keeping in view and one dropped two
+   * corners back is not, and what matters is what the player can see.
    */
   private updateDebris(): void {
-    if (!this.debris || !this.damage) return;
+    for (const car of this.cars) {
+      if (!car.debris || !car.damage) continue;
+      const state = car.vehicle.state();
+      car.debris.update(this.dt, Math.abs(state.speed), (id) => car.damage!.get(id) <= 0);
+      for (const event of car.debris.drainDetached()) this.spawnLoose(car, event, state);
+    }
 
-    const state = this.vehicle.state();
-    const speed = Math.abs(state.speed);
-    this.debris.update(this.dt, speed, (id) => this.damage!.get(id) <= 0);
-
-    for (const event of this.debris.drainDetached()) this.spawnLoose(event, state);
-
-    // Cleanup runs on distance rather than on age: a part dropped at the finish
-    // line is worth keeping in view, and one dropped two corners ago is not.
-    const here = state.position;
+    const here = this.cars[0]!.vehicle.state().position;
     for (let i = this.loose.length - 1; i >= 0; i--) {
       const at = this.loose[i]!.body.translation() as Vec3;
       const dx = at.x - here.x;
@@ -365,79 +461,98 @@ export class SimWorld {
   }
 
   /**
-   * Wildlife and weather: the two things in the game that happen *to* the car
+   * Wildlife and weather: the two things in the game that happen *to* a car
    * rather than because of it.
+   *
+   * Every car is exposed to them — a deer that steps out is in the road for
+   * whoever arrives, and the wind blows on all of them — but only the local
+   * car's misfortune reaches the HUD.
    */
   private updateWorldEvents(): void {
-    if (!this.damage || !this.stage) return;
-    const state = this.vehicle.state();
-    const speed = Math.abs(state.speed);
+    if (!this.stage) return;
 
-    if (this.wildlife) {
-      const here = this.stage.progressAt(state.position, this.splineHint);
-      this.wildlife.update(this.dt, here.distance, speed);
+    for (let index = 0; index < this.cars.length; index++) {
+      const car = this.cars[index]!;
+      if (!car.damage) continue;
+      const local = index === 0;
+      const state = car.vehicle.state();
+      const speed = Math.abs(state.speed);
 
-      const hit = this.wildlife.strike(state.position, state.velocity, state.rotation);
-      if (hit) {
-        // Through the nose, like any other frontal impact — a deer strike is
-        // not a special case in the damage model, it is just a heavy one.
-        this.damage.applyImpact(v3(0, 0, 1.8), hit.impulse);
-        this.debris?.applyImpact(v3(0, 0, 1.8), hit.impulse);
-        // Felt and heard, not just billed: this is what the camera shake and
-        // the impact sound read.
-        this.lastImpact = Math.max(this.lastImpact, hit.impulse);
-        this.notices.push('Deer strike');
-        // And the car loses the momentum it gave the deer, which at speed is
-        // a couple of metres per second and a very unwelcome shove.
-        this.vehicle.body.applyImpulse(
-          {
-            x: -hit.push.x * DEER_MASS * speed,
-            y: 0,
-            z: -hit.push.z * DEER_MASS * speed,
-          },
-          true,
-        );
+      if (this.wildlife) {
+        // Only the local car advances the animals: they are placed from the
+        // stage seed and stepped once, or four cars would step them four times
+        // and every deer would bolt at four times the rate.
+        if (local) {
+          const here = this.stage.progressAt(state.position, this.splineHint);
+          this.wildlife.update(this.dt, here.distance, speed);
+        }
+
+        const hit = this.wildlife.strike(state.position, state.velocity, state.rotation);
+        if (hit) {
+          // Through the nose, like any other frontal impact — a deer strike is
+          // not a special case in the damage model, it is just a heavy one.
+          car.damage.applyImpact(v3(0, 0, 1.8), hit.impulse);
+          car.debris?.applyImpact(v3(0, 0, 1.8), hit.impulse);
+          if (local) {
+            // Felt and heard, not just billed: this is what the camera shake
+            // and the impact sound read.
+            this.lastImpact = Math.max(this.lastImpact, hit.impulse);
+            this.notices.push('Deer strike');
+          }
+          // And the car loses the momentum it gave the deer, which at speed is
+          // a couple of metres per second and a very unwelcome shove.
+          car.vehicle.body.applyImpulse(
+            { x: -hit.push.x * DEER_MASS * speed, y: 0, z: -hit.push.z * DEER_MASS * speed },
+            true,
+          );
+        }
       }
-    }
 
-    // A landing that bottomed out is an impact the player has to feel.
-    if (this.vehicle.landingImpact > 0) {
-      this.lastImpact = Math.max(this.lastImpact, this.vehicle.landingImpact);
-      if (this.vehicle.landingImpact > 8000) this.notices.push('Heavy landing');
-      this.vehicle.landingImpact = 0;
-    }
-
-    if (this.ambient) {
-      this.ambient.update(this.dt, speed, this.surfaceIdAt(state.position));
-      if (this.ambient.gust !== 0) {
-        // A crosswind, applied across the car's own heading so it pushes the
-        // line wide rather than shoving it up or down the road.
-        const right = rotate(state.rotation, v3(1, 0, 0));
-        const impulse = CAR.mass * this.ambient.gust * this.dt;
-        this.vehicle.body.applyImpulse(
-          { x: right.x * impulse, y: 0, z: right.z * impulse },
-          true,
-        );
+      // A landing that bottomed out is an impact the player has to feel.
+      if (car.vehicle.landingImpact > 0) {
+        if (local) {
+          this.lastImpact = Math.max(this.lastImpact, car.vehicle.landingImpact);
+          if (car.vehicle.landingImpact > 8000) this.notices.push('Heavy landing');
+        }
+        car.vehicle.landingImpact = 0;
       }
-      for (const stone of this.ambient.drainStones()) {
-        this.damage.applyImpact(stone.at, stone.impulse);
-        // A stone is cosmetic, but it is a sharp crack you should hear.
-        this.lastImpact = Math.max(this.lastImpact, stone.impulse * 0.4);
+
+      if (this.ambient) {
+        if (local) this.ambient.update(this.dt, speed, this.surfaceIdAt(state.position));
+        if (this.ambient.gust !== 0) {
+          // A crosswind, applied across the car's own heading so it pushes the
+          // line wide rather than shoving it up or down the road.
+          const right = rotate(state.rotation, v3(1, 0, 0));
+          const impulse = CAR.mass * this.ambient.gust * this.dt;
+          car.vehicle.body.applyImpulse(
+            { x: right.x * impulse, y: 0, z: right.z * impulse },
+            true,
+          );
+        }
+        if (local) {
+          for (const stone of this.ambient.drainStones()) {
+            car.damage.applyImpact(stone.at, stone.impulse);
+            // A stone is cosmetic, but it is a sharp crack you should hear.
+            this.lastImpact = Math.max(this.lastImpact, stone.impulse * 0.4);
+          }
+        }
       }
     }
   }
 
   /** Turn a detached part into a dynamic body carrying the car's motion. */
-  private spawnLoose(event: DetachEvent, state: VehicleState): void {
+  private spawnLoose(car: Car, event: DetachEvent, state: VehicleState): void {
     // The *farthest* goes first, not the oldest. Recycling by age can delete a
     // bumper lying across the road ten metres ahead while a door dropped two
     // corners back survives — the one thing the player is looking at is the one
     // thing that vanishes.
-    while (this.loose.length >= DEBRIS_BUDGET) this.removeLoose(this.farthestLoose(state.position));
+    const here = this.cars[0]!.vehicle.state().position;
+    while (this.loose.length >= DEBRIS_BUDGET) this.removeLoose(this.farthestLoose(here));
 
     const rot = state.rotation;
     const offset = rotate(rot, event.at);
-    const spin = () => (this.damage!.nextRandom() - 0.5) * 12;
+    const random = () => car.damage!.nextRandom();
+    const spin = () => (random() - 0.5) * 12;
 
     const body = this.world.createRigidBody(
       RAPIER.RigidBodyDesc.dynamic()
@@ -449,11 +564,7 @@ export class SimWorld {
         .setRotation(rot)
         // It leaves with the car's velocity plus a kick, or it would appear to
         // stop dead the moment it came off.
-        .setLinvel(
-          state.velocity.x,
-          state.velocity.y + 1.5 + this.damage!.nextRandom() * 2,
-          state.velocity.z,
-        )
+        .setLinvel(state.velocity.x, state.velocity.y + 1.5 + random() * 2, state.velocity.z)
         .setAngvel({ x: spin(), y: spin(), z: spin() }),
     );
     const volume = 8 * event.half.x * event.half.y * event.half.z;
@@ -464,7 +575,9 @@ export class SimWorld {
         .setRestitution(0.2),
       body,
     );
-    this.loose.push({ id: event.id, label: event.label, body, half: event.half });
+    const loose = { id: event.id, label: event.label, body, half: event.half };
+    this.loose.push(loose);
+    car.loose.push(loose);
   }
 
   /** Headline events since the last call, for the HUD to announce. */
@@ -474,10 +587,13 @@ export class SimWorld {
     return out;
   }
 
-  /** Put every part back on the car and clear the road. Used on a restart. */
+  /** Put every part back on every car and clear the road. Used on a restart. */
   clearDebris(): void {
     this.notices = [];
-    this.debris?.reset();
+    for (const car of this.cars) {
+      car.debris?.reset();
+      car.loose.length = 0;
+    }
     this.wildlife?.reset();
     this.ambient?.reset();
     while (this.loose.length > 0) this.removeLoose(this.loose.length - 1);
@@ -505,6 +621,10 @@ export class SimWorld {
     if (!entry) return;
     this.world.removeRigidBody(entry.body);
     this.loose.splice(index, 1);
+    for (const car of this.cars) {
+      const at = car.loose.indexOf(entry);
+      if (at >= 0) car.loose.splice(at, 1);
+    }
   }
 
   private surfaceIdAt(p: Vec3): SurfaceId {
@@ -524,13 +644,24 @@ export class SimWorld {
     return this.baseSurface;
   }
 
-  /** One fixed step. Prefer `advance` from a render loop. */
-  step(input: DriverInput): void {
-    this.previous = {
-      position: { ...(this.vehicle.body.translation() as Vec3) },
-      rotation: { ...(this.vehicle.body.rotation() as Quat) },
-    };
-    this.vehicle.step(this.dt, input);
+  /**
+   * One fixed step.
+   *
+   * Takes one input for the local car, or one per car for a race. Anything not
+   * given an input coasts, which is what a disconnected player's car does until
+   * the host removes it.
+   */
+  step(input: DriverInput | readonly DriverInput[]): void {
+    const inputs = Array.isArray(input) ? input : [input as DriverInput];
+
+    for (let i = 0; i < this.cars.length; i++) {
+      const car = this.cars[i]!;
+      const previous = this.previousTransforms[i]!;
+      previous.position = { ...(car.vehicle.body.translation() as Vec3) };
+      previous.rotation = { ...(car.vehicle.body.rotation() as Quat) };
+      car.vehicle.step(this.dt, inputs[i] ?? inputs[0] ?? NEUTRAL_INPUT);
+    }
+
     this.world.step(this.events ?? undefined);
     this.processImpacts();
     this.updateDebris();
@@ -544,7 +675,7 @@ export class SimWorld {
    * leftover fraction so the renderer can interpolate. Clamped so a stalled tab
    * can't trigger a spiral of death.
    */
-  advance(elapsed: number, input: DriverInput = NEUTRAL_INPUT): number {
+  advance(elapsed: number, input: DriverInput | readonly DriverInput[] = NEUTRAL_INPUT): number {
     this.accumulator = Math.min(this.accumulator + elapsed, 0.25);
     while (this.accumulator >= this.dt) {
       this.step(input);
@@ -584,12 +715,14 @@ export class SimWorld {
    * this instead of the raw state is what keeps a 120 Hz sim smooth on a 60,
    * 144 or 240 Hz display.
    */
-  renderTransform(alpha: number): { position: Vec3; rotation: Quat } {
-    const current = this.vehicle.body.translation() as Vec3;
-    const rotation = this.vehicle.body.rotation() as Quat;
+  renderTransform(alpha: number, carIndex = 0): { position: Vec3; rotation: Quat } {
+    const car = this.cars[carIndex] ?? this.cars[0]!;
+    const previous = this.previousTransforms[carIndex] ?? this.previousTransforms[0]!;
+    const current = car.vehicle.body.translation() as Vec3;
+    const rotation = car.vehicle.body.rotation() as Quat;
     return {
-      position: lerpVec(this.previous.position, current, alpha),
-      rotation: slerp(this.previous.rotation, rotation, alpha),
+      position: lerpVec(previous.position, current, alpha),
+      rotation: slerp(previous.rotation, rotation, alpha),
     };
   }
 }
