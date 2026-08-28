@@ -48,6 +48,7 @@ import { WildlifeView } from './render/wildlifeView.js';
 import { Garage } from './ui/garage.js';
 import { MultiplayerPanel } from './ui/multiplayer.js';
 import { StartMenu } from './ui/menu.js';
+import { ReplayUi } from './ui/replay.js';
 import { MultiplayerSession } from './game/multiplayer.js';
 import { LiveStageMap } from './ui/stageMap.js';
 import * as THREE from 'three';
@@ -182,6 +183,8 @@ async function main(): Promise<void> {
   tagLayer.className = 'tags';
   hudRoot.appendChild(tagLayer);
   let stuckFor = 0;
+  /** Set by the photo-mode save key; read at the end of the next frame. */
+  let wantsCapture = false;
   /**
    * A failure the car cannot continue from, and how long it has been stopped.
    *
@@ -191,6 +194,11 @@ async function main(): Promise<void> {
    * threw away the most dramatic twenty seconds a race can have.
    */
   let terminal: { label: string; stopped: number } | null = null;
+  /**
+   * Photo mode. While this is open the world does not advance and the car is
+   * posed from the run's own recording.
+   */
+  const replayUi = new ReplayUi(hudRoot);
   let ghost: GhostPlayer | null = null;
   const recorder = new GhostRecorder();
 
@@ -496,6 +504,40 @@ async function main(): Promise<void> {
     });
   };
 
+  /**
+   * Open photo mode on the run as recorded so far.
+   *
+   * Mid-run as well as after it: the shot worth taking is usually the one you
+   * have just survived, and being made to finish first would lose it.
+   */
+  controls.onPhoto = () => {
+    if (freeRoam || garage.isOpen || menu.isOpen || multiplayer.isOpen) return;
+    if (replayUi.active) {
+      replayUi.close();
+      return;
+    }
+    if (!stage || !race || recorder.frameCount < 4) return;
+
+    const ghost = recorder.finish(currentKey(), race.time);
+    replayUi.open({
+      player: new GhostPlayer(ghost),
+      time: Math.max(race.time - 3, 0),
+      playing: true,
+      rate: 0.5,
+      yaw: camera.yaw,
+      zoom: 12,
+    });
+    mixer.quiet();
+  };
+
+  replayUi.onExit = () => replayUi.close();
+  replayUi.onCapture = () => {
+    // The canvas has to be read in the same tick it was drawn — a WebGL context
+    // without `preserveDrawingBuffer` is empty by the next one — so the capture
+    // is deferred to the end of the next frame rather than taken here.
+    wantsCapture = true;
+  };
+
   controls.onMultiplayer = () => {
     if (freeRoam) return;
     if (garage.isOpen) garage.setOpen(false);
@@ -505,6 +547,11 @@ async function main(): Promise<void> {
 
   controls.onGarage = () => {
     if (freeRoam) return;
+    // Escape backs out of photo mode before it backs out of anything else.
+    if (replayUi.active) {
+      replayUi.close();
+      return;
+    }
     if (menu.isOpen) {
       menu.setOpen(false);
       // Backing out of the menu returns to whatever was already running: the
@@ -720,6 +767,72 @@ async function main(): Promise<void> {
     );
   };
 
+  /**
+   * One frame of photo mode.
+   *
+   * The car is posed from the recording rather than simulated, so what is on
+   * screen is exactly what happened. Its damage is whatever the car is carrying
+   * now, which is a small lie in the middle of a replay and the right one: the
+   * alternative is recording forty-three component healths twenty times a
+   * second to be able to un-break a wing.
+   */
+  const drawReplay = (dt: number) => {
+    const state = replayUi.state;
+    if (!state) return;
+    const at = replayUi.advance(dt);
+    const sample = state.player.sampleAt(at);
+    if (sample) {
+      carView.updateFromGhost(sample);
+      camera.setYaw(state.yaw);
+      camera.setViewSize(state.zoom);
+      camera.jumpTo(sample.position);
+    }
+    ghostView.visible = false;
+
+    const sun = keyLightOffset(camera.yaw);
+    key.position.set(
+      camera.focus.x + sun.x,
+      camera.focus.y + sun.y,
+      camera.focus.z + sun.z,
+    );
+    key.target.position.copy(key.position).sub(new THREE.Vector3(sun.x, sun.y, sun.z));
+    key.target.updateMatrixWorld();
+
+    particles.update(dt);
+    updateParticleScale();
+    visionPass.render(
+      scene,
+      camera.camera,
+      vision.update(0, {
+        conditions: world.conditions,
+        speed: 0,
+        surface: 'tarmac',
+        wiperHealth: 1,
+        lightHealth: world.damage?.get('lights') ?? 1,
+      }),
+      { x: 0.5, y: 0.5 },
+      { x: 0, y: 1 },
+      performance.now() / 1000,
+    );
+    if (wantsCapture) {
+      wantsCapture = false;
+      savePicture();
+    }
+  };
+
+  /** Write the canvas out as a PNG the browser downloads. */
+  const savePicture = () => {
+    try {
+      const link = document.createElement('a');
+      link.download = `rsc-${stage?.def.id ?? 'shot'}-${Date.now()}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+      damagePanel.notice('Picture saved');
+    } catch {
+      damagePanel.notice('The browser would not let go of the picture');
+    }
+  };
+
   window.RSC = {
     ready: true,
     rendered: false,
@@ -872,6 +985,7 @@ async function main(): Promise<void> {
         skidQuads: skids.laid,
         dents: (world.damage?.dents.length ?? 0) + '/' + (career.profile.carDents?.length ?? 0),
         markersDown: world.markers?.flattened ?? 0,
+        recorded: recorder.frameCount,
         cars: world.cars.length,
         // Simulated seconds and fixed steps: the first thing to check when a
         // car is not moving is whether the world is running at all.
@@ -1075,7 +1189,14 @@ async function main(): Promise<void> {
 
     // The world keeps stepping behind the garage so the scene stays alive, but
     // it takes no input while a menu is up.
-    const input = garage.isOpen || multiplayer.isOpen ? NEUTRAL_INPUT : controls.sample(dt);
+    if (replayUi.active) {
+      drawReplay(dt);
+      requestAnimationFrame(frame);
+      return;
+    }
+
+    const input =
+      garage.isOpen || multiplayer.isOpen || menu.isOpen ? NEUTRAL_INPUT : controls.sample(dt);
     // In a network race every fixed step goes through the host or the guest:
     // that is what puts inputs on the wire and takes snapshots off it.
     const alpha = session ? session.advance(dt, input) : world.advance(dt, input);

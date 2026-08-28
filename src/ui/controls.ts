@@ -38,6 +38,8 @@ export class Controls {
   onVision: (() => void) | null = null;
   /** Fires on the multiplayer lobby key. */
   onMultiplayer: (() => void) | null = null;
+  /** Fires on the photo-mode key. */
+  onPhoto: (() => void) | null = null;
 
   constructor(target: EventTarget = window) {
     target.addEventListener('keydown', (e) => {
@@ -50,6 +52,7 @@ export class Controls {
       if (ev.code === 'KeyM') this.onMute?.();
       if (ev.code === 'KeyV') this.onVision?.();
       if (ev.code === 'KeyN') this.onMultiplayer?.();
+      if (ev.code === 'KeyP') this.onPhoto?.();
       if (ev.code === 'Escape' || ev.code === 'Tab') {
         ev.preventDefault();
         this.onGarage?.();

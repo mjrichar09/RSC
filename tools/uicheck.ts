@@ -64,9 +64,26 @@ await page.keyboard.down('w');
 await page.waitForTimeout(4000);
 await page.keyboard.up('w');
 const driving = await status();
-console.log('arcade run:', JSON.stringify({ stage: driving.stage, phase: driving.phase, money: driving.money, time: driving.time }));
+console.log('arcade run:', JSON.stringify({ stage: driving.stage, phase: driving.phase, money: driving.money, time: driving.time, recorded: driving.recorded }));
 if (driving.phase !== 'running') throw new Error('the arcade race never started');
 if (driving.money !== 1500) throw new Error('arcade charged an entry fee');
+
+// Photo mode: pause the world, pose the car from the recording, hide the HUD.
+await page.keyboard.press('p');
+await page.waitForSelector('.replay-keys');
+const paused = await status();
+await page.waitForTimeout(600);
+const later = await status();
+if (paused.worldTime !== later.worldTime) throw new Error('the world kept running in photo mode');
+if (await page.locator('#hud.in-replay').count() === 0) throw new Error('the HUD stayed up');
+// The camera turns in eighths, and the chrome can be hidden for the shot.
+await page.keyboard.press('BracketRight');
+await page.keyboard.press('h');
+if (await page.locator('#hud.no-chrome').count() === 0) throw new Error('H did not hide the bar');
+await page.keyboard.press('h');
+await page.keyboard.press('p');
+await page.waitForSelector('.replay-keys', { state: 'detached' });
+console.log('photo mode pauses the world, hides the HUD, and gives it all back');
 
 // Escape from an arcade race goes back to the front door.
 await page.keyboard.press('Escape');

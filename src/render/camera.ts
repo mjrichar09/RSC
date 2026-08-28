@@ -183,6 +183,19 @@ export class IsoCamera {
     this.applyProjection();
   }
 
+  /**
+   * Point the camera somewhere other than the zone says, with no easing.
+   *
+   * Photo mode only. The fixed camera is the game's oldest rule and this does
+   * not break it: the yaw still comes in eighths of a turn, and nothing that
+   * moves the car can move the camera.
+   */
+  setYaw(yaw: number): void {
+    this.yaw = yaw;
+    this.desiredYaw = yaw;
+    this.place();
+  }
+
   /** Orthographic half-height actually in use, including the speed zoom. */
   get effectiveViewSize(): number {
     return this.viewSize * this.speedZoom;
