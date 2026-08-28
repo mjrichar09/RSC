@@ -257,6 +257,8 @@ async function main(): Promise<void> {
     // effects: turning the windscreen effect off is asking not to be blinded,
     // not asking for dusk to look like midday.
     visionPass.grade = gradeFor(variant.conditions);
+    // And the sound of it: wind, surf, rain and birds, by biome and weather.
+    mixer.setPlace(def.biome, variant.conditions);
     precipitation.setWeather(variant.conditions.weather);
     carView.setHeadlightWeight(visibility(variant.conditions).headlightWeight);
 

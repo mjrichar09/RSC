@@ -9,6 +9,8 @@
 import type { SurfaceId } from '../sim/surfaces.js';
 import type { VehicleState } from '../sim/vehicle.js';
 import { EngineVoice, whiteNoise } from './engine.js';
+import { Ambience } from './ambience.js';
+import type { Conditions } from '../sim/conditions.js';
 
 /** Per-surface tyre character: how bright the roll is and how loud it gets. */
 const SURFACE_VOICE: Record<SurfaceId, { frequency: number; q: number; gain: number }> = {
@@ -25,6 +27,9 @@ export class Mixer {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private engine: EngineVoice | null = null;
+  private ambience: Ambience | null = null;
+  /** Where the ambience thinks it is, held until the graph exists to play it. */
+  private place: { biome: string; conditions: Conditions } | null = null;
 
   private rollFilter: BiquadFilterNode | null = null;
   private rollGain: GainNode | null = null;
@@ -70,6 +75,12 @@ export class Mixer {
     this.engine = new EngineVoice(ctx, this.master);
     this.engine.start();
 
+    // The world under the car. Built here rather than lazily because audio can
+    // only start from a gesture, and by the time one arrives the stage has
+    // usually been loaded for a while — so the place is remembered and applied.
+    this.ambience = new Ambience(ctx, this.master);
+    if (this.place) this.ambience.setPlace(this.place.biome, this.place.conditions);
+
     // Tyre roll: broadband noise shaped per surface.
     const rollSource = ctx.createBufferSource();
     rollSource.buffer = whiteNoise(ctx, 2);
@@ -107,6 +118,12 @@ export class Mixer {
     skidSource.start();
 
     void ctx.resume();
+  }
+
+  /** Where the race is. Safe to call before audio has started. */
+  setPlace(biome: string, conditions: Conditions): void {
+    this.place = { biome, conditions };
+    this.ambience?.setPlace(biome, conditions);
   }
 
   toggleMute(): boolean {
@@ -152,6 +169,8 @@ export class Mixer {
     );
 
     const speed = Math.abs(state.speed);
+    // The world under the car, which gets quieter as the car gets louder.
+    this.ambience?.update(options.dt, speed);
     const grounded = state.wheels.filter((w) => w.grounded);
     const surface = grounded[0]?.surface.id ?? 'tarmac';
     const voice = SURFACE_VOICE[surface];
@@ -217,11 +236,18 @@ export class Mixer {
     crunch.stop(now + 0.25);
   }
 
-  /** Silence everything continuous — used when a menu opens or a run ends. */
+  /**
+   * Silence the car — used when a menu opens or a run ends.
+   *
+   * The world keeps going, quietly. A menu that kills the wind as well as the
+   * engine reads as the game being switched off; a menu with the stage still
+   * breathing behind it reads as a pause.
+   */
   quiet(): void {
     this.engine?.silence();
     if (!this.ctx) return;
     this.rollGain?.gain.setTargetAtTime(0, this.ctx.currentTime, 0.1);
     this.skidGain?.gain.setTargetAtTime(0, this.ctx.currentTime, 0.1);
+    this.ambience?.update(1 / 60, 0, 0.35);
   }
 }
