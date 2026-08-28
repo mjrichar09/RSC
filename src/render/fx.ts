@@ -405,17 +405,25 @@ export function emitSteam(
   dt: number,
 ): void {
   if (intensity <= 0) return;
-  const count = Math.min(Math.round(intensity * 26 * dt * 60), 6);
+  // Sparingly, and briefly. The first version emitted six a frame with a
+  // second of life each and the car left a smoke-bomb trail a hundred metres
+  // long: a plume that says "this car is in trouble" is a wisp above the
+  // bonnet, not a special effect.
+  // Rate per second rather than per frame, or the plume thickens on a fast
+  // display and thins on a slow one.
+  const count = Math.random() < intensity * dt * 60 ? 1 : 0;
   for (let n = 0; n < count; n++) {
-    scratch.x = -carVelocity.x * 0.25 + (Math.random() - 0.5) * 1.4;
-    scratch.y = 2.2 + Math.random() * 2.2;
-    scratch.z = -carVelocity.z * 0.25 + (Math.random() - 0.5) * 1.4;
+    // Most of the car's own velocity is carried, so the plume hangs over the
+    // bonnet and drifts back a little rather than being left standing.
+    scratch.x = carVelocity.x * 0.62 + (Math.random() - 0.5) * 1.2;
+    scratch.y = 1.6 + Math.random() * 1.4;
+    scratch.z = carVelocity.z * 0.62 + (Math.random() - 0.5) * 1.2;
     particles.emit(
       at,
       scratch,
       STEAM_COLOR,
-      0.5 + Math.random() * 0.7,
       0.7 + Math.random() * 0.6,
+      0.5 + Math.random() * 0.4,
     );
   }
 }

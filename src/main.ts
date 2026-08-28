@@ -890,6 +890,31 @@ async function main(): Promise<void> {
       }
     }
 
+    // `?boil=0.95` puts the coolant where it would be after a long stint with a
+    // holed radiator, then runs on so the plume builds. Steam is the only
+    // warning an overheat gives, and the only way to check that it reads as
+    // steam is to look at one.
+    const boil = params.get('boil');
+    if (boil && world!.damage) {
+      world!.damage.temperature = Number(boil);
+      const state = () => world!.state();
+      for (let i = 0; i < 120 * 2; i++) {
+        world!.step({ throttle: 0.3, brake: 0, steer: 0, handbrake: 0 });
+        world!.damage.temperature = Number(boil);
+        const t = world!.renderTransform(1);
+        const vent = rotate(t.rotation, { x: 0, y: 0.55, z: 1.15 });
+        emitSteam(
+          particles,
+          { x: t.position.x + vent.x, y: t.position.y + vent.y, z: t.position.z + vent.z },
+          state().velocity,
+          world!.damage.boiling,
+          world!.dt,
+        );
+        particles.update(world!.dt);
+      }
+      camera.jumpTo(world!.state().position);
+    }
+
     const brakes = params.get('brakes');
     if (brakes) world!.damage?.brakeTemp.fill(Number(brakes));
     // `?zoom=8` pulls the orthographic camera in. Detail on the car itself —
