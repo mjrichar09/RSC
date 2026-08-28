@@ -79,6 +79,7 @@ export function buildStageView(stage: Stage, markers: Markers): StageView {
   group.add(buildTerrain(stage));
   group.add(buildGates(stage));
   group.add(buildScenery(stage));
+  group.add(buildCrowd(stage));
   const markerView = buildEdgeMarkers(markers);
   group.add(markerView.group);
   group.add(buildProps(stage));
@@ -330,6 +331,127 @@ function buildScenery(stage: Stage): THREE.Group {
     }
   }
 
+  return group;
+}
+
+
+/**
+ * People at the corners.
+ *
+ * An empty road is a test track; a road with somebody standing at the outside
+ * of the hairpin in a yellow jacket is an event. This is the cheapest way the
+ * game gets to say that anyone else in the world cares what happens here, and
+ * it costs two instanced meshes.
+ *
+ * They gather where a crowd actually gathers: the outside of the tightest
+ * corners, where a car that gets it wrong will arrive, and at the gates. Nobody
+ * is standing on a fast kink in the middle of a forest, because nobody would.
+ *
+ * Purely visual, and deliberately so — a car cannot hit them and never will.
+ * Making them collidable would mean deciding what happens when it does, and
+ * that is a different game.
+ */
+function buildCrowd(stage: Stage): THREE.Group {
+  const group = new THREE.Group();
+
+  let seed = 0x9e3779b9;
+  for (let i = 0; i < stage.def.id.length; i++) seed = (seed * 31 + stage.def.id.charCodeAt(i)) >>> 0;
+  const random = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+
+  interface Person {
+    at: THREE.Vector3;
+    yaw: number;
+    coat: THREE.Color;
+    height: number;
+  }
+  const people: Person[] = [];
+
+  /** Somebody standing `out` metres to `side` of the road at `distance`. */
+  const stand = (distance: number, side: -1 | 1, out: number, marshal: boolean) => {
+    const sample = stage.spline.at(Math.max(Math.min(distance, stage.length - 1), 0));
+    const at = new THREE.Vector3(
+      sample.position.x + sample.left.x * out * side,
+      sample.position.y + CORRIDOR.heightAt(sample.width, out),
+      sample.position.z + sample.left.z * out * side,
+    );
+    // Facing the road: everyone is watching the corner, not the scenery.
+    const yaw = Math.atan2(-sample.left.x * side, -sample.left.z * side);
+    const coat = marshal
+      ? new THREE.Color(random() < 0.5 ? 0xf2c14e : 0xe8552f)
+      : new THREE.Color().setHSL(random(), 0.35 + random() * 0.4, 0.28 + random() * 0.3);
+    people.push({ at, yaw, coat, height: 0.9 + random() * 0.22 });
+  };
+
+  // Spectators, at the corners worth watching. Severity is the pacenote scale:
+  // 1 is a hairpin, 6 is a kink, so the tighter the corner the bigger the crowd.
+  for (const corner of stage.corners) {
+    if (corner.severity > 4) continue;
+    const outside: -1 | 1 = corner.direction === 'left' ? -1 : 1;
+    const count = Math.round((5 - corner.severity) * 2.5 + random() * 3);
+    for (let i = 0; i < count; i++) {
+      // Spread through the corner and back from the road: a knot at the apex
+      // and stragglers either side of it, which is how a crowd actually sits.
+      const along = corner.entry + (corner.exit - corner.entry) * (0.15 + random() * 0.9);
+      const sample = stage.spline.at(Math.max(Math.min(along, stage.length - 1), 0));
+      const out = sample.width + CORRIDOR.vergeWidth + 0.8 + random() * (CORRIDOR.bankWidth - 1.4);
+      stand(along, outside, out, random() < 0.12);
+    }
+  }
+
+  // Marshals at every gate, one either side, because that is where they stand.
+  for (const gate of [0, ...stage.checkpoints.map((c) => c.distance), stage.length - 6]) {
+    for (const side of [-1, 1] as const) {
+      const sample = stage.spline.at(Math.max(Math.min(gate, stage.length - 1), 0));
+      stand(gate + (random() - 0.5) * 6, side, sample.width + CORRIDOR.vergeWidth + 1.2, true);
+    }
+  }
+
+  if (people.length === 0) return group;
+
+  // A body and a head. Two instanced meshes and no animation: at this distance
+  // a standing figure is a silhouette, and a walk cycle would cost more than
+  // every other thing in this file put together.
+  const bodies = new THREE.InstancedMesh(
+    new THREE.CylinderGeometry(0.17, 0.22, 1.25, 5),
+    new THREE.MeshStandardMaterial({ roughness: 0.9, flatShading: true }),
+    people.length,
+  );
+  const heads = new THREE.InstancedMesh(
+    new THREE.IcosahedronGeometry(0.13, 0),
+    new THREE.MeshStandardMaterial({ color: 0xc9a68a, roughness: 0.95, flatShading: true }),
+    people.length,
+  );
+  bodies.castShadow = true;
+  heads.castShadow = false;
+
+  const matrix = new THREE.Matrix4();
+  const quaternion = new THREE.Quaternion();
+  const position = new THREE.Vector3();
+  const scale = new THREE.Vector3();
+  const up = new THREE.Vector3(0, 1, 0);
+
+  people.forEach((person, i) => {
+    quaternion.setFromAxisAngle(up, person.yaw);
+
+    scale.set(1, person.height, 1);
+    position.set(person.at.x, person.at.y + 0.62 * person.height, person.at.z);
+    matrix.compose(position, quaternion, scale);
+    bodies.setMatrixAt(i, matrix);
+    bodies.setColorAt(i, person.coat);
+
+    scale.set(1, 1, 1);
+    position.set(person.at.x, person.at.y + 1.32 * person.height, person.at.z);
+    matrix.compose(position, quaternion, scale);
+    heads.setMatrixAt(i, matrix);
+  });
+
+  bodies.instanceMatrix.needsUpdate = true;
+  if (bodies.instanceColor) bodies.instanceColor.needsUpdate = true;
+  heads.instanceMatrix.needsUpdate = true;
+  group.add(bodies, heads);
   return group;
 }
 
