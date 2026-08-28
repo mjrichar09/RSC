@@ -49,6 +49,9 @@ for (const [label, opts, shed] of [
   // is what the debris budget is actually set from.
   ['stage, half shed', { stage: new Stage(STAGES[0]!), damage: true }, Math.floor(PARTS.length / 2)],
   ['stage, whole car shed', { stage: new Stage(STAGES[0]!), damage: true }, PARTS.length],
+  // A full multiplayer grid. The host runs this and its own rendering, so the
+  // interesting number is what three extra cars cost the machine hosting.
+  ['stage, four cars', { stage: new Stage(STAGES[0]!), damage: true, cars: 4 }, 0],
 ] as const) {
   const world = await createWorld(opts as never);
   if (shed > 0) {

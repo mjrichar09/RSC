@@ -96,6 +96,13 @@ cap recycles the body furthest from the car rather than the oldest: the cost is
 bounded either way, but deleting the bumper lying across the road ahead of you
 while a door two corners back survives is the one thing it must not do.
 
+A full multiplayer grid costs about **223 µs a step** — 27 ms of CPU per second
+of game, and still 37 times more headroom than it needs. Four cars is not four
+times one: the road, the wildlife and the weather are simulated once whoever is
+racing on them, and the extra bill is three more vehicles and the contacts
+between them. The host pays it on top of its own rendering, which is the machine
+to watch.
+
 Every case is measured several times, interleaved, and the minimum reported.
 Measuring each once in sequence had this tool confidently reporting a wrecked
 stage as faster than a clean one — timing noise on a shared machine is worth a
