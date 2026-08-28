@@ -10,6 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import { TRACES } from '../src/sim/trace.js';
 import { runTrace } from '../src/sim/run.js';
+import { createWorld } from '../src/sim/world.js';
 
 describe('straight-line performance', () => {
   it('accelerates like a rally car and holds a straight line', async () => {
@@ -208,5 +209,50 @@ describe('determinism with a damaged car', () => {
       damageTo: { transmission: 0.35, engine: 0.4 },
     });
     expect(sick.summary.distance).toBeLessThan(healthy.summary.distance * 0.95);
+  });
+});
+
+describe('the signals the engine note is built from', () => {
+  // The audio itself cannot be tested here — there is no AudioContext in Node —
+  // but everything it reacts to comes from the simulation, and that can be. If
+  // these stop moving, the engine goes back to sounding like a tone control.
+  const NEUTRAL = { throttle: 0, brake: 0, steer: 0, handbrake: 0 };
+
+  it('reports full load on power and a real overrun on a lift', async () => {
+    const world = await createWorld({ baseSurface: 'tarmac' });
+    for (let i = 0; i < 60; i++) world.step(NEUTRAL);
+
+    for (let i = 0; i < 120 * 6; i++) world.step({ ...NEUTRAL, throttle: 1 });
+    expect(world.state().engineLoad).toBeGreaterThan(0.9);
+
+    // Lift at revs: the engine is now being driven by the car.
+    for (let i = 0; i < 30; i++) world.step(NEUTRAL);
+    const overrun = world.state().engineLoad;
+    expect(overrun).toBeLessThan(-0.15);
+  });
+
+  it('breaks the note at every gearshift', async () => {
+    const world = await createWorld({ baseSurface: 'tarmac' });
+    for (let i = 0; i < 60; i++) world.step(NEUTRAL);
+
+    let shifts = 0;
+    let previous = false;
+    for (let i = 0; i < 120 * 8; i++) {
+      world.step({ ...NEUTRAL, throttle: 1 });
+      const now = world.state().shifting;
+      if (now && !previous) shifts++;
+      previous = now;
+    }
+    expect(shifts).toBeGreaterThanOrEqual(2);
+  });
+
+  it('never reports a load outside its own range', async () => {
+    const world = await createWorld({ baseSurface: 'tarmac' });
+    for (let i = 0; i < 120 * 10; i++) {
+      world.step({ ...NEUTRAL, throttle: i % 240 < 120 ? 1 : 0, brake: i % 480 > 400 ? 1 : 0 });
+      const load = world.state().engineLoad;
+      expect(load).toBeGreaterThanOrEqual(-1);
+      expect(load).toBeLessThanOrEqual(1);
+    }
   });
 });

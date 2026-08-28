@@ -28,6 +28,8 @@ export class Mixer {
 
   private rollFilter: BiquadFilterNode | null = null;
   private rollGain: GainNode | null = null;
+  private windFilter: BiquadFilterNode | null = null;
+  private windGain: GainNode | null = null;
   private skidFilter: BiquadFilterNode | null = null;
   private skidGain: GainNode | null = null;
 
@@ -79,6 +81,18 @@ export class Mixer {
     rollSource.connect(this.rollFilter).connect(this.rollGain).connect(this.master);
     rollSource.start();
 
+    // Wind rush: a low-passed roar that only depends on speed.
+    const windSource = ctx.createBufferSource();
+    windSource.buffer = whiteNoise(ctx, 2);
+    windSource.loop = true;
+    this.windFilter = ctx.createBiquadFilter();
+    this.windFilter.type = 'lowpass';
+    this.windFilter.Q.value = 0.6;
+    this.windGain = ctx.createGain();
+    this.windGain.gain.value = 0;
+    windSource.connect(this.windFilter).connect(this.windGain).connect(this.master);
+    windSource.start();
+
     // Skid: a narrower, higher band that only appears past the grip limit.
     const skidSource = ctx.createBufferSource();
     skidSource.buffer = whiteNoise(ctx, 2);
@@ -110,12 +124,32 @@ export class Mixer {
   /** Drive every continuous voice from the current vehicle state. */
   update(
     state: VehicleState,
-    options: { maxRpm: number; throttle: number; engineHealth: number; misfiring: boolean },
+    options: {
+      maxRpm: number;
+      throttle: number;
+      engineHealth: number;
+      turboHealth: number;
+      misfiring: boolean;
+      /** Frame time, for the boost and overrun behaviour. */
+      dt: number;
+    },
   ): void {
     if (!this.ctx || !this.engine || !this.rollGain || !this.rollFilter) return;
 
     const now = this.ctx.currentTime;
-    this.engine.update(state.rpm, options.maxRpm, options.throttle, options.engineHealth, options.misfiring);
+    this.engine.update(
+      {
+        rpm: state.rpm,
+        maxRpm: options.maxRpm,
+        throttle: options.throttle,
+        load: state.engineLoad,
+        health: options.engineHealth,
+        turboHealth: options.turboHealth,
+        misfiring: options.misfiring,
+        shifting: state.shifting,
+      },
+      options.dt,
+    );
 
     const speed = Math.abs(state.speed);
     const grounded = state.wheels.filter((w) => w.grounded);
@@ -129,6 +163,15 @@ export class Mixer {
     this.rollFilter.frequency.setTargetAtTime(voice.frequency * (0.7 + speed / 90), now, 0.06);
     this.rollFilter.Q.setTargetAtTime(voice.q, now, 0.1);
     this.rollGain.gain.setTargetAtTime(rollLevel, now, 0.06);
+
+    // Wind. Separate from tyre roll because it does not care what the surface
+    // is and does not stop when the car leaves the ground — in the air it is
+    // the *only* thing you hear, which is what makes a jump feel long.
+    if (this.windGain && this.windFilter) {
+      const wind = Math.min(speed / 46, 1);
+      this.windGain.gain.setTargetAtTime(wind * wind * 0.075, now, 0.12);
+      this.windFilter.frequency.setTargetAtTime(420 + speed * 26, now, 0.12);
+    }
 
     // Skid is driven by how far past the grip limit the worst tyre is.
     const slip = Math.max(0, Math.max(...state.wheels.map((w) => w.saturation)) - 1);

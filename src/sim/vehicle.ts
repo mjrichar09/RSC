@@ -95,6 +95,18 @@ export interface VehicleState {
   yawRate: number;
   wheels: WheelState[];
   airborne: boolean;
+  /** True while the gearbox is between gears and delivering no torque. */
+  shifting: boolean;
+  /**
+   * Torque being delivered as a fraction of what these revs could give.
+   *
+   * Positive on power, **negative on the overrun** — a trailing throttle at
+   * high revs is an engine being driven by the car rather than the other way
+   * round, and it sounds completely different. Not the same thing as throttle:
+   * a pedal buried at 2 000 rpm in top gear is a loaded, labouring engine, and
+   * the same pedal at the limiter in first is not.
+   */
+  engineLoad: number;
 }
 
 export interface VehicleOptions {
@@ -144,6 +156,8 @@ export class Vehicle {
   /** Seconds spent stationary under braking, before reverse engages. */
   private reverseHold = 0;
   private engineRpm: number;
+  /** Fraction of available torque being delivered; negative on the overrun. */
+  private engineLoad = 0;
 
   constructor(
     rapier: typeof RAPIER,
@@ -410,6 +424,18 @@ export class Vehicle {
     const brakeInput = inReverse ? input.throttle : input.brake;
 
     const engineTorque = this.engineTorque(driveInput) * fx.engineTorque * (fx.misfiring ? 0 : 1);
+    // How hard the engine is working, signed, each direction normalised to what
+    // it can actually do that way: peak torque on power, and full engine
+    // braking at these revs on the overrun. Normalising both against peak
+    // torque instead makes the overrun read as 0.02 — technically true, and
+    // useless as a signal, because engine braking is a fraction of what an
+    // engine can push.
+    const revs = clamp(this.engineRpm, t.idleRpm, t.maxRpm);
+    const capacity =
+      engineTorque >= 0
+        ? Math.max(sampleCurve(t.torqueCurve, revs), 1)
+        : Math.max(t.engineBraking * (revs / t.maxRpm), 1);
+    this.engineLoad = clamp(engineTorque / capacity, -1, 1);
     const gearRatio = t.gearRatios[this.gearIndex] ?? 0;
     const shifting = this.shiftTimer > 0;
     const axleTorque = shifting
@@ -591,6 +617,8 @@ export class Vehicle {
       // turn, which is what every consumer of this number assumes.
       yawRate: -dot(angvel, up),
       wheels: this.wheels,
+      shifting: this.shiftTimer > 0,
+      engineLoad: this.engineLoad,
       airborne: !this.wheels.some((w) => w.grounded),
     };
   }

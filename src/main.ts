@@ -680,7 +680,9 @@ async function main(): Promise<void> {
         maxRpm: world.vehicle.tuning.maxRpm,
         throttle: input.throttle,
         engineHealth: world.damage?.get('engine') ?? 1,
+        turboHealth: world.damage?.get('turbo') ?? 1,
         misfiring: world.damage?.effects().misfiring ?? false,
+        dt,
       });
     } else {
       mixer.quiet();

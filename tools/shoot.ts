@@ -130,11 +130,30 @@ const browser = await chromium.launch({
 
 try {
   const page = await browser.newPage({ viewport: { width: CELL_W, height: CELL_H } });
+  // A page error is worth more than the screenshot that would have hidden it:
+  // an exception in the audio graph or a renderer leaves a frame that looks
+  // almost right and a game that is broken.
+  const problems: string[] = [];
+  page.on('pageerror', (err) => problems.push(`pageerror: ${err.message}`));
+  page.on('console', (msg) => {
+    // The favicon is not part of the game.
+    if (msg.type() === 'error' && !msg.text().includes('favicon')) {
+      problems.push(`console: ${msg.text()}`);
+    }
+  });
+  page.on('response', (res) => {
+    if (res.status() >= 400 && !res.url().includes('favicon')) {
+      problems.push(`${res.status()} ${res.url()}`);
+    }
+  });
   const shots: string[] = [];
 
   for (const cell of cells) {
     await page.goto(`${origin}${cell.url}`, { waitUntil: 'load' });
     await page.waitForFunction(() => window.RSC?.rendered === true, undefined, { timeout: 90_000 });
+    // Audio only builds on a gesture, so press a key before the frame: it is
+    // the only way this harness ever exercises the sound graph at all.
+    await page.keyboard.press('KeyM');
     const buf = await page.screenshot({ type: 'png' });
     shots.push(`data:image/png;base64,${buf.toString('base64')}`);
     // Print the game's own numbers alongside: text is far cheaper to check than
@@ -183,9 +202,15 @@ try {
     },
   );
 
+  if (problems.length > 0) {
+    console.error(`\n${problems.length} page error(s):`);
+    for (const problem of problems.slice(0, 10)) console.error(`  ${problem}`);
+  }
+
   const path = `shots/${outName}.png`;
   writeFileSync(path, Buffer.from(composite.split(',')[1]!, 'base64'));
   console.log(`\n-> ${path}  (${gridCols}x${gridRows}, ${cells.length} frames in one image)`);
+  if (problems.length > 0) process.exitCode = 1;
 } finally {
   await browser.close();
   await server.close();
