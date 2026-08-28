@@ -54,7 +54,7 @@ const MAX_OCCLUSION: Record<VisionKind, number> = {
   mud: 0.88,
 };
 
-/** Seconds for one wiper sweep across the screen. */
+/** Seconds for one wiper stroke across the screen. A cycle is two of them. */
 const SWEEP_TIME = 0.55;
 /** Seconds between sweeps at full speed. Slower when there is less to clear. */
 const SWEEP_INTERVAL = 1.5;
@@ -83,6 +83,14 @@ export interface VisionState {
    * The renderer clears everything the blade has passed this sweep.
    */
   wiper: number | null;
+  /**
+   * True while the blade is on its way back.
+   *
+   * A wiper sweeps out and returns; it does not teleport to the far side and
+   * start again. The return stroke crosses an already-clean screen, so it is
+   * the blade itself you see rather than a line of clearing.
+   */
+  wiperReturning: boolean;
   /** True when the wipers cannot clear at all any more. */
   wipersDead: boolean;
 }
@@ -110,6 +118,8 @@ export class Vision {
   private soiling = 0;
   /** Seconds since the current sweep began, or null when parked. */
   private sweep: number | null = null;
+  /** Whether the outbound stroke of the current cycle has already cleared. */
+  private swept = false;
   private sinceSweep = 0;
 
   update(dt: number, input: VisionInput): VisionState {
@@ -134,18 +144,33 @@ export class Vision {
       const interval = SWEEP_INTERVAL / Math.max(wiperHealth, 0.25);
       if (this.sweep === null && this.sinceSweep >= interval) {
         this.sweep = 0;
+        this.swept = false;
         this.sinceSweep = 0;
       }
     }
 
     let wiper: number | null = null;
+    let wiperReturning = false;
     if (this.sweep !== null) {
       this.sweep += dt;
       const progress = this.sweep / SWEEP_TIME;
-      if (progress >= 1) {
+      if (progress >= 2) {
+        // Parked, and whatever the return stroke picked up on its way back.
         this.sweep = null;
-        // A sweep clears most of it and smears the rest.
-        this.soiling = Math.min(this.soiling, SMEAR * (1 - wiperHealth * 0.5));
+        this.swept = false;
+        this.soiling = Math.min(this.soiling, SMEAR * (1 - wiperHealth * 0.7));
+      } else if (progress >= 1) {
+        // On the way back across glass the outbound stroke already cleared.
+        // The clearing lands here, on the turn, rather than at a progress
+        // threshold: a step is 1/120 s and the window either side of the turn
+        // is narrower than that, so a threshold gets stepped straight over and
+        // the wipers silently stop working.
+        if (!this.swept) {
+          this.swept = true;
+          this.soiling = Math.min(this.soiling, SMEAR * (1 - wiperHealth * 0.5));
+        }
+        wiper = 2 - progress;
+        wiperReturning = true;
       } else {
         wiper = progress;
       }
@@ -163,6 +188,7 @@ export class Vision {
       occlusion: this.soiling,
       kind,
       wiper,
+      wiperReturning,
       wipersDead,
     };
   }
@@ -170,6 +196,7 @@ export class Vision {
   reset(): void {
     this.soiling = 0;
     this.sweep = null;
+    this.swept = false;
     this.sinceSweep = 0;
   }
 }

@@ -85,6 +85,56 @@ describe('soiling', () => {
 });
 
 describe('wipers', () => {
+  it('sweeps out, comes back, and parks', () => {
+    // A wiper does not teleport to the far side and start again. The return
+    // stroke is what makes it read as a wiper rather than as a wipe effect.
+    const vision = new Vision();
+    const wet = { conditions: { timeOfDay: 'day', weather: 'rain' } } as Partial<VisionInput>;
+    let sawOutbound = false;
+    let sawReturn = false;
+    let lastOutbound = 0;
+    let returnFell = false;
+    let previous: number | null = null;
+    for (let i = 0; i < 120 * 6; i++) {
+      const state = vision.update(1 / 120, { ...base, ...wet });
+      if (state.wiper === null) {
+        previous = null;
+        continue;
+      }
+      if (state.wiperReturning) {
+        sawReturn = true;
+        if (previous !== null && state.wiper < previous) returnFell = true;
+      } else {
+        sawOutbound = true;
+        lastOutbound = Math.max(lastOutbound, state.wiper);
+      }
+      previous = state.wiper;
+    }
+    expect(sawOutbound).toBe(true);
+    expect(sawReturn).toBe(true);
+    // The blade travels back the way it came rather than jumping.
+    expect(returnFell).toBe(true);
+    expect(lastOutbound).toBeGreaterThan(0.9);
+  });
+
+  it('clears the glass on the way out, not on the way back', () => {
+    // The clearing used to hang off a progress threshold narrower than one
+    // fixed step, so it was stepped straight over and the wipers silently
+    // stopped working — with the blade still sweeping, which is worse than
+    // not having one.
+    const vision = new Vision();
+    const wet = { conditions: { timeOfDay: 'day', weather: 'rain' } } as Partial<VisionInput>;
+    let dirtiest = 0;
+    let cleanest = 1;
+    for (let i = 0; i < 120 * 12; i++) {
+      const state = vision.update(1 / 120, { ...base, ...wet });
+      dirtiest = Math.max(dirtiest, state.occlusion);
+      cleanest = Math.min(cleanest, state.occlusion);
+    }
+    expect(dirtiest).toBeGreaterThan(0.2);
+    expect(cleanest).toBeLessThan(0.15);
+  });
+
   it('sweeps across the screen and parks again', () => {
     const vision = new Vision();
     const wet = { conditions: { timeOfDay: 'day', weather: 'rain' } } as Partial<VisionInput>;

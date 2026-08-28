@@ -56,6 +56,7 @@ const COMPOSITE = /* glsl */ `
   uniform float uOcclusion;  // 0..1 muck on the screen
   uniform float uKind;       // 0 water, 1 snow, 2 mud
   uniform float uWiper;      // blade position 0..1, or -1 when parked
+  uniform float uWiperBack;  // 1 while the blade is on its return stroke
   uniform float uTime;
   /** How dark the darkest part of the world is allowed to get. */
   uniform float uFloor;
@@ -86,9 +87,15 @@ const COMPOSITE = /* glsl */ `
     float angle = acos(clamp(alignment, -1.0, 1.0));
     float inCone = 1.0 - smoothstep(uAngle * 0.55, uAngle, angle);
     float inRange = 1.0 - smoothstep(uReach * 0.45, uReach, distance);
-    // A pool of light immediately around the car, so it is never itself dark.
-    float nearby = 1.0 - smoothstep(0.02, 0.10, distance);
-    float lit = clamp(max(inCone * inRange, nearby), 0.0, 1.0);
+    // The car itself. Not a pool of light — a hole in the whole effect: the
+    // car has to stay sharp and legible whatever the weather is doing, because
+    // its bodywork is where damage is read, and a blurred dark car in the rain
+    // is a game that has hidden its own most important readout.
+    // Radii in aspect-corrected uv, so this is an ellipse a little wider than
+    // the car at the default zoom rather than a circle that clips its flanks
+    // on a widescreen display.
+    float onCar = 1.0 - smoothstep(0.035, 0.095, distance);
+    float lit = clamp(max(inCone * inRange, onCar), 0.0, 1.0);
 
     // How much of this pixel is hidden: dark outside the beams, plus muck.
     float dark = uDarkness * (1.0 - lit);
@@ -122,7 +129,11 @@ const COMPOSITE = /* glsl */ `
     // edge itself is a dark line with a clean band just behind it.
     if (uWiper >= 0.0) {
       float bladeX = uWiper;
-      float passed = step(vUv.x, bladeX);
+      // Outbound, the blade is a line of clearing: everything behind it is
+      // clean. On the way back it crosses glass it has already cleared, so it
+      // is just the blade — which is what makes the return stroke read as a
+      // wiper returning rather than as the screen dirtying itself again.
+      float passed = step(vUv.x, bladeX) * (1.0 - uWiperBack);
       muck *= mix(1.0, 0.08, passed);
       float onBlade = 1.0 - smoothstep(0.0, 0.012, abs(vUv.x - bladeX));
       muck = mix(muck, 0.85, onBlade * 0.6);
@@ -131,16 +142,24 @@ const COMPOSITE = /* glsl */ `
 
     float hidden = clamp(dark + muck * (1.0 - dark * 0.4), 0.0, 1.0);
 
+    // Blur is not only what is on the glass. Outside the beams there is
+    // nothing your eyes are focused on, and in rain the far half of the view
+    // goes to mush — so what is unlit gets softened whether or not a droplet
+    // happens to land on that pixel. Inside the cone, and on the car, the
+    // world stays sharp.
+    float haze = (1.0 - lit) * (uDarkness * 0.55 + uOcclusion * 1.15);
+    float soften = clamp(hidden * 1.15 + haze, 0.0, 1.0) * (1.0 - onCar);
+
     vec4 sharp = texture2D(uScene, vUv);
     vec4 soft = texture2D(uBlur, vUv);
-    vec4 colour = mix(sharp, soft, clamp(hidden * 1.15, 0.0, 1.0));
+    vec4 colour = mix(sharp, soft, soften);
 
     // Muck is lit by your own lights, so it greys rather than blackens; the
     // dark is genuinely dark.
     vec3 tint = uKind < 1.5 ? vec3(0.72, 0.76, 0.82) : vec3(0.42, 0.33, 0.24);
     // Never fully black: a driver's eyes adapt, and a screen that goes to zero
     // outside the beams is not dramatic, it is unplayable.
-    colour.rgb = mix(colour.rgb, colour.rgb * uFloor, dark);
+    colour.rgb = mix(colour.rgb, colour.rgb * uFloor, dark * (1.0 - onCar));
     colour.rgb = mix(colour.rgb, tint * (0.16 + 0.30 * (1.0 - uDarkness)), muck * 0.6);
 
     // Back to sRGB by hand. Rendering into a target skips the conversion three
@@ -206,6 +225,7 @@ export class VisionPass {
         uOcclusion: { value: 0 },
         uKind: { value: 0 },
         uWiper: { value: -1 },
+        uWiperBack: { value: 0 },
         uTime: { value: 0 },
         uFloor: { value: 0.22 },
       },
@@ -279,10 +299,13 @@ export class VisionPass {
     c.uOcclusion!.value = state.occlusion * this.strength;
     c.uKind!.value = state.kind === 'mud' ? 2 : state.kind === 'snow' ? 1 : 0;
     c.uWiper!.value = state.wiper ?? -1;
+    c.uWiperBack!.value = state.wiperReturning ? 1 : 0;
     c.uTime!.value = time;
-    // At full strength the world outside the beams keeps a fifth of its light;
-    // at low strength it barely dims at all.
-    c.uFloor!.value = 1 - 0.8 * this.strength;
+    // At full strength the world outside the beams keeps about a twelfth of
+    // its light; at low strength it barely dims at all. This used to bottom
+    // out at a fifth, which on a night stage read as "dim" rather than as
+    // driving by the headlights.
+    c.uFloor!.value = 1 - 0.92 * this.strength;
 
     this.quad.material = this.compositeMaterial;
     this.renderer.setRenderTarget(null);
