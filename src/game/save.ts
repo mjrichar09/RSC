@@ -12,10 +12,11 @@
 import type { UpgradeLevels } from './garage.js';
 import type { Medal } from './race.js';
 import type { ComponentId, Dent } from '../sim/damage.js';
+import { DEFAULT_LIVERY, liveryById } from '../data/liveries.js';
 import type { Ghost } from '../sim/replay.js';
 
 const DB_NAME = 'rsc';
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 const PROFILE_KEY = 'profile';
 
 /** Enough to enter the second stage and still afford a mistake. */
@@ -51,6 +52,9 @@ export interface Profile {
   carDents: Dent[];
   /** Lifetime totals, for the garage summary. */
   totals: { earned: number; spentOnRepairs: number; spentOnUpgrades: number; retirements: number };
+  /** Paint and competition number: which car is *yours*. */
+  livery: string;
+  raceNumber: number;
   /** Player settings that survive a reload. */
   settings: Settings;
 }
@@ -77,6 +81,8 @@ export const emptyProfile = (): Profile => ({
   upgrades: {},
   carHealth: {},
   carDents: [],
+  livery: DEFAULT_LIVERY.id,
+  raceNumber: 7,
   totals: { earned: 0, spentOnRepairs: 0, spentOnUpgrades: 0, retirements: 0 },
   settings: { ...DEFAULT_SETTINGS },
 });
@@ -118,6 +124,10 @@ function migrate(stored: unknown): Profile {
           retirements: number(stored.totals.retirements, 0),
         }
       : base.totals,
+    livery: liveryById(typeof stored.livery === 'string' ? stored.livery : undefined).id,
+    // 1 to 99, because a rally car's number is two digits and a four-digit one
+    // would not fit on the roof.
+    raceNumber: Math.min(Math.max(Math.round(number(stored.raceNumber, base.raceNumber)), 1), 99),
     settings: isObject(stored.settings)
       ? { vision: clamp01(number(stored.settings.vision, DEFAULT_SETTINGS.vision)) }
       : { ...DEFAULT_SETTINGS },
@@ -148,6 +158,10 @@ function migrate(stored: unknown): Profile {
 
   // v3 -> v4: settings were added. Nothing to migrate — an older profile
   // simply gets the defaults, which is what the block above already does.
+
+  // v5 -> v6: paint and a number. An unknown livery id falls back to the works
+  // orange the car has worn since the first commit, which is also what an older
+  // profile gets.
 
   // v4 -> v5: the shape of the damage, as well as its price. An older profile
   // has no dents and gets a car that is broken but straight, which is the

@@ -329,6 +329,11 @@ async function main(): Promise<void> {
     );
   }
 
+  // The player's own paint, on the car they drive as well as the one on the
+  // turntable. Arcade and multiplayer keep it too: it is who you are, not what
+  // you earned.
+  carView.setLivery(career.livery, career.raceNumber);
+
   tuningPanel = new TuningPanel(hudRoot, world!.vehicle.tuning);
   controls.onToggleTuning = () => tuningPanel!.toggle();
 

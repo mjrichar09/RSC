@@ -15,6 +15,7 @@ import type { DebrisModel, PartId } from '../sim/debris.js';
 import type { GhostSample } from '../sim/replay.js';
 import type { VehicleState } from '../sim/vehicle.js';
 import { PALETTE } from './scene.js';
+import { DEFAULT_LIVERY, type Livery } from '../data/liveries.js';
 
 export interface CarViewOptions {
   /**
@@ -29,6 +30,10 @@ export interface CarViewOptions {
    * of gravel at once.
    */
   body?: number;
+  /** Full paint scheme, overriding `body`. */
+  livery?: Livery;
+  /** Competition number, painted on the roof and the doors. */
+  number?: number;
 }
 
 const flat = (color: number, roughness = 0.6, ghost = false) =>
@@ -54,6 +59,41 @@ function hash3(x: number, y: number, z: number): number {
   return n - Math.floor(n);
 }
 
+/**
+ * A number plate, drawn to a canvas.
+ *
+ * One number in one weight, and it has to change the instant the player types a
+ * different one — which is a texture generated in four lines rather than an
+ * atlas and a pipeline.
+ */
+function numberTexture(value: number, ink: number, ground: number): THREE.CanvasTexture {
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const draw = canvas.getContext('2d')!;
+
+  const hex = (c: number) => `#${c.toString(16).padStart(6, '0')}`;
+  // A rounded panel rather than the whole face: a decal with a visible edge
+  // reads as something applied to the car, and a full-bleed one reads as the
+  // panel simply being a different colour.
+  draw.fillStyle = hex(ground);
+  draw.beginPath();
+  draw.roundRect(10, 18, size - 20, size - 36, 12);
+  draw.fill();
+
+  draw.fillStyle = hex(ink);
+  draw.font = 'bold 78px ui-monospace, "SF Mono", Menlo, monospace';
+  draw.textAlign = 'center';
+  draw.textBaseline = 'middle';
+  draw.fillText(String(value), size / 2, size / 2 + 2);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 4;
+  return texture;
+}
+
 /** A crazed windscreen: milky, not shattered — this car still has to be driven. */
 const WINDSCREEN_CRAZED = new THREE.Color(0xd8dee3);
 
@@ -71,6 +111,14 @@ export class CarView {
   private readonly discs: THREE.Mesh[] = [];
 
   private readonly ghost: boolean;
+  /** The number painted on this car. Kept so a repaint can keep it. */
+  private raceNumber = 0;
+  /** Meshes that take each of the livery's three colours. */
+  private readonly bodyMeshes: THREE.Mesh[] = [];
+  private readonly trimMeshes: THREE.Mesh[] = [];
+  private accentMesh: THREE.Mesh | null = null;
+  /** Roof and door numbers, which are redrawn when the number changes. */
+  private readonly decals: THREE.Mesh[] = [];
 
   /**
    * Undeformed vertex positions of everything that can crumple.
@@ -102,7 +150,10 @@ export class CarView {
   constructor(parent: THREE.Object3D, options: CarViewOptions = {}) {
     const h = CAR.halfExtents;
     const isGhost = options.ghost === true;
-    const bodyColor = options.body ?? PALETTE.carBody;
+    const livery = options.livery ?? DEFAULT_LIVERY;
+    const bodyColor = options.body ?? livery.body;
+    const trimColor = options.body === undefined ? livery.trim : PALETTE.carCabin;
+    const accentColor = options.body === undefined ? livery.accent : PALETTE.carAccent;
     this.ghost = isGhost;
 
     // Segmented, not because the shape needs it but because a box with eight
@@ -120,7 +171,7 @@ export class CarView {
     // readable at a glance from a fixed isometric angle.
     const cabin = new THREE.Mesh(
       new THREE.BoxGeometry(h.x * 1.62, h.y * 1.0, h.z * 0.92, 4, 3, 4),
-      flat(PALETTE.carCabin, 0.4, isGhost),
+      flat(trimColor, 0.4, isGhost),
     );
     cabin.position.set(0, h.y * 1.05, -0.16);
     cabin.castShadow = !isGhost;
@@ -131,7 +182,7 @@ export class CarView {
     // fixed camera and you have to read its heading instantly.
     const nose = new THREE.Mesh(
       new THREE.BoxGeometry(h.x * 1.5, h.y * 0.42, h.z * 0.34, 5, 2, 2),
-      flat(PALETTE.carAccent, 0.5, isGhost),
+      flat(accentColor, 0.5, isGhost),
     );
     nose.position.set(0, h.y * 0.42, h.z * 0.86);
     nose.castShadow = !isGhost;
@@ -141,7 +192,7 @@ export class CarView {
     // bright ends would make the car's heading ambiguous at a glance.
     const wing = new THREE.Mesh(
       new THREE.BoxGeometry(h.x * 1.95, h.y * 0.16, h.z * 0.2),
-      flat(PALETTE.carCabin, 0.5, isGhost),
+      flat(trimColor, 0.5, isGhost),
     );
     wing.position.set(0, h.y * 1.55, -h.z * 0.92);
     wing.castShadow = !isGhost;
@@ -155,7 +206,7 @@ export class CarView {
     // front left is folded in and the mirror is gone", which is a thing you can
     // look at and price.
     const panelMat = () => flat(bodyColor, 0.55, isGhost);
-    const trimMat = () => flat(PALETTE.carCabin, 0.55, isGhost);
+    const trimMat = () => flat(trimColor, 0.55, isGhost);
 
     const box = (x: number, y: number, z: number) =>
       // Enough segments to fold, few enough that twelve panels cost nothing.
@@ -178,6 +229,16 @@ export class CarView {
       ['wing', box(h.x * 1.95, h.y * 0.16, h.z * 0.2), [0, h.y * 1.55, -h.z * 0.92], trimMat(), 'panelRear'],
     ];
 
+    // Which of the three livery colours each bolt-on panel wears.
+    const trimParts = new Set<PartId>([
+      'bumperFront',
+      'bumperRear',
+      'mirrorL',
+      'mirrorR',
+      'exhaust',
+      'wing',
+    ]);
+
     for (const [id, geometry, position, material, component] of panels) {
       // The rear wing was built above so the nose/cabin block could reference
       // it; everything else is created here.
@@ -187,6 +248,7 @@ export class CarView {
         this.chassis.add(mesh);
       }
       mesh.castShadow = !isGhost;
+      (trimParts.has(id) ? this.trimMeshes : this.bodyMeshes).push(mesh);
       this.parts.set(id, mesh);
       this.partRest.set(id, mesh.position.clone());
       this.partComponent.set(id, component);
@@ -252,11 +314,18 @@ export class CarView {
 
     parent.add(this.group);
 
-    if (!isGhost) this.buildHeadlights(h);
+    if (!isGhost) {
+      this.buildHeadlights(h);
+      this.buildDecals(h);
+      this.setLivery(livery, options.number ?? 0);
+    }
 
     this.body = body;
     this.cabin = cabin;
     this.nose = nose;
+    this.bodyMeshes.push(body);
+    this.trimMeshes.push(cabin, wing);
+    this.accentMesh = nose;
     for (const mesh of [body, cabin, nose, wing]) {
       if (!isGhost) this.keepRestGeometry(mesh);
       this.restPose.set(mesh, {
@@ -264,6 +333,77 @@ export class CarView {
         scale: mesh.scale.clone(),
         color: (mesh.material as THREE.MeshStandardMaterial).color.clone(),
       });
+    }
+  }
+
+  /**
+   * The competition number, on the roof and on both doors.
+   *
+   * On the roof because of the camera: from a fixed isometric view the roof is
+   * the largest flat surface the player ever sees, and it is the one panel that
+   * is never hidden by the car's own body. The doors are for the garage
+   * turntable, where the car is seen from the side.
+   *
+   * Drawn to a canvas rather than shipped as an atlas — it is one number in one
+   * weight, it has to change the instant the player types a different one, and
+   * a texture generated in four lines beats a pipeline.
+   */
+  private buildDecals(h: { x: number; y: number; z: number }): void {
+    const roof = new THREE.Mesh(
+      new THREE.PlaneGeometry(h.x * 1.1, h.z * 0.62),
+      new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false }),
+    );
+    // Face-up, with the top of the number toward the nose: that is which way
+    // round a competition number is painted, and from a fixed isometric camera
+    // the roof is the panel the player looks at most.
+    roof.rotation.set(-Math.PI / 2, 0, Math.PI);
+    roof.position.set(0, h.y * 1.56, -0.16);
+    this.chassis.add(roof);
+    this.decals.push(roof);
+
+    for (const side of [-1, 1] as const) {
+      const door = new THREE.Mesh(
+        new THREE.PlaneGeometry(h.z * 0.52, h.y * 0.66),
+        new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false }),
+      );
+      door.rotation.y = (side * Math.PI) / 2;
+      door.position.set(side * h.x * 1.09, h.y * 0.22, -0.08);
+      this.chassis.add(door);
+      this.decals.push(door);
+    }
+  }
+
+  /**
+   * Repaint the car, live.
+   *
+   * The garage turntable has to change the moment a livery is picked, and the
+   * rest pose has to change with it — damage darkens each panel *from its own
+   * colour*, so a repaint that forgot the rest pose would have a scuffed wing
+   * fade back toward the paint it used to wear.
+   */
+  setLivery(livery: Livery, raceNumber = this.raceNumber): void {
+    this.raceNumber = raceNumber;
+    if (this.ghost) return;
+
+    const paint = (meshes: THREE.Mesh[], color: number) => {
+      for (const mesh of meshes) {
+        const material = mesh.material as THREE.MeshStandardMaterial;
+        material.color.setHex(color);
+        const rest = this.restPose.get(mesh);
+        if (rest) rest.color.setHex(color);
+      }
+    };
+    paint(this.bodyMeshes, livery.body);
+    paint(this.trimMeshes, livery.trim);
+    if (this.accentMesh) paint([this.accentMesh], livery.accent);
+
+    const texture = numberTexture(raceNumber, livery.number, livery.numberBack);
+    for (const decal of this.decals) {
+      const material = decal.material as THREE.MeshBasicMaterial;
+      material.map?.dispose();
+      material.map = texture;
+      material.visible = raceNumber > 0;
+      material.needsUpdate = true;
     }
   }
 

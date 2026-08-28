@@ -18,6 +18,7 @@ import type { DamageModel } from '../sim/damage.js';
 import type { DebrisModel } from '../sim/debris.js';
 import type { VehicleState } from '../sim/vehicle.js';
 import { CarView } from './carView.js';
+import type { Livery } from '../data/liveries.js';
 import { PALETTE } from './scene.js';
 
 /** A parked car: wheels down, nothing turning, nothing sliding. */
@@ -119,6 +120,11 @@ export class GarageCar {
     this.car = new CarView(this.pivot);
 
     this.bindDragging();
+  }
+
+  /** Repaint the car on the turntable, live, as the player picks. */
+  setLivery(livery: Livery, raceNumber: number): void {
+    this.car.setLivery(livery, raceNumber);
   }
 
   /** Show this condition. Called again after every repair, so it stays true. */

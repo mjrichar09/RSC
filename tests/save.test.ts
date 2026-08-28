@@ -10,6 +10,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { STARTING_MONEY, SaveStore, emptyProfile, migrateProfile } from '../src/game/save.js';
 import { GHOST_STRIDE, type Ghost } from '../src/sim/replay.js';
+import { DEFAULT_LIVERY } from '../src/data/liveries.js';
 
 const ghostOf = (time: number): Ghost => ({
   stageId: 'pine-loop',
@@ -206,5 +207,29 @@ describe('carried dents', () => {
     expect(profile.carDents).toHaveLength(1);
     expect(profile.carDents[0]!.depth).toBe(1);
     expect(profile.carDents[0]!.reach).toBe(2);
+  });
+});
+
+
+describe('paint and number', () => {
+  it('gives a new profile the works orange and a number', () => {
+    const profile = migrateProfile({});
+    expect(profile.livery).toBe(DEFAULT_LIVERY.id);
+    expect(profile.raceNumber).toBeGreaterThan(0);
+  });
+
+  it('keeps a livery it recognises and refuses one it does not', () => {
+    expect(migrateProfile({ version: 6, livery: 'rally-blue' }).livery).toBe('rally-blue');
+    // An id from a future version, or a corrupted one, falls back to the paint
+    // the car has worn since the first commit rather than to no paint at all.
+    expect(migrateProfile({ version: 6, livery: 'chrome-lightning' }).livery).toBe(
+      DEFAULT_LIVERY.id,
+    );
+  });
+
+  it('keeps the number to something that fits on a roof', () => {
+    expect(migrateProfile({ version: 6, raceNumber: 1200 }).raceNumber).toBe(99);
+    expect(migrateProfile({ version: 6, raceNumber: 0 }).raceNumber).toBe(1);
+    expect(migrateProfile({ version: 6, raceNumber: 'seven' }).raceNumber).toBeGreaterThan(0);
   });
 });

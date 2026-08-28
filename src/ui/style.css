@@ -1064,3 +1064,30 @@ html, body {
 #hud.in-menu .tags,
 #hud.in-menu .hud-basic,
 #hud.in-menu .tuning { display: none; }
+
+/* Paint and number, beside the turntable so the car changes as you press. */
+.swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+.swatch {
+  display: flex;
+  width: 40px;
+  height: 26px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 3px;
+  cursor: pointer;
+  background: none;
+}
+.swatch i { display: block; height: 100%; }
+.swatch i:first-child { flex: 3; }
+.swatch i:last-child { flex: 1; }
+.swatch.is-on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.swatch-name { margin-top: 6px; font-size: 11px; letter-spacing: 0.12em; color: var(--dim); }
+
+.race-numbers { display: flex; flex-wrap: wrap; gap: 6px; }
+.garage .race-number {
+  min-width: 38px;
+  padding: 5px 8px;
+  font-variant-numeric: tabular-nums;
+}
+.garage .race-number.is-on { border-color: var(--accent); color: var(--accent); }

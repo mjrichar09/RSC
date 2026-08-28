@@ -12,6 +12,7 @@ import { GarageCar } from '../render/garageCar.js';
 import { Stage, type StageDef } from '../sim/stage.js';
 import { stageMapSvg } from './stageMap.js';
 import { UPGRADES, levelOf, maxLevel, nextCost } from '../game/garage.js';
+import { LIVERIES } from '../data/liveries.js';
 import { formatTime } from './raceHud.js';
 
 const MEDAL_TINT: Record<string, string> = {
@@ -84,6 +85,15 @@ export class Garage {
             this.onEnter?.(target);
           }
         }
+        break;
+      }
+      case 'livery':
+        await this.career.setLivery(id);
+        this.car.setLivery(this.career.livery, this.career.raceNumber);
+        break;
+      case 'number': {
+        await this.career.setRaceNumber(Number(id));
+        this.car.setLivery(this.career.livery, this.career.raceNumber);
         break;
       }
       case 'repair-all':
@@ -165,7 +175,7 @@ export class Garage {
         <div class="garage-cols">
           <section>${this.stagesPanel()}</section>
           <section>${this.repairsPanel()}</section>
-          <section>${this.upgradesPanel()}</section>
+          <section>${this.upgradesPanel()}${this.paintPanel()}</section>
         </div>
         <footer class="garage-foot">
           <span><b>1</b>–<b>${Math.min(9, this.career.targets().length)}</b> enter stage · <b>Esc</b> close · <b>drag</b> the car to turn it</span>
@@ -188,6 +198,7 @@ export class Garage {
     // on every repair would drop the context each time.
     this.root.querySelector('#garage-car-slot')?.appendChild(this.car.root);
     this.car.setCondition(this.career.buildDamage());
+    this.car.setLivery(this.career.livery, this.career.raceNumber);
   }
 
   /**
@@ -276,6 +287,42 @@ export class Garage {
       .join('');
 
     return `<h3>STAGES</h3>${rows}`;
+  }
+
+  /**
+   * Paint and number.
+   *
+   * Next to the turntable rather than in a menu of its own: the whole point is
+   * that the car in front of you changes as you press the swatches.
+   */
+  private paintPanel(): string {
+    const current = this.career.livery;
+    const swatches = LIVERIES.map(
+      (livery) => `
+        <button
+          class="swatch${livery.id === current.id ? ' is-on' : ''}"
+          data-action="livery"
+          data-id="${livery.id}"
+          title="${livery.name}"
+        >
+          <i style="background:#${livery.body.toString(16).padStart(6, '0')}"></i>
+          <i style="background:#${livery.accent.toString(16).padStart(6, '0')}"></i>
+        </button>`,
+    ).join('');
+
+    const numbers = [3, 7, 11, 22, 46, 88]
+      .map(
+        (n) =>
+          `<button class="race-number${n === this.career.raceNumber ? ' is-on' : ''}" data-action="number" data-id="${n}">${n}</button>`,
+      )
+      .join('');
+
+    return `
+      <h3>PAINT</h3>
+      <div class="swatches">${swatches}</div>
+      <div class="swatch-name">${current.name}</div>
+      <h3>NUMBER</h3>
+      <div class="race-numbers">${numbers}</div>`;
   }
 
   private repairsPanel(): string {

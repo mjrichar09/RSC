@@ -12,6 +12,7 @@ import type { Medal } from './race.js';
 import type { Profile, SaveStore } from './save.js';
 import { COMPONENTS, type ComponentId, DamageModel } from '../sim/damage.js';
 import type { VehicleTuning } from '../data/tuning.js';
+import { type Livery, liveryById } from '../data/liveries.js';
 import { type StageDef, type StageVariant, stageVariants, variantKey } from '../sim/stage.js';
 
 /** A stage under particular conditions — what a player actually enters. */
@@ -74,6 +75,28 @@ export class Career {
   /** Record key for a target: stage and conditions together. */
   keyFor(target: RaceTarget): string {
     return variantKey(target.def.id, target.variant.id);
+  }
+
+  /** The paint on the car, and the number on its roof. */
+  get livery(): Livery {
+    return liveryById(this.profile.livery);
+  }
+
+  get raceNumber(): number {
+    return this.profile.raceNumber;
+  }
+
+  async setLivery(id: string): Promise<void> {
+    await this.save.update((p) => {
+      p.livery = liveryById(id).id;
+    });
+  }
+
+  async setRaceNumber(value: number): Promise<void> {
+    const clamped = Math.min(Math.max(Math.round(value), 1), 99);
+    await this.save.update((p) => {
+      p.raceNumber = clamped;
+    });
   }
 
   /** Tuning with the fitted upgrades applied. */
