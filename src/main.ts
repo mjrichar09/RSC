@@ -282,7 +282,15 @@ async function main(): Promise<void> {
   if (freeRoam) loadFreeRoam();
   else {
     sessionHealth = { ...career.profile.carHealth };
-    loadStage(params.get('stage') ?? STAGES[0]!.id, params.get('variant') ?? undefined);
+    // `?cars=4` fills the grid without a network, so the visual question — do
+    // four cars read as four cars, and do the tags land on them — can be
+    // answered by the screenshot harness rather than by two browsers.
+    const grid = Number(params.get('cars') ?? '1');
+    loadStage(
+      params.get('stage') ?? STAGES[0]!.id,
+      params.get('variant') ?? undefined,
+      grid > 1 ? { cars: grid } : undefined,
+    );
   }
 
   tuningPanel = new TuningPanel(hudRoot, world!.vehicle.tuning);
@@ -503,6 +511,23 @@ async function main(): Promise<void> {
     }
   };
 
+  /**
+   * The order of the field. Progress along the stage rather than a lap count:
+   * it is the same number the host publishes, and it is the meaningful one on a
+   * point-to-point stage where nobody laps anybody.
+   */
+  const updateStandings = () => {
+    if (!stage || world.cars.length < 2) return;
+    const names = session?.names ?? [];
+    raceHud.setStandings(
+      world.cars.map((car, index) => ({
+        name: index === 0 ? 'You' : (names[index] || `P${index + 1}`),
+        progress: stage!.progressAt(car.vehicle.body.translation()).distance,
+        you: index === 0,
+      })),
+    );
+  };
+
   const drawOnce = (alpha: number, dt: number) => {
     const state = world.state();
     const transform = world.renderTransform(alpha);
@@ -639,6 +664,7 @@ async function main(): Promise<void> {
       camera.applyZones(stage!.cameraZones, race!.furthest);
       camera.jumpTo(world.state().position);
       raceHud.update(race!, world.damage);
+      updateStandings();
       raceHud.setNotes(cornersAhead(stage!.corners, race!.furthest, 2));
       minimap.update(world.state().position, race!.progress);
       damagePanel.update(world.damage!);
@@ -935,6 +961,10 @@ async function main(): Promise<void> {
       }
 
       raceHud.update(race);
+      // The order of the field. Progress along the stage rather than a lap
+      // count: it is the same number the standings the host publishes use, and
+      // it is meaningful on a point-to-point stage where nobody laps anybody.
+      updateStandings();
       // The co-driver's call and the minimap both read the corner list and the
       // progress the race is already tracking.
       if (stage) {

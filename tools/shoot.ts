@@ -44,6 +44,8 @@ const zoomArg = arg('zoom', '');
 const brakesArg = arg('brakes', '');
 /** `--variant=night-rain` shoots the stage under those conditions. */
 const variantArg = arg('variant', '');
+/** `--cars=4` fills the grid, for looking at a multiplayer start. */
+const carsArg = arg('cars', '');
 const [gridCols, gridRows] = arg('grid', '2x2').split('x').map(Number) as [number, number];
 const outName = arg('out', 'composite');
 
@@ -96,12 +98,12 @@ const cells = cellSpec.split(',').map((spec) => {
         withGhost ? '&ghost=1' : ''
       }${crashFor ? `&crash=${crashFor}` : ''}${hotFor ? `&brakes=${hotFor}` : ''}${zoomArg ? `&zoom=${zoomArg}` : ''}${looseFor ? `&loosen=${looseFor}` : ''}${afterFor ? `&after=${afterFor}` : ''}${
         wreckMatch ? `&wreck=${wreckMatch[1]}` : ''
-      }${signArg ? `&sign=${signArg}` : ''}${visionFor ? `&vision=${visionFor}` : ''}`;
+      }${signArg ? `&sign=${signArg}` : ''}${visionFor ? `&vision=${visionFor}` : ''}${carsArg ? `&cars=${carsArg}` : ''}`;
   return {
     url,
     label: `${id}${useVariant ? ` ${useVariant}` : ''} @ ${seconds}s${withGhost ? ' + ghost' : ''}${
       crashFor ? ` + ${crashFor}s crash` : ''
-    }${hotMatch ? ` · ${hotFor}°C` : ''}${
+    }${carsArg ? ` · ${carsArg} cars` : ''}${hotMatch ? ` · ${hotFor}°C` : ''}${
       looseMatch ? ` · ${looseFor} N·s +${afterFor}s` : ''
     }`,
   };

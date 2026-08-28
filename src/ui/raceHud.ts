@@ -38,6 +38,9 @@ export class RaceHud {
   private readonly pace: HTMLElement;
   private readonly best: HTMLElement;
   private readonly notes: HTMLElement;
+  /** The order of the field in a network race. Empty when racing alone. */
+  private readonly standings: HTMLElement;
+  private standingsKey = '';
   /** What the notes currently say, so the DOM is only touched when it changes. */
   private notesKey = '';
   private lastSplitCount = -1;
@@ -61,10 +64,12 @@ export class RaceHud {
         <div class="race-progress"><div id="race-progress-fill"></div></div>
         <div class="race-cps" id="race-cps"></div>
       </div>
+      <div class="race-standings" id="race-standings"></div>
       <div class="race-notes" id="race-notes"></div>
       <div class="race-panel" id="race-panel"></div>`;
     parent.appendChild(this.root);
 
+    this.standings = this.root.querySelector('#race-standings')!;
     this.clock = this.root.querySelector('#race-clock')!;
     this.stageName = this.root.querySelector('#race-stage')!;
     this.progressFill = this.root.querySelector('#race-progress-fill')!;
@@ -83,6 +88,33 @@ export class RaceHud {
    * and the signs can never disagree — a note that contradicts a board is worse
    * than no note at all.
    */
+  /**
+   * The order of the field, closest to the finish first.
+   *
+   * Distances are shown as a gap to the car ahead rather than as absolute
+   * progress: "+31 m" is a thing you can act on, and 1,482 m is not.
+   */
+  setStandings(rows: { name: string; progress: number; you: boolean }[]): void {
+    const key = rows.map((r) => `${r.name}:${Math.round(r.progress / 5)}`).join('|');
+    if (key === this.standingsKey) return;
+    this.standingsKey = key;
+
+    if (rows.length < 2) {
+      this.standings.innerHTML = '';
+      return;
+    }
+    const order = [...rows].sort((a, b) => b.progress - a.progress);
+    this.standings.innerHTML = order
+      .map((row, i) => {
+        const ahead = i === 0 ? null : (order[i - 1]!.progress - row.progress);
+        const gap = ahead === null ? '' : `+${Math.round(ahead)} m`;
+        return `<div class="standing${row.you ? ' you' : ''}"><b>${i + 1}</b>${
+          row.name
+        }<span>${gap}</span></div>`;
+      })
+      .join('');
+  }
+
   setNotes(upcoming: UpcomingCorner[]): void {
     const key = upcoming
       .map((u) => `${u.corner.entry}:${Math.max(Math.round(u.distance / 10) * 10, 0)}`)

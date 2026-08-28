@@ -929,3 +929,27 @@ html, body {
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 3px;
 }
+
+/* Standings. Below the minimap, which owns the top-right corner. */
+.race-standings {
+  position: absolute;
+  top: 200px;
+  right: 18px;
+  min-width: 150px;
+  text-align: left;
+}
+.standing {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 3px 8px;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  background: rgba(12, 15, 20, 0.5);
+  border-left: 2px solid rgba(255, 255, 255, 0.2);
+  margin-bottom: 2px;
+}
+.standing b { color: var(--dim); font-variant-numeric: tabular-nums; }
+.standing span { margin-left: auto; color: var(--dim); font-variant-numeric: tabular-nums; }
+.standing.you { border-left-color: var(--accent); }
+.standing.you b { color: var(--accent); }
