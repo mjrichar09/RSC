@@ -11,7 +11,7 @@
  */
 
 import * as THREE from 'three';
-import type { PropKind, Stage } from '../sim/stage.js';
+import { CORRIDOR, type PropKind, type Stage } from '../sim/stage.js';
 import type { Markers } from '../sim/markers.js';
 import { SURFACES } from '../sim/surfaces.js';
 
@@ -78,6 +78,7 @@ export function buildStageView(stage: Stage, markers: Markers): StageView {
 
   group.add(buildTerrain(stage));
   group.add(buildGates(stage));
+  group.add(buildScenery(stage));
   const markerView = buildEdgeMarkers(markers);
   group.add(markerView.group);
   group.add(buildProps(stage));
@@ -93,6 +94,243 @@ export function buildStageView(stage: Stage, markers: Markers): StageView {
       (road.material as THREE.Material).dispose();
     },
   };
+}
+
+
+/**
+ * What grows beside the road, by biome.
+ *
+ * Every stage was the same place in a different colour: identical conifers at
+ * identical spacing, and the only thing telling a Welsh moor from a Finnish
+ * forest was the tint of the ground. This is the dressing that makes them read
+ * as different countries — density first, then silhouette, then colour, in that
+ * order of how much they matter at an isometric distance.
+ *
+ * All of it is scenery in the strict sense: it lives outside the corridor
+ * walls, nothing collides with it, and nothing in `sim/` knows it exists. The
+ * things you can hit are the stage's hazards, and they are data.
+ */
+interface Scatter {
+  kind: 'conifer' | 'broadleaf' | 'deadTree' | 'bush' | 'boulder' | 'tuft' | 'snowFir';
+  /**
+   * Which band it grows in.
+   *
+   * `verge` is the strip immediately beside the road, and it is the only band
+   * that is on screen the whole time — the camera shows about thirty metres
+   * across and the embankment starts ten from the centreline. `near` is the
+   * embankment itself, seen at the edges of the frame and through every corner
+   * that opens out. `far` is everything past the wall: the wide shots, and the
+   * sense that the road goes somewhere.
+   */
+  band: 'verge' | 'near' | 'far';
+  /** Roughly how many per 100 m of road, per side. */
+  density: number;
+  /** Size multiplier range. */
+  size: [number, number];
+  color: number;
+  /** Second colour, mixed in per instance so a wood is not one flat green. */
+  colorB?: number;
+}
+
+const DRESSING: Record<string, Scatter[]> = {
+  // Deep northern forest: trees to the edge of the road and nothing to see past
+  // them. The density is the character — this stage should feel like a corridor.
+  forest: [
+    { kind: 'conifer', band: 'far', density: 26, size: [0.8, 1.7], color: 0x2b4a2c, colorB: 0x1f3a22 },
+    { kind: 'broadleaf', band: 'far', density: 6, size: [0.7, 1.2], color: 0x466b32, colorB: 0x5b7a34 },
+    { kind: 'deadTree', band: 'far', density: 2, size: [0.7, 1.1], color: 0x6b5b45 },
+    { kind: 'bush', band: 'near', density: 30, size: [0.4, 0.8], color: 0x3c5a2e, colorB: 0x2f4a26 },
+    { kind: 'tuft', band: 'near', density: 22, size: [0.5, 1.0], color: 0x50703a },
+    { kind: 'tuft', band: 'verge', density: 46, size: [0.3, 0.6], color: 0x4a6b34, colorB: 0x3a5a2c },
+    { kind: 'bush', band: 'verge', density: 10, size: [0.25, 0.45], color: 0x35512b },
+  ],
+  // Worked stone: almost nothing grows, and what does is scrub clinging to
+  // spoil heaps. Open, bright and hard-edged.
+  quarry: [
+    { kind: 'boulder', band: 'far', density: 16, size: [0.7, 2.4], color: 0x7a7268, colorB: 0x8d8272 },
+    { kind: 'deadTree', band: 'far', density: 2, size: [0.6, 1.0], color: 0x6f6150 },
+    { kind: 'boulder', band: 'near', density: 14, size: [0.3, 0.8], color: 0x847b6f, colorB: 0x6d6459 },
+    { kind: 'tuft', band: 'near', density: 10, size: [0.4, 0.8], color: 0x8a8256 },
+    { kind: 'boulder', band: 'verge', density: 26, size: [0.16, 0.4], color: 0x8d8478, colorB: 0x736a5e },
+    { kind: 'tuft', band: 'verge', density: 12, size: [0.25, 0.5], color: 0x8a8256 },
+  ],
+  // Snow-laden firs thinning into open white, and drifts against the banks.
+  winter: [
+    { kind: 'snowFir', band: 'far', density: 16, size: [0.9, 1.8], color: 0x27402f, colorB: 0x1e3327 },
+    { kind: 'deadTree', band: 'far', density: 3, size: [0.8, 1.3], color: 0x5d5347 },
+    { kind: 'boulder', band: 'near', density: 16, size: [0.4, 1.0], color: 0xe6edf2, colorB: 0xcfd9e2 },
+    { kind: 'bush', band: 'near', density: 5, size: [0.4, 0.7], color: 0x38503c },
+    { kind: 'boulder', band: 'verge', density: 30, size: [0.2, 0.5], color: 0xeff4f8, colorB: 0xd8e2ea },
+    { kind: 'tuft', band: 'verge', density: 8, size: [0.2, 0.45], color: 0x7d8a76 },
+  ],
+  // Open moorland: no trees at all, and that absence is the whole look. Heather
+  // and gorse in clumps, with stone breaking through.
+  moor: [
+    { kind: 'boulder', band: 'far', density: 8, size: [0.5, 1.8], color: 0x6f6c66 },
+    { kind: 'bush', band: 'far', density: 14, size: [0.5, 1.1], color: 0x5a4a63, colorB: 0x6b5a2f },
+    { kind: 'bush', band: 'near', density: 30, size: [0.35, 0.75], color: 0x6a4f6b, colorB: 0x7a6634 },
+    { kind: 'tuft', band: 'near', density: 26, size: [0.5, 1.0], color: 0x7a7340, colorB: 0x8d8449 },
+    { kind: 'bush', band: 'verge', density: 34, size: [0.22, 0.5], color: 0x74566f, colorB: 0x84713a },
+    { kind: 'tuft', band: 'verge', density: 30, size: [0.28, 0.55], color: 0x8a8149 },
+  ],
+  // Wind-bent pines and dune grass, thinning toward the water.
+  coast: [
+    { kind: 'conifer', band: 'far', density: 9, size: [0.6, 1.1], color: 0x3d5a3c, colorB: 0x4a6440 },
+    { kind: 'boulder', band: 'far', density: 7, size: [0.6, 1.8], color: 0x8a8378 },
+    { kind: 'tuft', band: 'near', density: 34, size: [0.6, 1.2], color: 0xa8a06a, colorB: 0x8f9a5c },
+    { kind: 'bush', band: 'near', density: 8, size: [0.4, 0.8], color: 0x53663c },
+    { kind: 'tuft', band: 'verge', density: 52, size: [0.3, 0.7], color: 0xb3ab72, colorB: 0x97a05f },
+  ],
+};
+
+/** How far out from the road scenery is scattered, metres. */
+const SCENERY_REACH = 105;
+/** Total instances allowed per stage, whatever the recipe asks for. */
+const SCENERY_BUDGET = 3200;
+
+function scatterGeometry(kind: Scatter['kind']): THREE.BufferGeometry {
+  switch (kind) {
+    case 'conifer':
+      return new THREE.ConeGeometry(1.6, 7.5, 6);
+    case 'snowFir':
+      return new THREE.ConeGeometry(1.8, 7, 6);
+    case 'broadleaf':
+      return new THREE.IcosahedronGeometry(2.4, 0);
+    case 'deadTree':
+      return new THREE.CylinderGeometry(0.16, 0.3, 5.5, 5);
+    case 'bush':
+      return new THREE.IcosahedronGeometry(1.1, 0);
+    case 'boulder':
+      return new THREE.DodecahedronGeometry(1.1, 0);
+    case 'tuft':
+      return new THREE.ConeGeometry(0.55, 1.1, 4);
+  }
+}
+
+/**
+ * Scatter the biome's vegetation along the road, outside the corridor.
+ *
+ * Placed along the centreline rather than across the bounding box: a stage is a
+ * ribbon through a landscape, and scattering over its bounding box puts nine
+ * tenths of the instances where the camera never looks.
+ */
+function buildScenery(stage: Stage): THREE.Group {
+  const group = new THREE.Group();
+  const recipes = DRESSING[stage.def.biome] ?? DRESSING.forest!;
+
+  // Seeded from the stage id: the same wood every time it loads, in the browser
+  // and in the screenshot harness.
+  let seed = 0;
+  for (let i = 0; i < stage.def.id.length; i++) seed = (seed * 31 + stage.def.id.charCodeAt(i)) >>> 0;
+  const random = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+
+  const step = 12;
+  const samples = Math.max(Math.floor(stage.length / step), 1);
+  const total = recipes.reduce((sum, r) => sum + r.density, 0) * 2 * (stage.length / 100);
+  const budget = Math.min(1, SCENERY_BUDGET / Math.max(total, 1));
+
+  const matrix = new THREE.Matrix4();
+  const quaternion = new THREE.Quaternion();
+  const position = new THREE.Vector3();
+  const scale = new THREE.Vector3();
+  const up = new THREE.Vector3(0, 1, 0);
+  const tint = new THREE.Color();
+
+  for (const recipe of recipes) {
+    const perSample = (recipe.density / 100) * step * 2 * budget;
+    const count = Math.max(Math.ceil(perSample * samples), 1);
+    const geometry = scatterGeometry(recipe.kind);
+    const mesh = new THREE.InstancedMesh(
+      geometry,
+      new THREE.MeshStandardMaterial({ roughness: 0.9, flatShading: true }),
+      count,
+    );
+    // Only the tall things cast: the shadow camera rides with the car and a
+    // thousand shadow-casting tufts is a bill for something nobody can see.
+    mesh.castShadow = recipe.kind === 'conifer' || recipe.kind === 'snowFir' || recipe.kind === 'broadleaf';
+    mesh.receiveShadow = false;
+
+    const a = new THREE.Color(recipe.color);
+    const b = new THREE.Color(recipe.colorB ?? recipe.color);
+
+    let n = 0;
+    for (let i = 0; i < samples && n < count; i++) {
+      const d = i * step + random() * step;
+      const sample = stage.spline.at(Math.min(d, stage.length - 1));
+      // The embankment, from the outer edge of the verge to just short of the
+      // wall; and everything past the wall.
+      const vergeFrom = sample.width + 0.35;
+      const vergeTo = sample.width + CORRIDOR.vergeWidth - 0.4;
+      const bankFrom = sample.width + CORRIDOR.vergeWidth + 0.6;
+      const bankTo = sample.width + CORRIDOR.vergeWidth + CORRIDOR.bankWidth - 0.5;
+      const beyond = sample.width + CORRIDOR.vergeWidth + CORRIDOR.bankWidth + 2;
+
+      for (let k = 0; k < perSample && n < count; k++) {
+        if (perSample < 1 && random() > perSample) continue;
+        const side = random() < 0.5 ? -1 : 1;
+        const onCorridor = recipe.band !== 'far';
+        // Far scenery is weighted toward the road: what is close is what is seen.
+        const out =
+          recipe.band === 'verge'
+            ? vergeFrom + (vergeTo - vergeFrom) * random()
+            : recipe.band === 'near'
+              ? bankFrom + (bankTo - bankFrom) * random()
+              : beyond + (SCENERY_REACH - beyond) * random() ** 2;
+        const along = (random() - 0.5) * step;
+
+        position.set(
+          sample.position.x + sample.left.x * out * side + sample.forward.x * along,
+          // On the embankment rather than at road level, or a bush on a bank
+          // hovers a metre above its own hillside.
+          sample.position.y + (onCorridor ? CORRIDOR.heightAt(sample.width, out) : 0),
+          sample.position.z + sample.left.z * out * side + sample.forward.z * along,
+        );
+
+        const size = recipe.size[0] + random() * (recipe.size[1] - recipe.size[0]);
+        // Sunk slightly so nothing hovers over ground that undulates under it.
+        position.y -= 0.6 * size;
+        scale.set(size, size * (0.85 + random() * 0.4), size);
+        quaternion.setFromAxisAngle(up, random() * Math.PI * 2);
+        matrix.compose(position, quaternion, scale);
+        mesh.setMatrixAt(n, matrix);
+
+        tint.copy(a).lerp(b, random());
+        mesh.setColorAt(n, tint);
+        n++;
+      }
+    }
+
+    mesh.count = n;
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    group.add(mesh);
+
+    // A cap of snow on the firs, which is most of what says "winter" from a
+    // distance — the tree under it is the same tree.
+    if (recipe.kind === 'snowFir') {
+      const caps = new THREE.InstancedMesh(
+        new THREE.ConeGeometry(1.5, 3.4, 6),
+        new THREE.MeshStandardMaterial({ color: 0xeef3f7, roughness: 0.8, flatShading: true }),
+        Math.max(n, 1),
+      );
+      caps.castShadow = false;
+      for (let i = 0; i < n; i++) {
+        mesh.getMatrixAt(i, matrix);
+        matrix.decompose(position, quaternion, scale);
+        position.y += 2.0 * scale.y;
+        matrix.compose(position, quaternion, scale);
+        caps.setMatrixAt(i, matrix);
+      }
+      caps.count = n;
+      caps.instanceMatrix.needsUpdate = true;
+      group.add(caps);
+    }
+  }
+
+  return group;
 }
 
 /** Rolling ground colour per biome, under and beyond the corridor. */

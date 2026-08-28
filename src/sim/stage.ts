@@ -175,6 +175,31 @@ const BANK_WIDTH = 5.0;
 const BANK_HEIGHT = 2.4;
 
 /**
+ * The corridor's shape, for anything that has to sit on it.
+ *
+ * Exported because the renderer scatters vegetation up the embankment, and a
+ * second copy of these numbers over there would drift from these ones the first
+ * time a verge got wider — leaving a stage with bushes hovering a metre above
+ * their own hillside.
+ */
+export const CORRIDOR = {
+  vergeWidth: VERGE_WIDTH,
+  vergeDrop: VERGE_DROP,
+  bankWidth: BANK_WIDTH,
+  bankHeight: BANK_HEIGHT,
+  /** Height of the corridor surface at `offset` metres from the centreline. */
+  heightAt(width: number, offset: number): number {
+    const from = Math.abs(offset);
+    if (from <= width) return 0;
+    if (from <= width + VERGE_WIDTH) {
+      return -VERGE_DROP * ((from - width) / VERGE_WIDTH);
+    }
+    const up = Math.min((from - width - VERGE_WIDTH) / BANK_WIDTH, 1);
+    return -VERGE_DROP + (BANK_HEIGHT + VERGE_DROP) * up;
+  },
+} as const;
+
+/**
  * Flat apron extended straight out past each end of the centreline, metres.
  *
  * Without it the ribbon stops dead on the first and last samples, and a car

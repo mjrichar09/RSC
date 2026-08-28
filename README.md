@@ -442,6 +442,31 @@ undiscoverable.
 fails to open is a game that cannot be played at all and no unit test would
 notice.
 
+### Places, not one place in five colours
+
+Every stage used to be the same wood at the same spacing with the ground tinted
+differently. The dressing is now a per-biome recipe — density first, then
+silhouette, then colour, in that order of how much they matter at an isometric
+distance — scattered in three bands:
+
+- **Verge**, the strip beside the road. The only band on screen the whole time:
+  the camera shows about thirty metres across and the embankment starts ten from
+  the centreline. Grass in the forest, dune grass on the coast, heather on the
+  moor, loose stone in the quarry, snow-covered rock in winter.
+- **Bank**, the embankment itself, seen at the edges of the frame and through
+  every corner that opens out.
+- **Beyond the wall**, for the wide shots and for the sense that the road goes
+  somewhere: dense conifers in the forest, spoil heaps and dead trees in the
+  quarry, snow-laden firs thinning into open white, and no trees at all on the
+  moor — that absence is the whole look of the place.
+
+All of it is scenery in the strict sense: outside the corridor, nothing collides
+with it, and nothing in `sim/` knows it exists. The things you can hit are the
+stage's hazards, and those are data. It is scattered along the centreline rather
+than over the stage's bounding box, because a stage is a ribbon through a
+landscape and a bounding box puts nine tenths of the instances where the camera
+never looks.
+
 ### The ground
 
 A centreline says where a road goes and almost nothing about what it is. Left to
