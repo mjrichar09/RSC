@@ -243,12 +243,12 @@ function buildGates(stage: Stage): THREE.Group {
   };
 
   const first = stage.spline.samples[0]!;
-  make(first.position, first.right, first.width, 0x4fd6a0);
+  make(first.position, first.left, first.width, 0x4fd6a0);
 
-  for (const cp of stage.checkpoints) make(cp.position, cp.right, cp.width, 0xf2c14e);
+  for (const cp of stage.checkpoints) make(cp.position, cp.left, cp.width, 0xf2c14e);
 
   const last = stage.spline.samples[stage.spline.samples.length - 1]!;
-  make(last.position, last.right, last.width, 0xe8552f);
+  make(last.position, last.left, last.width, 0xe8552f);
 
   return gates;
 }
@@ -276,9 +276,9 @@ function buildEdgeMarkers(stage: Stage): THREE.Group {
     for (const side of [-1, 1]) {
       const off = s.width + 0.7;
       m.setPosition(
-        s.position.x + s.right.x * off * side,
+        s.position.x + s.left.x * off * side,
         s.position.y + 0.55,
-        s.position.z + s.right.z * off * side,
+        s.position.z + s.left.z * off * side,
       );
       mesh.setMatrixAt(n++, m);
     }

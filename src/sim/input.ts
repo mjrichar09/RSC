@@ -4,7 +4,14 @@ export interface DriverInput {
   throttle: number;
   /** 0..1 */
   brake: number;
-  /** -1 (left) .. 1 (right) */
+  /**
+   * -1 (left) .. 1 (right), from the driver's point of view.
+   *
+   * The simulation's own frame has the car's local +X on its *left* — that
+   * falls out of a right-handed, Y-up world with the nose along +Z — so this is
+   * negated exactly once, where the vehicle consumes it. Everything above the
+   * simulation, the AI included, speaks the driver's language: right is right.
+   */
   steer: number;
   /** 0..1 */
   handbrake: number;

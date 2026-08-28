@@ -166,6 +166,11 @@ export class DamagePanel {
     this.toast(`${worst.label} ${(worst.remaining * 100).toFixed(0)}%`, worst.remaining <= 0);
   }
 
+  /** Announce something that happened to the car, rather than inside it. */
+  notice(text: string): void {
+    this.toast(text, true);
+  }
+
   private toast(text: string, severe: boolean): void {
     const el = document.createElement('div');
     el.className = `damage-toast${severe ? ' severe' : ''}`;

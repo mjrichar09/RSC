@@ -13,7 +13,7 @@
  */
 
 import type { Spline } from './spline.js';
-import { type Vec3, add, scale, v3 } from './math.js';
+import { type Quat, type Vec3, add, rotateInverse, scale, v3 } from './math.js';
 
 export type AnimalState = 'grazing' | 'alert' | 'bolting' | 'gone';
 
@@ -59,6 +59,14 @@ const ALERT_RANGE = 60;
 const PASSED_BY = 8;
 /** How fast it crosses, metres per second. */
 const BOLT_SPEED = 7.5;
+/**
+ * The strike box, in car-local metres: the car's own footprint plus the deer's
+ * body. Half the car is 0.85 m wide and 2.0 m long; a deer is about 0.7 m
+ * across and 1.4 m long.
+ */
+const HIT_HALF_WIDTH = 1.5;
+const HIT_HALF_LENGTH = 2.7;
+
 /** Grazing offset from the centreline, as a multiple of the road half-width. */
 const VERGE_OFFSET = 1.45;
 
@@ -95,10 +103,10 @@ export class Wildlife {
         distance,
         side,
         state: 'grazing',
-        position: add(sample.position, scale(sample.right, offset * side)),
+        position: add(sample.position, scale(sample.left, offset * side)),
         // Grazing animals face away from the road, which is why the head
         // coming up is a tell you can read at a glance.
-        yaw: Math.atan2(sample.right.x * side, sample.right.z * side),
+        yaw: Math.atan2(sample.left.x * side, sample.left.z * side),
         crossed: 0,
       });
     }
@@ -121,8 +129,8 @@ export class Wildlife {
       if (animal.state === 'bolting') {
         animal.crossed += (BOLT_SPEED * dt) / Math.max(sample.width * 2.6, 1);
         const offset = sample.width * VERGE_OFFSET * (1 - 2 * animal.crossed);
-        animal.position = add(sample.position, scale(sample.right, offset * animal.side));
-        animal.yaw = Math.atan2(-sample.right.x * animal.side, -sample.right.z * animal.side);
+        animal.position = add(sample.position, scale(sample.left, offset * animal.side));
+        animal.yaw = Math.atan2(-sample.left.x * animal.side, -sample.left.z * animal.side);
         if (animal.crossed >= 1.25) animal.state = 'gone';
         continue;
       }
@@ -159,12 +167,22 @@ export class Wildlife {
    * obstacle you can push around, it is an event that happens to you, and a
    * ragdoll would cost a body and a collider per animal for no gain.
    */
-  strike(carPosition: Vec3, carVelocity: Vec3): { impulse: number; push: Vec3 } | null {
+  strike(
+    carPosition: Vec3,
+    carVelocity: Vec3,
+    carRotation: Quat,
+  ): { impulse: number; push: Vec3 } | null {
     for (const animal of this.animals) {
       if (animal.state === 'gone') continue;
-      const dx = animal.position.x - carPosition.x;
-      const dz = animal.position.z - carPosition.z;
-      if (dx * dx + dz * dz > 3.0 * 3.0) continue;
+      // The car's actual footprint, not a circle around its centre: a circle
+      // wide enough to reach the nose also "hits" a deer standing a metre clear
+      // of the door, which is a strike the player can see they avoided.
+      const local = rotateInverse(carRotation, {
+        x: animal.position.x - carPosition.x,
+        y: 0,
+        z: animal.position.z - carPosition.z,
+      });
+      if (Math.abs(local.x) > HIT_HALF_WIDTH || Math.abs(local.z) > HIT_HALF_LENGTH) continue;
 
       animal.state = 'gone';
       const speed = Math.hypot(carVelocity.x, carVelocity.z);
@@ -188,8 +206,8 @@ export class Wildlife {
       const offset = sample.width * VERGE_OFFSET;
       animal.state = 'grazing';
       animal.crossed = 0;
-      animal.position = add(sample.position, scale(sample.right, offset * animal.side));
-      animal.yaw = Math.atan2(sample.right.x * animal.side, sample.right.z * animal.side);
+      animal.position = add(sample.position, scale(sample.left, offset * animal.side));
+      animal.yaw = Math.atan2(sample.left.x * animal.side, sample.left.z * animal.side);
     }
   }
 }

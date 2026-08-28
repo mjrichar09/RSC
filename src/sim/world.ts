@@ -156,6 +156,15 @@ export class SimWorld {
    * damage events.
    */
   lastImpact = 0;
+  /**
+   * Headline events since the last drain — "Deer strike", "Heavy landing".
+   *
+   * Damage events name the component that broke, which is the wrong headline
+   * for something that happened *to* the car. Hitting a deer produced a quiet
+   * "Lights 32%" and nothing else: no shake, no thud, no mention of the deer.
+   * It read as taking no damage at all.
+   */
+  private notices: string[] = [];
   /** Transform at the start of the last fixed step, for render interpolation. */
   private previous: { position: Vec3; rotation: Quat } = {
     position: v3(),
@@ -351,12 +360,16 @@ export class SimWorld {
       const here = this.stage.progressAt(state.position, this.splineHint);
       this.wildlife.update(this.dt, here.distance, speed);
 
-      const hit = this.wildlife.strike(state.position, state.velocity);
+      const hit = this.wildlife.strike(state.position, state.velocity, state.rotation);
       if (hit) {
         // Through the nose, like any other frontal impact — a deer strike is
         // not a special case in the damage model, it is just a heavy one.
         this.damage.applyImpact(v3(0, 0, 1.8), hit.impulse);
         this.debris?.applyImpact(v3(0, 0, 1.8), hit.impulse);
+        // Felt and heard, not just billed: this is what the camera shake and
+        // the impact sound read.
+        this.lastImpact = Math.max(this.lastImpact, hit.impulse);
+        this.notices.push('Deer strike');
         // And the car loses the momentum it gave the deer, which at speed is
         // a couple of metres per second and a very unwelcome shove.
         this.vehicle.body.applyImpulse(
@@ -368,6 +381,13 @@ export class SimWorld {
           true,
         );
       }
+    }
+
+    // A landing that bottomed out is an impact the player has to feel.
+    if (this.vehicle.landingImpact > 0) {
+      this.lastImpact = Math.max(this.lastImpact, this.vehicle.landingImpact);
+      if (this.vehicle.landingImpact > 8000) this.notices.push('Heavy landing');
+      this.vehicle.landingImpact = 0;
     }
 
     if (this.ambient) {
@@ -384,6 +404,8 @@ export class SimWorld {
       }
       for (const stone of this.ambient.drainStones()) {
         this.damage.applyImpact(stone.at, stone.impulse);
+        // A stone is cosmetic, but it is a sharp crack you should hear.
+        this.lastImpact = Math.max(this.lastImpact, stone.impulse * 0.4);
       }
     }
   }
@@ -426,8 +448,16 @@ export class SimWorld {
     this.loose.push({ id: event.id, label: event.label, body, half: event.half });
   }
 
+  /** Headline events since the last call, for the HUD to announce. */
+  drainNotices(): string[] {
+    const out = this.notices;
+    this.notices = [];
+    return out;
+  }
+
   /** Put every part back on the car and clear the road. Used on a restart. */
   clearDebris(): void {
+    this.notices = [];
     this.debris?.reset();
     this.wildlife?.reset();
     this.ambient?.reset();

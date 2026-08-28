@@ -41,8 +41,15 @@ export interface SplineSample {
   position: Vec3;
   /** Unit tangent, pointing along the direction of travel. */
   forward: Vec3;
-  /** Unit right vector in the road plane. */
-  right: Vec3;
+  /**
+   * Unit vector across the road, pointing to the driver's **left**.
+   *
+   * Named for what it is, after a bug that cost a great deal: it is
+   * `cross(up, forward)`, and in a right-handed Y-up world with the nose along
+   * +Z that points to the car's left, not its right. Called `right` it read as
+   * obviously correct in a dozen places and was wrong in all of them.
+   */
+  left: Vec3;
   /** Unit up vector, tilted by banking. */
   up: Vec3;
   width: number;
@@ -131,16 +138,16 @@ export class Spline {
 
       const forward = normalize(sub(next.pos, prev.pos));
       const flatForward = normalize(v3(forward.x, 0, forward.z));
-      let right = normalize(cross(WORLD_UP, flatForward));
-      let up = normalize(cross(forward, right));
+      let left = normalize(cross(WORLD_UP, flatForward));
+      let up = normalize(cross(forward, left));
 
       if (p.banking !== 0) {
         // Roll the road frame about its own forward axis.
         const c = Math.cos(p.banking);
         const s = Math.sin(p.banking);
-        const rolledRight = add(scale(right, c), scale(up, s));
-        up = normalize(sub(scale(up, c), scale(right, s)));
-        right = normalize(rolledRight);
+        const rolledLeft = add(scale(left, c), scale(up, s));
+        up = normalize(sub(scale(up, c), scale(left, s)));
+        left = normalize(rolledLeft);
       }
 
       if (i > 0) distance += length(sub(p.pos, prev.pos));
@@ -157,7 +164,7 @@ export class Spline {
         distance,
         position: p.pos,
         forward,
-        right,
+        left,
         up,
         width: p.width,
         surface: p.surface,
@@ -257,7 +264,7 @@ export class Spline {
     index: number;
     sample: SplineSample;
     distance: number;
-    /** Signed lateral offset, metres. Positive is to the right of the centreline. */
+    /** Signed lateral offset, metres. Positive is to the *left* of the centreline. */
     lateral: number;
     height: number;
   } {
@@ -268,7 +275,7 @@ export class Spline {
       index,
       sample,
       distance: sample.distance,
-      lateral: dot(delta, sample.right),
+      lateral: dot(delta, sample.left),
       height: dot(delta, sample.up),
     };
   }

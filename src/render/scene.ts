@@ -32,13 +32,38 @@ export const PALETTE = {
 /**
  * Key light offset from the car, in world units.
  *
- * Deliberately on the opposite azimuth from the camera (which looks from +x/+z
- * at 45°). Put the light on the camera's side and the car sits exactly on top
- * of its own shadow, which reads on screen as having no shadow at all — and
- * with a fixed isometric camera the shadow is the only cue for how high the car
- * is off the ground over a jump.
+ * Deliberately on the opposite azimuth from the camera. Put the light on the
+ * camera's side and the car sits exactly on top of its own shadow, which reads
+ * on screen as having no shadow at all — and with a fixed isometric camera the
+ * shadow is the only cue for how high the car is off the ground over a jump.
+ *
+ * The camera's yaw is now per-zone rather than a single value for the whole
+ * game, so this cannot be one constant vector any more: `keyLightOffset` puts
+ * the sun opposite whatever the camera is currently doing.
  */
 export const KEY_LIGHT_OFFSET = { x: -38, y: 46, z: -34 } as const;
+
+/** Horizontal distance and height of the key light from the car. */
+const KEY_RADIUS = Math.hypot(KEY_LIGHT_OFFSET.x, KEY_LIGHT_OFFSET.z);
+const KEY_HEIGHT = KEY_LIGHT_OFFSET.y;
+/**
+ * Sideways kick, radians, on top of "directly opposite the camera".
+ *
+ * Straight opposite would throw the shadow directly away from the viewer, where
+ * the car itself hides most of it. A little to one side and the shadow lies
+ * across the screen where its gap from the car can be read.
+ */
+const KEY_SWING = 0.55;
+
+/** Where the key light should sit for a camera at this yaw. */
+export function keyLightOffset(cameraYaw: number): { x: number; y: number; z: number } {
+  const azimuth = cameraYaw + Math.PI + KEY_SWING;
+  return {
+    x: Math.sin(azimuth) * KEY_RADIUS,
+    y: KEY_HEIGHT,
+    z: Math.cos(azimuth) * KEY_RADIUS,
+  };
+}
 
 /**
  * Lighting per time of day.

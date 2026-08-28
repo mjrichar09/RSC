@@ -237,6 +237,9 @@ export class Vehicle {
    */
   private readonly brakeApplied: [number, number, number, number] = [0, 0, 0, 0];
 
+  /** Largest bump-stop impulse this step, N·s. Drained by the world. */
+  landingImpact = 0;
+
   /** Advance one fixed step. Call before `world.step()`. */
   step(dt: number, input: DriverInput): void {
     const t = this.tuning;
@@ -264,7 +267,11 @@ export class Vehicle {
     }
     const fx = this.effects;
 
-    this.updateSteering(dt, input.steer, planarSpeed);
+    // Right is right. The car's local +X points to its left in a right-handed
+    // Y-up world with the nose along +Z, so a positive steer input has to be
+    // negated here — without this, pressing right turned the car left, which is
+    // exactly what it did for the whole of the first nine phases.
+    this.updateSteering(dt, -input.steer, planarSpeed);
 
     // --- Suspension pass -----------------------------------------------------
     // Forces are gathered first so the anti-roll bar can see both sides of an
@@ -384,6 +391,9 @@ export class Vehicle {
           if (bottomed[i]! <= 0) continue;
           const impulse = (t.mass * bottomed[i]! * BOTTOM_OUT_HARSHNESS) / sharing;
           this.damage.applyImpact(t.wheelPositions[i]!, impulse);
+          // A landing hard enough to bottom the suspension has to be felt, or
+          // the repair bill arrives with no memory of earning it.
+          this.landingImpact = Math.max(this.landingImpact, impulse);
         }
       }
     }
@@ -577,7 +587,9 @@ export class Vehicle {
       rpm: this.engineRpm,
       gear: this.gearIndex,
       driftAngle: drift,
-      yawRate: dot(angvel, up),
+      // Negated for the same reason as the steering: positive is a right-hand
+      // turn, which is what every consumer of this number assumes.
+      yawRate: -dot(angvel, up),
       wheels: this.wheels,
       airborne: !this.wheels.some((w) => w.grounded),
     };

@@ -25,7 +25,7 @@ import { CarView } from './render/carView.js';
 import { ParticleField, Precipitation, SkidMarks, emitDragSparks, updateWheelEffects } from './render/fx.js';
 import { IsoCamera } from './render/camera.js';
 import {
-  KEY_LIGHT_OFFSET,
+  keyLightOffset,
   addProvingGround,
   addSurfacePatches,
   createScene,
@@ -179,7 +179,7 @@ async function main(): Promise<void> {
     raceHud.setStage(stage, variant.name, variant.medals);
     tuningPanel?.rebind(world.vehicle.tuning);
 
-    camera.applyZones(stage.def.cameraZones, 0);
+    camera.applyZones(stage.cameraZones, 0);
     camera.jumpTo(world.state().position);
     stuckFor = 0;
     particles.clear();
@@ -251,7 +251,7 @@ async function main(): Promise<void> {
       settled = false;
       raceHud.setLedger(null);
       damagePanel.reset();
-      camera.applyZones(stage.def.cameraZones, 0);
+      camera.applyZones(stage.cameraZones, 0);
     } else {
       world.vehicle.reset({ x: 0, y: 1.2, z: 0 }, 0);
     }
@@ -353,15 +353,17 @@ async function main(): Promise<void> {
       ghostView.visible = race.time <= ghost.duration + 0.5;
     }
 
-    if (stage && race) camera.applyZones(stage.def.cameraZones, race.furthest);
+    if (stage && race) camera.applyZones(stage.cameraZones, race.furthest);
     camera.follow(dt, transform.position, state.velocity);
 
     // The shadow frustum is far too tight to cover a whole stage, so it rides
-    // along with the car.
+    // along with the car — and its azimuth tracks the camera, so the shadow
+    // never ends up hidden behind the car whatever a zone's yaw is.
+    const sun = keyLightOffset(camera.yaw);
     key.position.set(
-      transform.position.x + KEY_LIGHT_OFFSET.x,
-      transform.position.y + KEY_LIGHT_OFFSET.y,
-      transform.position.z + KEY_LIGHT_OFFSET.z,
+      transform.position.x + sun.x,
+      transform.position.y + sun.y,
+      transform.position.z + sun.z,
     );
     key.target.position.set(transform.position.x, transform.position.y, transform.position.z);
     key.target.updateMatrixWorld();
@@ -415,7 +417,7 @@ async function main(): Promise<void> {
         const ghostAt = ghost.timeAtDistance(race!.furthest);
         raceHud.setDelta(ghostAt === null ? null : race!.time - ghostAt);
       }
-      camera.applyZones(stage!.def.cameraZones, race!.furthest);
+      camera.applyZones(stage!.cameraZones, race!.furthest);
       camera.jumpTo(world.state().position);
       raceHud.update(race!, world.damage);
       damagePanel.update(world.damage!);
@@ -594,6 +596,9 @@ async function main(): Promise<void> {
         camera.shake(severity);
         mixer.impact(severity);
       }
+
+      // What happened first, then what it broke.
+      for (const notice of world.drainNotices()) damagePanel.notice(notice);
 
       // Surface what just broke while the impact is still on screen.
       if (world.damage) {

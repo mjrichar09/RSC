@@ -208,7 +208,8 @@ export interface Checkpoint {
   position: Vec3;
   /** Half-width of the gate, for rendering markers. */
   width: number;
-  right: Vec3;
+  /** Unit vector across the gate, pointing to the driver's left. */
+  left: Vec3;
 }
 
 /** Key under which a variant's record and ghost are stored. */
@@ -269,6 +270,13 @@ export class Stage {
   readonly geometry: StageGeometry;
   readonly checkpoints: Checkpoint[];
   readonly props: StageProp[];
+  /**
+   * Camera zones, derived from the road rather than authored.
+   *
+   * The authored zones in `def.cameraZones` supply zoom only; the yaw is
+   * computed here. See `buildCameraZones` for why.
+   */
+  readonly cameraZones: CameraZone[];
   readonly start: { position: Vec3; heading: number };
   readonly length: number;
 
@@ -279,6 +287,7 @@ export class Stage {
     this.geometry = this.buildGeometry();
     this.checkpoints = this.buildCheckpoints(def.checkpoints ?? 3);
     this.props = this.buildProps();
+    this.cameraZones = this.buildCameraZones();
 
     // Sit the car a few metres up the road from the start line, well inside the
     // geometry, and let the apron cover anything behind it.
@@ -344,7 +353,7 @@ export class Stage {
     let v = 0;
     for (const s of samples) {
       for (const p of this.profile(s.width)) {
-        const point = add(add(s.position, scale(s.right, p.offset)), scale(s.up, p.height));
+        const point = add(add(s.position, scale(s.left, p.offset)), scale(s.up, p.height));
         vertices[v * 3] = point.x;
         vertices[v * 3 + 1] = point.y;
         vertices[v * 3 + 2] = point.z;
@@ -392,7 +401,7 @@ export class Stage {
     for (let i = 1; i <= count; i++) {
       const distance = (this.length * i) / (count + 1);
       const s = this.spline.at(distance);
-      out.push({ distance, position: s.position, width: s.width, right: s.right });
+      out.push({ distance, position: s.position, width: s.width, left: s.left });
     }
     return out;
   }
@@ -410,6 +419,84 @@ export class Stage {
    * They sit just beyond the verge, so clipping one is the price of running
    * genuinely wide rather than of using the road's full width.
    */
+  /**
+   * Camera zones that always sit *behind* the direction of travel.
+   *
+   * This was authored by hand, and by eye, and it was wrong: measured across
+   * the nine stages, between 60% and 98% of every one was driven toward the
+   * camera. A car coming toward the viewer has its left and right mirrored on
+   * screen, so the steering read as inverted for most of the game — the single
+   * worst bug in it, and invisible to every headless test, because the
+   * simulation was perfectly correct.
+   *
+   * So the yaw is derived instead. A zone runs until the road has turned more
+   * than `ZONE_TURN` from the heading it started with, and its camera sits
+   * behind that heading, offset for an isometric read and snapped to an eighth
+   * of a circle so the world still reads as a fixed diorama rather than a chase
+   * camera. The budget is what keeps the guarantee: at most 45° of road turn
+   * inside a zone, 20° of stylistic offset and 11.25° of snapping is 76°, which
+   * leaves 14° of margin before a car could face the camera again.
+   *
+   * The view is still fixed and still pans: the yaw changes only at zone
+   * boundaries, and eases over `zoneHalfLife`.
+   */
+  private buildCameraZones(): CameraZone[] {
+    const ZONE_TURN = Math.PI * 0.25;
+    const ISO_OFFSET = Math.PI * 0.11;
+    const EIGHTH = Math.PI / 4;
+    const authored = this.def.cameraZones ?? [];
+
+    /** Zoom the author asked for at this distance, or a sensible default. */
+    const zoomAt = (distance: number): number => {
+      let zoom = 13;
+      for (const zone of authored) {
+        if (distance >= zone.from && zone.zoom !== undefined) zoom = zone.zoom;
+      }
+      return zoom;
+    };
+
+    const bearingAt = (distance: number): number => {
+      const sample = this.spline.at(distance);
+      return Math.atan2(sample.forward.x, sample.forward.z);
+    };
+
+    const zones: CameraZone[] = [];
+    let zoneStart = 0;
+    let reference = bearingAt(0);
+    // Alternate which side the camera sits on, so consecutive zones do not all
+    // look the same and the stage keeps some visual variety.
+    let side = 1;
+
+    const push = (from: number, bearing: number) => {
+      const behind = bearing + Math.PI + ISO_OFFSET * side;
+      zones.push({
+        from,
+        yaw: Math.round(behind / EIGHTH) * EIGHTH,
+        zoom: zoomAt(from),
+      });
+      side = -side;
+    };
+
+    for (let d = 5; d < this.length; d += 5) {
+      const bearing = bearingAt(d);
+      let turn = (bearing - reference) % (Math.PI * 2);
+      if (turn > Math.PI) turn -= Math.PI * 2;
+      if (turn < -Math.PI) turn += Math.PI * 2;
+      if (Math.abs(turn) > ZONE_TURN) {
+        // The zone's camera is aimed at the middle of what it covers, not at
+        // its first metre, which halves the turn it has to tolerate.
+        push(zoneStart, bearingAt((zoneStart + d) / 2));
+        zoneStart = d;
+        reference = bearing;
+      }
+    }
+    push(zoneStart, bearingAt((zoneStart + this.length) / 2));
+
+    // The first zone always starts at zero, whatever the walk above decided.
+    zones[0]!.from = 0;
+    return zones;
+  }
+
   private buildProps(): StageProp[] {
     const profile = this.def.hazards;
     if (!profile || profile.kinds.length === 0) return [];
@@ -436,7 +523,7 @@ export class Stage {
       const along = (random() - 0.5) * profile.spacing * 0.4;
 
       const base = add(
-        add(sample.position, scale(sample.right, offset * side)),
+        add(sample.position, scale(sample.left, offset * side)),
         scale(sample.forward, along),
       );
 

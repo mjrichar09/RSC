@@ -120,11 +120,23 @@ describe('a strike', () => {
   it('only fires when the car is actually on top of one', () => {
     const wildlife = place();
     const animal = wildlife.animals[0]!;
+    const level = { x: 0, y: 0, z: 0, w: 1 };
     const far = v3(animal.position.x + 20, animal.position.y, animal.position.z);
-    expect(wildlife.strike(far, v3(0, 0, 25))).toBeNull();
-    expect(wildlife.strike(animal.position, v3(0, 0, 25))).not.toBeNull();
+    expect(wildlife.strike(far, v3(0, 0, 25), level)).toBeNull();
+    expect(wildlife.strike(animal.position, v3(0, 0, 25), level)).not.toBeNull();
     // And it is over: the animal cannot be hit twice.
-    expect(wildlife.strike(animal.position, v3(0, 0, 25))).toBeNull();
+    expect(wildlife.strike(animal.position, v3(0, 0, 25), level)).toBeNull();
+  });
+
+  it('misses a deer the car drove past rather than into', () => {
+    const wildlife = place();
+    const animal = wildlife.animals[0]!;
+    const level = { x: 0, y: 0, z: 0, w: 1 };
+    // 2.2 m to the side, along the car's own x axis: clear of the bodywork,
+    // and inside the circle the old test used.
+    const alongside = v3(animal.position.x - 2.2, animal.position.y, animal.position.z);
+    expect(wildlife.strike(alongside, v3(0, 0, 25), level)).toBeNull();
+    expect(animal.state).not.toBe('gone');
   });
 
   it('is expensive at speed and harmless at a crawl', () => {

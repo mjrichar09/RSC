@@ -97,7 +97,7 @@ export class Driver {
       return {
         throttle: 0,
         brake: 1,
-        steer: clamp(-misalignment * 1.5, -1, 1),
+        steer: -clamp(-misalignment * 1.5, -1, 1),
         handbrake: 0,
       };
     }
@@ -141,7 +141,10 @@ export class Driver {
     const sliding = state.driftAngle > 0.3;
     if (sliding) throttle *= 0.35;
 
-    return { throttle, brake, steer, handbrake: 0 };
+    // The AI works in the car's local frame, where a positive steer goes left;
+    // `DriverInput.steer` is the driver's language, where positive is right. So
+    // it flips exactly once, here, on the way out.
+    return { throttle, brake, steer: -steer, handbrake: 0 };
   }
 
   /** True when the car is pointing back down the stage — used for stuck detection. */

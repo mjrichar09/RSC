@@ -45,6 +45,19 @@ Each of these cost real time and is easy to repeat:
 - **`process.env` anywhere under `src/`.** It is undefined in the browser and
   throws. One debug line inside a Rapier contact callback silently killed every
   impact in the game while the headless tests stayed green.
+- **A vector named `right` that was the left.** `cross(up, forward)` in a
+  right-handed Y-up world with the nose along +Z points to the car's *left*.
+  Named `right` on the spline sample it read as obviously correct in a dozen
+  places, and the steering, the AI's recentring and the camera zones were all
+  built on it. Pressing right turned the car left, and every tool agreed,
+  because every tool shared the convention. Settle handedness by driving the
+  car and projecting the result through the real camera — never by reasoning
+  about it, which got it wrong three times in a row here.
+- **A fixed camera that ends up in front of the car.** Camera yaw was authored
+  by eye, and 60–98% of every stage was driven *toward* the viewer, which
+  mirrors left and right on screen. Zone yaw is derived from the road now, and
+  `tests/camera.test.ts` drives the car and checks which way it moves in screen
+  space.
 - **Assuming a perspective camera.** The game camera is orthographic. The
   particle shader's usual `1.0 / -mvPosition.z` size trick divides by a fixed
   ~140 m camera distance and yields sub-pixel points that never appear.
