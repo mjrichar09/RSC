@@ -539,6 +539,28 @@ async function main(): Promise<void> {
     // then runs on a couple of seconds so the parts do what they were going to
     // do. The visual question — does a dragging bumper read as dragging — is
     // otherwise only answerable by crashing until it happens.
+    // `?wreck=18000` puts a few impacts of that size through the nose, a
+    // flank and the tail. Crashing into scenery until the car looks right is a
+    // slow way to answer "does the crumple read".
+    const wreck = params.get('wreck');
+    if (wreck && world!.damage) {
+      const impulse = Number(wreck);
+      for (const at of [
+        { x: 0, y: 0, z: 1.9 },
+        { x: -0.9, y: 0, z: 0.6 },
+        { x: 0.9, y: 0.1, z: -1.2 },
+        { x: 0, y: 0.3, z: -1.9 },
+      ]) {
+        world!.damage.applyImpact(at, impulse);
+        world!.debris?.applyImpact(at, impulse);
+      }
+      // A moment of driving so the parts settle into their new poses, then put
+      // the camera back on the car it just beat up.
+      for (let i = 0; i < 30; i++) world!.step({ throttle: 0.3, brake: 0, steer: 0, handbrake: 0 });
+      camera.jumpTo(world!.state().position);
+      if (world!.damage) damagePanel.update(world!.damage);
+    }
+
     const loosen = params.get('loosen');
     if (loosen) {
       world!.debris?.applyImpact({ x: 0, y: 0, z: 1.9 }, Number(loosen));

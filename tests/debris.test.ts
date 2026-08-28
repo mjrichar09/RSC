@@ -116,10 +116,16 @@ describe('debris in the world', () => {
   it('keeps within its budget however much comes off', async () => {
     const world = await createWorld({ baseSurface: 'tarmac', damage: true });
     for (let i = 0; i < 60; i++) world.step(NEUTRAL);
+    // More parts than the budget: a completely destroyed car sheds twenty-odd
+    // pieces and only the most recent twelve stay in the world.
+    expect(PARTS.length).toBeGreaterThan(12);
     for (const part of PARTS) world.debris!.detach(part);
     world.step(NEUTRAL);
-    expect(world.loose.length).toBeLessThanOrEqual(12);
-    expect(world.loose.length).toBe(PARTS.length);
+    expect(world.loose).toHaveLength(12);
+    // Oldest recycled first, so what is on the road is what just came off.
+    const shed = world.loose.map((l) => l.id);
+    expect(shed).toContain(PARTS[PARTS.length - 1]!.id);
+    expect(shed).not.toContain(PARTS[0]!.id);
   });
 
   it('clears what is far behind, and everything on a restart', async () => {

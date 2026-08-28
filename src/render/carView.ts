@@ -10,7 +10,7 @@
 import * as THREE from 'three';
 import { CAR } from '../data/tuning.js';
 import type { Quat, Vec3 } from '../sim/math.js';
-import type { DamageModel } from '../sim/damage.js';
+import type { ComponentId, DamageModel } from '../sim/damage.js';
 import type { DebrisModel, PartId } from '../sim/debris.js';
 import type { GhostSample } from '../sim/replay.js';
 import type { VehicleState } from '../sim/vehicle.js';
@@ -35,6 +35,9 @@ const flat = (color: number, roughness = 0.6, ghost = false) =>
       ? { transparent: true, opacity: 0.34, depthWrite: false, emissive: 0x143a4a }
       : {}),
   });
+
+/** A crazed windscreen: milky, not shattered — this car still has to be driven. */
+const WINDSCREEN_CRAZED = new THREE.Color(0xd8dee3);
 
 /** Disc colours: cool cast iron, heat-tinted bronze, cherry red, and white heat. */
 const DISC_COLD = new THREE.Color(0x8d949c);
@@ -63,10 +66,12 @@ export class CarView {
   private headlightWeight = 0;
   private cabin!: THREE.Mesh;
   private body!: THREE.Mesh;
-  private wing!: THREE.Mesh;
+  private screen!: THREE.Mesh;
   /** The panels that can come off, and where they sit while they are still on. */
   private readonly parts = new Map<PartId, THREE.Mesh>();
   private readonly partRest = new Map<PartId, THREE.Vector3>();
+  /** Which component's health deforms each panel. */
+  private readonly partComponent = new Map<PartId, ComponentId>();
 
   constructor(parent: THREE.Object3D, options: CarViewOptions = {}) {
     const h = CAR.halfExtents;
@@ -109,39 +114,69 @@ export class CarView {
     wing.castShadow = !isGhost;
     this.chassis.add(wing);
 
-    // Detachable panels. They are modelled as their own meshes because they
-    // have to be able to leave: a bumper that is part of the body mesh can
-    // scrape and tear off in the simulation and still be visibly bolted on.
-    const bumperGeo = new THREE.BoxGeometry(h.x * 1.72, h.y * 0.24, h.z * 0.12);
-    const bumperMat = flat(PALETTE.carCabin, 0.55, isGhost);
-    const bonnet = new THREE.Mesh(
-      new THREE.BoxGeometry(h.x * 1.5, h.y * 0.12, h.z * 0.66),
-      flat(PALETTE.carBody, 0.55, isGhost),
-    );
-    bonnet.position.set(0, h.y * 0.62, h.z * 0.42);
-    const bumperFront = new THREE.Mesh(bumperGeo, bumperMat);
-    bumperFront.position.set(0, -h.y * 0.28, h.z * 0.99);
-    const bumperRear = new THREE.Mesh(bumperGeo, bumperMat);
-    bumperRear.position.set(0, -h.y * 0.28, -h.z * 0.99);
-    const doorGeo = new THREE.BoxGeometry(h.x * 0.12, h.y * 0.62, h.z * 0.5);
-    const doorLeft = new THREE.Mesh(doorGeo, flat(PALETTE.carBody, 0.5, isGhost));
-    doorLeft.position.set(-h.x * 1.02, h.y * 0.2, -0.08);
-    const doorRight = new THREE.Mesh(doorGeo, flat(PALETTE.carBody, 0.5, isGhost));
-    doorRight.position.set(h.x * 1.02, h.y * 0.2, -0.08);
+    // Bolt-on panels, each its own mesh.
+    //
+    // Two reasons, and both are gameplay rather than decoration: a panel has to
+    // be able to *leave*, and a panel that deforms on its own shows you where
+    // the car was hit. One body mesh can only say "damaged"; twelve say "the
+    // front left is folded in and the mirror is gone", which is a thing you can
+    // look at and price.
+    const panelMat = () => flat(PALETTE.carBody, 0.55, isGhost);
+    const trimMat = () => flat(PALETTE.carCabin, 0.55, isGhost);
 
-    for (const [id, mesh] of [
-      ['bonnet', bonnet],
-      ['bumperFront', bumperFront],
-      ['bumperRear', bumperRear],
-      ['doorLeft', doorLeft],
-      ['doorRight', doorRight],
-      ['wing', wing],
-    ] as const) {
+    const box = (x: number, y: number, z: number) => new THREE.BoxGeometry(x, y, z);
+    /** id, geometry, position, material, and the component that deforms it. */
+    const panels: [PartId, THREE.BoxGeometry, [number, number, number], THREE.Material, ComponentId][] = [
+      ['bonnet', box(h.x * 1.5, h.y * 0.12, h.z * 0.6), [0, h.y * 0.62, h.z * 0.42], panelMat(), 'bonnet'],
+      ['boot', box(h.x * 1.45, h.y * 0.12, h.z * 0.42), [0, h.y * 0.6, -h.z * 0.62], panelMat(), 'boot'],
+      ['bumperFront', box(h.x * 1.72, h.y * 0.24, h.z * 0.12), [0, -h.y * 0.28, h.z * 0.99], trimMat(), 'panelFront'],
+      ['bumperRear', box(h.x * 1.72, h.y * 0.24, h.z * 0.12), [0, -h.y * 0.28, -h.z * 0.99], trimMat(), 'panelRear'],
+      ['wingFL', box(h.x * 0.16, h.y * 0.5, h.z * 0.42), [-h.x * 0.98, h.y * 0.15, h.z * 0.6], panelMat(), 'wingFL'],
+      ['wingFR', box(h.x * 0.16, h.y * 0.5, h.z * 0.42), [h.x * 0.98, h.y * 0.15, h.z * 0.6], panelMat(), 'wingFR'],
+      ['doorLeft', box(h.x * 0.12, h.y * 0.62, h.z * 0.5), [-h.x * 1.02, h.y * 0.2, -0.08], panelMat(), 'doorL'],
+      ['doorRight', box(h.x * 0.12, h.y * 0.62, h.z * 0.5), [h.x * 1.02, h.y * 0.2, -0.08], panelMat(), 'doorR'],
+      ['quarterRL', box(h.x * 0.16, h.y * 0.5, h.z * 0.42), [-h.x * 0.98, h.y * 0.15, -h.z * 0.62], panelMat(), 'quarterRL'],
+      ['quarterRR', box(h.x * 0.16, h.y * 0.5, h.z * 0.42), [h.x * 0.98, h.y * 0.15, -h.z * 0.62], panelMat(), 'quarterRR'],
+      ['mirrorL', box(0.1, 0.1, 0.16), [-h.x * 1.12, h.y * 0.62, h.z * 0.3], trimMat(), 'mirrorL'],
+      ['mirrorR', box(0.1, 0.1, 0.16), [h.x * 1.12, h.y * 0.62, h.z * 0.3], trimMat(), 'mirrorR'],
+      ['exhaust', box(0.1, 0.1, h.z * 0.3), [h.x * 0.45, -h.y * 0.62, -h.z * 1.02], trimMat(), 'exhaust'],
+      ['wing', box(h.x * 1.95, h.y * 0.16, h.z * 0.2), [0, h.y * 1.55, -h.z * 0.92], trimMat(), 'panelRear'],
+    ];
+
+    for (const [id, geometry, position, material, component] of panels) {
+      // The rear wing was built above so the nose/cabin block could reference
+      // it; everything else is created here.
+      const mesh = id === 'wing' ? wing : new THREE.Mesh(geometry, material);
+      if (id !== 'wing') {
+        mesh.position.set(position[0], position[1], position[2]);
+        this.chassis.add(mesh);
+      }
       mesh.castShadow = !isGhost;
-      if (mesh !== wing) this.chassis.add(mesh);
       this.parts.set(id, mesh);
       this.partRest.set(id, mesh.position.clone());
+      this.partComponent.set(id, component);
+      this.restPose.set(mesh, {
+        position: mesh.position.clone(),
+        scale: mesh.scale.clone(),
+        color: (mesh.material as THREE.MeshStandardMaterial).color.clone(),
+      });
     }
+
+    // The windscreen is not detachable, but it does crack and darken, and it is
+    // the one panel whose damage is read from inside the silhouette.
+    const screen = new THREE.Mesh(
+      box(h.x * 1.4, h.y * 0.5, h.z * 0.06),
+      flat(0x9fb6c4, 0.2, isGhost),
+    );
+    screen.position.set(0, h.y * 1.0, h.z * 0.36);
+    screen.castShadow = false;
+    this.chassis.add(screen);
+    this.screen = screen;
+    this.restPose.set(screen, {
+      position: screen.position.clone(),
+      scale: screen.scale.clone(),
+      color: (screen.material as THREE.MeshStandardMaterial).color.clone(),
+    });
 
     this.group.add(this.chassis);
 
@@ -194,7 +229,6 @@ export class CarView {
     this.body = body;
     this.cabin = cabin;
     this.nose = nose;
-    this.wing = wing;
     for (const mesh of [body, cabin, nose, wing]) {
       this.restPose.set(mesh, {
         position: mesh.position.clone(),
@@ -269,7 +303,7 @@ export class CarView {
       const hurt = 1 - health;
 
       mesh.scale.copy(rest.scale);
-      mesh.scale[axis] = rest.scale[axis] * (1 - hurt * 0.42);
+      mesh.scale[axis] = rest.scale[axis] * (1 - hurt * 0.52);
       mesh.position.copy(rest.position);
       // Crumple inward, toward the middle of the car.
       mesh.position[axis] = rest.position[axis] - shift * hurt;
@@ -281,7 +315,6 @@ export class CarView {
     };
 
     crush(this.nose, damage.get('panelFront'), 'z', 0.55, 0.8);
-    crush(this.wing, damage.get('panelRear'), 'z', -0.35);
     crush(this.cabin, damage.get('panelRoof'), 'y', 0.22);
     crush(
       this.body,
@@ -289,6 +322,43 @@ export class CarView {
       'x',
       0,
     );
+
+    // Every bolt-on panel folds along the axis it faces, toward the middle of
+    // the car, and takes a twist with it. The twist is what turns a uniform
+    // squash into something that reads as crumpled: a dented wing sits skewed,
+    // not merely smaller.
+    for (const [id, mesh] of this.parts) {
+      const component = this.partComponent.get(id);
+      if (!component) continue;
+      const rest = this.partRest.get(id)!;
+      const health = damage.get(component);
+      const hurt = 1 - health;
+
+      // Panels on the flanks fold inward across the car; ends fold along it.
+      const lateral = Math.abs(rest.x) > 0.5;
+      crush(mesh, health, lateral ? 'x' : 'z', lateral ? Math.sign(rest.x) * 0.16 : Math.sign(rest.z) * 0.3);
+      if (hurt > 0.02) {
+        // Signed from the panel's own position so the two sides fold opposite
+        // ways rather than all leaning together.
+        const twist = hurt * 0.68;
+        mesh.rotation.set(
+          lateral ? 0 : twist * Math.sign(rest.z || 1),
+          twist * 0.6 * Math.sign(rest.x || 1),
+          lateral ? twist * Math.sign(rest.x || 1) : twist * 0.4,
+        );
+      } else {
+        mesh.rotation.set(0, 0, 0);
+      }
+    }
+
+    // The windscreen goes milky and dark as it crazes, rather than deforming.
+    const screenRest = this.restPose.get(this.screen);
+    if (screenRest) {
+      const cracked = 1 - damage.get('windscreen');
+      const material = this.screen.material as THREE.MeshStandardMaterial;
+      material.color.copy(screenRest.color).lerp(WINDSCREEN_CRAZED, cracked);
+      material.roughness = 0.2 + cracked * 0.7;
+    }
 
     // Headlights: below half health one side dies outright, so the beam goes
     // lopsided before it goes dark. That is a far more useful warning than a
@@ -335,6 +405,9 @@ export class CarView {
       const state = debris.stateOf(id);
       mesh.visible = state !== 'gone';
       const rest = this.partRest.get(id)!;
+      // These poses are applied *after* the damage deformation and deliberately
+      // override it: a part that is hanging off is no longer sitting where its
+      // dents left it.
       if (state === 'dragging') {
         mesh.position.set(rest.x - 0.12, rest.y - 0.2, rest.z);
         mesh.rotation.set(0, 0, 0.5);
@@ -342,9 +415,6 @@ export class CarView {
         // Sitting proud and skewed: the tell that this one is about to go.
         mesh.position.set(rest.x, rest.y + 0.07, rest.z);
         mesh.rotation.set(-0.18, 0, 0.06);
-      } else {
-        mesh.position.copy(rest);
-        mesh.rotation.set(0, 0, 0);
       }
     }
   }

@@ -59,6 +59,8 @@ const cells = cellSpec.split(',').map((spec) => {
   const hotFor = hotMatch ? hotMatch[1]! : brakesArg;
   // `loose<N·s>x<seconds>:<stage>` works the nose mounts loose for that cell
   // and then runs on, so one composite can show attached, dragging and gone.
+  // `wreck<N·s>:<stage>` beats the car up before the frame.
+  const wreckMatch = /^wreck(\d+):(.+)$/.exec(name!);
   const looseMatch = /^loose(\d+)(?:x(\d+(?:\.\d+)?))?:(.+)$/.exec(name!);
   const looseFor = looseMatch ? looseMatch[1]! : loosenArg;
   const afterFor = looseMatch ? (looseMatch[2] ?? '2') : afterArg;
@@ -69,14 +71,16 @@ const cells = cellSpec.split(',').map((spec) => {
 
   const raw = isTrace || withGhost
     ? name!.slice(6)
-    : (crashMatch?.[2] ?? hotMatch?.[2] ?? looseMatch?.[3] ?? name!);
+    : (crashMatch?.[2] ?? hotMatch?.[2] ?? looseMatch?.[3] ?? wreckMatch?.[2] ?? name!);
   const [id, cellVariant] = raw.split('/');
   const useVariant = cellVariant ?? variantArg;
   const url = isTrace
     ? `/?trace=${id}&t=${seconds}`
     : `/?stage=${id}&t=${seconds}&grip=${grip}${useVariant ? `&variant=${useVariant}` : ''}${
         withGhost ? '&ghost=1' : ''
-      }${crashFor ? `&crash=${crashFor}` : ''}${hotFor ? `&brakes=${hotFor}` : ''}${zoomArg ? `&zoom=${zoomArg}` : ''}${looseFor ? `&loosen=${looseFor}` : ''}${afterFor ? `&after=${afterFor}` : ''}`;
+      }${crashFor ? `&crash=${crashFor}` : ''}${hotFor ? `&brakes=${hotFor}` : ''}${zoomArg ? `&zoom=${zoomArg}` : ''}${looseFor ? `&loosen=${looseFor}` : ''}${afterFor ? `&after=${afterFor}` : ''}${
+        wreckMatch ? `&wreck=${wreckMatch[1]}` : ''
+      }`;
   return {
     url,
     label: `${id}${useVariant ? ` ${useVariant}` : ''} @ ${seconds}s${withGhost ? ' + ghost' : ''}${

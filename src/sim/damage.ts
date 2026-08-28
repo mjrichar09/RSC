@@ -32,7 +32,12 @@ export type ComponentId =
   | 'hubFL' | 'hubFR' | 'hubRL' | 'hubRR'
   | 'tyreFL' | 'tyreFR' | 'tyreRL' | 'tyreRR'
   | 'brakeFL' | 'brakeFR' | 'brakeRL' | 'brakeRR'
-  | 'panelFront' | 'panelRear' | 'panelLeft' | 'panelRight' | 'panelRoof' | 'panelFloor';
+  | 'panelFront' | 'panelRear' | 'panelLeft' | 'panelRight' | 'panelRoof' | 'panelFloor'
+  // Bolt-on bodywork. Separate from the four flanks because "the left side is
+  // damaged" is not something you can look at and act on, while "the front left
+  // wing is hanging off" is — and because each of these can leave the car.
+  | 'bonnet' | 'boot' | 'wingFL' | 'wingFR' | 'quarterRL' | 'quarterRR'
+  | 'doorL' | 'doorR' | 'mirrorL' | 'mirrorR' | 'windscreen' | 'exhaust';
 
 export interface ComponentDef {
   id: ComponentId;
@@ -107,6 +112,22 @@ export const COMPONENTS: ComponentDef[] = [
   { id: 'panelRight', label: 'Right flank', at: v3(0.84, 0, 0), reach: 1.25, threshold: 4200, scale: 20000, repairCost: 420, caged: false },
   { id: 'panelRoof', label: 'Roof', at: v3(0, 0.46, 0), reach: 1.6, threshold: 5000, scale: 21000, repairCost: 560, caged: false },
   { id: 'panelFloor', label: 'Floor', at: v3(0, -0.46, 0), reach: 1.6, threshold: 9000, scale: 28000, repairCost: 700, caged: false },
+
+  // Bolt-on panels: cheaper than the structure behind them, fragile, and each
+  // one is somewhere you can point at on the car. A bonnet is a bigger target
+  // than a mirror and takes more to shift; a mirror goes if you brush anything.
+  { id: 'bonnet', label: 'Bonnet', at: v3(0, 0.3, 1.25), reach: 1.15, threshold: 4000, scale: 15000, repairCost: 380, caged: false },
+  { id: 'boot', label: 'Boot lid', at: v3(0, 0.28, -1.35), reach: 1.1, threshold: 4000, scale: 15000, repairCost: 340, caged: false },
+  { id: 'wingFL', label: 'Front wing L', at: v3(-0.82, 0.05, 1.3), reach: 1.0, threshold: 3600, scale: 14000, repairCost: 300, caged: false },
+  { id: 'wingFR', label: 'Front wing R', at: v3(0.82, 0.05, 1.3), reach: 1.0, threshold: 3600, scale: 14000, repairCost: 300, caged: false },
+  { id: 'quarterRL', label: 'Rear quarter L', at: v3(-0.82, 0.05, -1.3), reach: 1.0, threshold: 3600, scale: 14000, repairCost: 300, caged: false },
+  { id: 'quarterRR', label: 'Rear quarter R', at: v3(0.82, 0.05, -1.3), reach: 1.0, threshold: 3600, scale: 14000, repairCost: 300, caged: false },
+  { id: 'doorL', label: 'Left door', at: v3(-0.86, 0.08, -0.05), reach: 1.0, threshold: 4400, scale: 16000, repairCost: 460, caged: false },
+  { id: 'doorR', label: 'Right door', at: v3(0.86, 0.08, -0.05), reach: 1.0, threshold: 4400, scale: 16000, repairCost: 460, caged: false },
+  { id: 'mirrorL', label: 'Mirror L', at: v3(-0.95, 0.4, 0.5), reach: 0.7, threshold: 1800, scale: 6000, repairCost: 90, caged: false },
+  { id: 'mirrorR', label: 'Mirror R', at: v3(0.95, 0.4, 0.5), reach: 0.7, threshold: 1800, scale: 6000, repairCost: 90, caged: false },
+  { id: 'windscreen', label: 'Windscreen', at: v3(0, 0.5, 0.55), reach: 1.0, threshold: 5200, scale: 18000, repairCost: 520, caged: false },
+  { id: 'exhaust', label: 'Exhaust', at: v3(0.35, -0.42, -1.7), reach: 0.9, threshold: 5000, scale: 15000, repairCost: 240, caged: false },
 ];
 
 export const COMPONENT_BY_ID = new Map(COMPONENTS.map((c) => [c.id, c]));

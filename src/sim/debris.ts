@@ -23,10 +23,18 @@ import { type Vec3, clamp, v3 } from './math.js';
 
 export type PartId =
   | 'bonnet'
+  | 'boot'
   | 'bumperFront'
   | 'bumperRear'
   | 'doorLeft'
   | 'doorRight'
+  | 'wingFL'
+  | 'wingFR'
+  | 'quarterRL'
+  | 'quarterRR'
+  | 'mirrorL'
+  | 'mirrorR'
+  | 'exhaust'
   | 'wing'
   | 'wheelFL'
   | 'wheelFR'
@@ -52,9 +60,16 @@ export interface PartDef {
   drags: boolean;
   /**
    * Component whose destruction takes the part with it, if any. A hub at zero
-   * means that wheel has left the car whatever its attachment says.
+   * means that wheel has left the car whatever its attachment says, and a panel
+   * beaten to nothing is not still bolted on.
    */
   boundTo?: ComponentId;
+  /**
+   * Whether this part can also work loose on its own. False for the wheels,
+   * which leave only with their hubs — an unearned wheel is the one piece of
+   * drama the fairness rule will not allow.
+   */
+  rollsLoose: boolean;
 }
 
 /**
@@ -75,6 +90,8 @@ export const PARTS: PartDef[] = [
     mass: 9,
     half: v3(0.78, 0.12, 0.14),
     drags: true,
+    rollsLoose: true,
+    boundTo: 'panelFront',
   },
   {
     id: 'bumperRear',
@@ -86,6 +103,8 @@ export const PARTS: PartDef[] = [
     mass: 9,
     half: v3(0.78, 0.12, 0.14),
     drags: true,
+    rollsLoose: true,
+    boundTo: 'panelRear',
   },
   {
     id: 'bonnet',
@@ -97,6 +116,77 @@ export const PARTS: PartDef[] = [
     mass: 14,
     half: v3(0.7, 0.05, 0.75),
     drags: false,
+    rollsLoose: true,
+    boundTo: 'bonnet',
+  },
+  {
+    id: 'boot',
+    label: 'Boot lid',
+    at: v3(0, 0.28, -1.35),
+    reach: 1.1,
+    threshold: 8000,
+    scale: 17000,
+    mass: 11,
+    half: v3(0.66, 0.05, 0.5),
+    drags: false,
+    rollsLoose: true,
+    boundTo: 'boot',
+  },
+  ...(
+    [
+      ['wingFL', 'Front wing L', 'wingFL', -0.82, 1.3],
+      ['wingFR', 'Front wing R', 'wingFR', 0.82, 1.3],
+      ['quarterRL', 'Rear quarter L', 'quarterRL', -0.82, -1.3],
+      ['quarterRR', 'Rear quarter R', 'quarterRR', 0.82, -1.3],
+    ] as const
+  ).map(([id, label, component, x, z]): PartDef => ({
+    id,
+    label,
+    at: v3(x, 0.05, z),
+    reach: 1.0,
+    threshold: 7000,
+    scale: 15000,
+    mass: 7,
+    half: v3(0.1, 0.3, 0.55),
+    // A wing torn half off catches the tyre and grinds on it, which is exactly
+    // the telegraph a bumper gives.
+    drags: true,
+    rollsLoose: true,
+    boundTo: component,
+  })),
+  ...(
+    [
+      ['mirrorL', 'Mirror L', 'mirrorL', -0.95],
+      ['mirrorR', 'Mirror R', 'mirrorR', 0.95],
+    ] as const
+  ).map(([id, label, component, x]): PartDef => ({
+    id,
+    label,
+    at: v3(x, 0.4, 0.5),
+    reach: 0.6,
+    // A mirror is held on by almost nothing and is the first thing to go.
+    threshold: 1500,
+    scale: 4000,
+    mass: 1.2,
+    half: v3(0.07, 0.07, 0.12),
+    drags: false,
+    rollsLoose: true,
+    boundTo: component,
+  })),
+  {
+    id: 'exhaust',
+    label: 'Exhaust',
+    at: v3(0.35, -0.42, -1.7),
+    reach: 0.9,
+    threshold: 5500,
+    scale: 14000,
+    mass: 5,
+    half: v3(0.07, 0.07, 0.5),
+    // It hangs and scrapes long before it finally drops, which is the most
+    // recognisable "this car has had a hard life" sound there is.
+    drags: true,
+    rollsLoose: true,
+    boundTo: 'exhaust',
   },
   {
     id: 'wing',
@@ -108,6 +198,8 @@ export const PARTS: PartDef[] = [
     mass: 6,
     half: v3(0.6, 0.06, 0.2),
     drags: false,
+    rollsLoose: true,
+    boundTo: 'panelRear',
   },
   {
     id: 'doorLeft',
@@ -119,6 +211,8 @@ export const PARTS: PartDef[] = [
     mass: 18,
     half: v3(0.06, 0.35, 0.6),
     drags: false,
+    rollsLoose: true,
+    boundTo: 'doorL',
   },
   {
     id: 'doorRight',
@@ -130,6 +224,8 @@ export const PARTS: PartDef[] = [
     mass: 18,
     half: v3(0.06, 0.35, 0.6),
     drags: false,
+    rollsLoose: true,
+    boundTo: 'doorR',
   },
   ...(
     [
@@ -150,6 +246,7 @@ export const PARTS: PartDef[] = [
     mass: 22,
     half: v3(0.13, 0.34, 0.34),
     drags: false,
+    rollsLoose: false,
     boundTo: hub,
   })),
 ];
@@ -269,16 +366,17 @@ export class DebrisModel {
    * Advance the state machines.
    *
    * `speed` is the car's speed in m/s: a part hanging on at walking pace stays
-   * put, and the same part at 120 km/h does not. `hubLost` reports wheels the
-   * damage model has already destroyed.
+   * put, and the same part at 120 km/h does not. `componentLost` reports what
+   * the damage model has already destroyed outright — a panel beaten to nothing
+   * is not still bolted on, and neither is a wheel whose hub has gone.
    */
-  update(dt: number, speed: number, hubLost: (id: ComponentId) => boolean): void {
+  update(dt: number, speed: number, componentLost: (id: ComponentId) => boolean): void {
     for (const def of PARTS) {
       if (this.stateOf(def.id) === 'gone') continue;
 
-      // A wheel leaves with its hub, no roll involved: the cause is already
+      // Destroyed outright: it leaves, no roll involved. The cause is already
       // visible and already paid for.
-      if (def.boundTo && hubLost(def.boundTo)) {
+      if (def.boundTo && componentLost(def.boundTo)) {
         this.detach(def);
         continue;
       }
@@ -301,7 +399,7 @@ export class DebrisModel {
     this.rollTimer -= ROLL_INTERVAL;
 
     for (const def of PARTS) {
-      if (this.stateOf(def.id) === 'gone' || def.boundTo) continue;
+      if (this.stateOf(def.id) === 'gone' || !def.rollsLoose) continue;
       const attachment = this.get(def.id);
       if (attachment >= DRAG_AT) continue;
 

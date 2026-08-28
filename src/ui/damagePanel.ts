@@ -17,10 +17,10 @@ import {
 
 /** Zones drawn on the silhouette, and the components each one summarises. */
 const ZONES: { id: string; label: string; x: number; y: number; w: number; h: number; parts: ComponentId[] }[] = [
-  { id: 'nose', label: 'Front', x: 26, y: 8, w: 48, h: 22, parts: ['panelFront', 'cooling', 'lights'] },
+  { id: 'nose', label: 'Front', x: 26, y: 8, w: 48, h: 22, parts: ['panelFront', 'cooling', 'lights', 'bonnet', 'wingFL', 'wingFR'] },
   { id: 'engine', label: 'Engine', x: 30, y: 32, w: 40, h: 26, parts: ['engine', 'turbo'] },
-  { id: 'cabin', label: 'Cabin', x: 30, y: 60, w: 40, h: 30, parts: ['panelRoof', 'transmission', 'steering'] },
-  { id: 'rear', label: 'Rear', x: 26, y: 92, w: 48, h: 22, parts: ['panelRear', 'differential', 'fuelLine'] },
+  { id: 'cabin', label: 'Cabin', x: 30, y: 60, w: 40, h: 30, parts: ['panelRoof', 'transmission', 'steering', 'windscreen', 'doorL', 'doorR'] },
+  { id: 'rear', label: 'Rear', x: 26, y: 92, w: 48, h: 22, parts: ['panelRear', 'differential', 'fuelLine', 'boot', 'quarterRL', 'quarterRR', 'exhaust'] },
   { id: 'fl', label: 'FL', x: 2, y: 26, w: 20, h: 26, parts: ['suspensionFL', 'hubFL', 'tyreFL', 'brakeFL'] },
   { id: 'fr', label: 'FR', x: 78, y: 26, w: 20, h: 26, parts: ['suspensionFR', 'hubFR', 'tyreFR', 'brakeFR'] },
   { id: 'rl', label: 'RL', x: 2, y: 72, w: 20, h: 26, parts: ['suspensionRL', 'hubRL', 'tyreRL', 'brakeRL'] },
