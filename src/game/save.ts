@@ -15,7 +15,7 @@ import type { ComponentId } from '../sim/damage.js';
 import type { Ghost } from '../sim/replay.js';
 
 const DB_NAME = 'rsc';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const PROFILE_KEY = 'profile';
 
 /** Enough to enter the second stage and still afford a mistake. */
@@ -42,7 +42,21 @@ export interface Profile {
   carHealth: Partial<Record<ComponentId, number>>;
   /** Lifetime totals, for the garage summary. */
   totals: { earned: number; spentOnRepairs: number; spentOnUpgrades: number; retirements: number };
+  /** Player settings that survive a reload. */
+  settings: Settings;
 }
+
+export interface Settings {
+  /**
+   * How strongly the windscreen effect applies, 0..1.
+   *
+   * A taste setting, and the one most likely to differ between players: at 0
+   * a night stage is merely dim, at 1 you drive by the headlights alone.
+   */
+  vision: number;
+}
+
+export const DEFAULT_SETTINGS: Settings = { vision: 0.6 };
 
 /** Exposed for tests: bringing a stored profile up to date and making it safe. */
 export { migrate as migrateProfile };
@@ -54,6 +68,7 @@ export const emptyProfile = (): Profile => ({
   upgrades: {},
   carHealth: {},
   totals: { earned: 0, spentOnRepairs: 0, spentOnUpgrades: 0, retirements: 0 },
+  settings: { ...DEFAULT_SETTINGS },
 });
 
 const isObject = (v: unknown): v is Record<string, unknown> =>
@@ -76,6 +91,7 @@ function migrate(stored: unknown): Profile {
   const version = typeof stored.version === 'number' ? stored.version : 1;
   const number = (value: unknown, fallback: number) =>
     typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+  const clamp01 = (value: number) => Math.min(Math.max(value, 0), 1);
 
   const out: Profile = {
     version: DB_VERSION,
@@ -91,6 +107,9 @@ function migrate(stored: unknown): Profile {
           retirements: number(stored.totals.retirements, 0),
         }
       : base.totals,
+    settings: isObject(stored.settings)
+      ? { vision: clamp01(number(stored.settings.vision, DEFAULT_SETTINGS.vision)) }
+      : { ...DEFAULT_SETTINGS },
   };
 
   // Component health outside 0..1 would corrupt every damage calculation
@@ -115,6 +134,9 @@ function migrate(stored: unknown): Profile {
     }
     out.records = remapped;
   }
+
+  // v3 -> v4: settings were added. Nothing to migrate — an older profile
+  // simply gets the defaults, which is what the block above already does.
 
   return out;
 }

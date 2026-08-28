@@ -38,7 +38,7 @@ export class Hud {
       </div>
       <div class="hud-corner hud-bl help">
         <b>WASD</b> drive · <b>Space</b> handbrake · <b>R</b> restart · <b>Q</b> rescue<br>
-        <b>Esc</b> garage · <b>T</b> tuning · <b>M</b> mute
+        <b>Esc</b> garage · <b>T</b> tuning · <b>M</b> mute · <b>V</b> visibility
       </div>`;
 
     this.speed = root.querySelector('#hud-speed')!;

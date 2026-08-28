@@ -37,7 +37,7 @@ export type ComponentId =
   // damaged" is not something you can look at and act on, while "the front left
   // wing is hanging off" is — and because each of these can leave the car.
   | 'bonnet' | 'boot' | 'wingFL' | 'wingFR' | 'quarterRL' | 'quarterRR'
-  | 'doorL' | 'doorR' | 'mirrorL' | 'mirrorR' | 'windscreen' | 'exhaust';
+  | 'doorL' | 'doorR' | 'mirrorL' | 'mirrorR' | 'windscreen' | 'exhaust' | 'wipers';
 
 export interface ComponentDef {
   id: ComponentId;
@@ -128,6 +128,8 @@ export const COMPONENTS: ComponentDef[] = [
   { id: 'mirrorR', label: 'Mirror R', at: v3(0.95, 0.4, 0.5), reach: 0.7, threshold: 1800, scale: 6000, repairCost: 90, caged: false },
   { id: 'windscreen', label: 'Windscreen', at: v3(0, 0.5, 0.55), reach: 1.0, threshold: 5200, scale: 18000, repairCost: 520, caged: false },
   { id: 'exhaust', label: 'Exhaust', at: v3(0.35, -0.42, -1.7), reach: 0.9, threshold: 5000, scale: 15000, repairCost: 240, caged: false },
+  // Cheap, fragile, and on a wet night the most important part on the car.
+  { id: 'wipers', label: 'Wipers', at: v3(0, 0.34, 0.95), reach: 0.8, threshold: 2600, scale: 9000, repairCost: 120, caged: false },
 ];
 
 export const COMPONENT_BY_ID = new Map(COMPONENTS.map((c) => [c.id, c]));

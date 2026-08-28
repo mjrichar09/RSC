@@ -104,13 +104,13 @@ function stageStream(id: string): () => number {
 /**
  * Hard cap on loose bodies.
  *
- * Set to a whole car. There are eighteen detachable parts, and a loose body
+ * Set to a whole car. There are nineteen detachable parts, and a loose body
  * costs about 1.3 µs of simulation per fixed step — measured by sweeping the
  * count in one process and taking the minimum of three passes, because a single
  * run on a shared machine varies by a factor of two and will happily report a
  * bare stage as slower than one strewn with wreckage.
  *
- * Eighteen bodies is 23 µs on top of a 118 µs step: 17 ms of CPU per second of
+ * Nineteen bodies is 24 µs on top of a 118 µs step: 17 ms of CPU per second of
  * game against 14, with sixty times more headroom than that needs. The earlier
  * cap of twelve was set when the car had ten parts, so it could never bind —
  * it was measured, but against a case that could not happen.
@@ -119,7 +119,7 @@ function stageStream(id: string): () => number {
  * four cars sharing a world; it is not protecting a single-car stage from
  * anything.
  */
-export const DEBRIS_BUDGET = 18;
+export const DEBRIS_BUDGET = 19;
 /** Loose bodies further than this from the car are removed, metres. */
 const DEBRIS_KEEP_RADIUS = 120;
 

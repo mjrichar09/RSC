@@ -34,6 +34,8 @@ export class Controls {
   onGarage: (() => void) | null = null;
   /** Fires on the mute key. */
   onMute: (() => void) | null = null;
+  /** Cycle the windscreen effect through its settings. */
+  onVision: (() => void) | null = null;
 
   constructor(target: EventTarget = window) {
     target.addEventListener('keydown', (e) => {
@@ -44,6 +46,7 @@ export class Controls {
       if (ev.code === 'KeyT') this.onToggleTuning?.();
       if (ev.code === 'KeyQ') this.onRescue?.();
       if (ev.code === 'KeyM') this.onMute?.();
+      if (ev.code === 'KeyV') this.onVision?.();
       if (ev.code === 'Escape' || ev.code === 'Tab') {
         ev.preventDefault();
         this.onGarage?.();

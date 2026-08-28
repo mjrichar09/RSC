@@ -34,6 +34,8 @@ const grip = arg('grip', '0.6');
 /** `--loosen=15000` works the nose mounts loose, in N·s, then runs `--after` seconds. */
 const loosenArg = arg('loosen', '');
 const afterArg = arg('after', '');
+/** `--vision=0.6` scales the windscreen effect; `vis<N>:` does it per cell. */
+const visionArg = arg('vision', '');
 /** `--sign=2` centres the camera on that corner board. */
 const signArg = arg('sign', '');
 /** `--zoom=9` pulls the camera in, for questions about the car itself. */
@@ -62,6 +64,10 @@ const cells = cellSpec.split(',').map((spec) => {
   // `loose<N·s>x<seconds>:<stage>` works the nose mounts loose for that cell
   // and then runs on, so one composite can show attached, dragging and gone.
   // `wreck<N·s>:<stage>` beats the car up before the frame.
+  // `vis<0-100>:<stage>` sets the windscreen strength as a percentage, so one
+  // composite can ladder it.
+  const visMatch = /^vis(\d+):(.+)$/.exec(name!);
+  const visionFor = visMatch ? (Number(visMatch[1]) / 100).toFixed(2) : visionArg;
   const wreckMatch = /^wreck(\d+):(.+)$/.exec(name!);
   const looseMatch = /^loose(\d+)(?:x(\d+(?:\.\d+)?))?:(.+)$/.exec(name!);
   const looseFor = looseMatch ? looseMatch[1]! : loosenArg;
@@ -81,7 +87,7 @@ const cells = cellSpec.split(',').map((spec) => {
 
   const raw = isTrace || withGhost
     ? name!.slice(6)
-    : (crashMatch?.[2] ?? hotMatch?.[2] ?? looseMatch?.[3] ?? wreckMatch?.[2] ?? name!);
+    : (crashMatch?.[2] ?? hotMatch?.[2] ?? looseMatch?.[3] ?? wreckMatch?.[2] ?? visMatch?.[2] ?? name!);
   const [id, cellVariant] = raw.split('/');
   const useVariant = cellVariant ?? variantArg;
   const url = isTrace
@@ -90,7 +96,7 @@ const cells = cellSpec.split(',').map((spec) => {
         withGhost ? '&ghost=1' : ''
       }${crashFor ? `&crash=${crashFor}` : ''}${hotFor ? `&brakes=${hotFor}` : ''}${zoomArg ? `&zoom=${zoomArg}` : ''}${looseFor ? `&loosen=${looseFor}` : ''}${afterFor ? `&after=${afterFor}` : ''}${
         wreckMatch ? `&wreck=${wreckMatch[1]}` : ''
-      }${signArg ? `&sign=${signArg}` : ''}`;
+      }${signArg ? `&sign=${signArg}` : ''}${visionFor ? `&vision=${visionFor}` : ''}`;
   return {
     url,
     label: `${id}${useVariant ? ` ${useVariant}` : ''} @ ${seconds}s${withGhost ? ' + ghost' : ''}${

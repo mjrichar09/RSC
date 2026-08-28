@@ -40,6 +40,10 @@ import { DebrisView } from './render/debrisView.js';
 import { WildlifeView } from './render/wildlifeView.js';
 import { Garage } from './ui/garage.js';
 import { LiveStageMap } from './ui/stageMap.js';
+import * as THREE from 'three';
+import { rotate } from './sim/math.js';
+import { Vision } from './sim/vision.js';
+import { VisionPass } from './render/vision.js';
 import { TuningPanel } from './ui/tuningPanel.js';
 
 /**
@@ -94,6 +98,25 @@ async function main(): Promise<void> {
   const debrisView = new DebrisView(scene);
   // The minimap. Fixed north-up, so the shape of a stage can be learned.
   const minimap = new LiveStageMap(hudRoot, 'minimap');
+  const vision = new Vision();
+  /**
+   * Advance what the driver can see. Shared by the render loop and the visual
+   * harness — soiling accumulates over seconds, so a harness frame that only
+   * ever advances it once shows a spotless screen in a downpour.
+   */
+  const advanceVision = (dt: number) => {
+    const state = world.state();
+    return vision.update(dt, {
+      conditions: world.conditions,
+      speed: Math.abs(state.speed),
+      surface: state.wheels.find((w) => w.grounded)?.surface.id ?? 'tarmac',
+      wiperHealth: world.damage?.get('wipers') ?? 1,
+      lightHealth: world.damage?.get('lights') ?? 1,
+    });
+  };
+  const visionPass = new VisionPass(renderer);
+  /** Reused for the screen-space projection each frame. */
+  const SCRATCH = new THREE.Vector3();
   const wildlifeView = new WildlifeView(scene);
   ghostView.visible = false;
   const particles = new ParticleField(scene);
@@ -109,6 +132,9 @@ async function main(): Promise<void> {
   const career = new Career(save, STAGES);
 
   const params = new URLSearchParams(location.search);
+  // `?vision=0.6` scales the whole windscreen effect. It is the setting most
+  // likely to need a human eye, so it is adjustable rather than baked in.
+  const visionParam = params.get('vision');
   const freeRoam = params.has('free') || params.has('trace');
 
   let world: SimWorld;
@@ -195,6 +221,7 @@ async function main(): Promise<void> {
     stuckFor = 0;
     particles.clear();
     skids.clear();
+    vision.reset();
 
     ghost = null;
     ghostView.visible = false;
@@ -256,6 +283,7 @@ async function main(): Promise<void> {
       world.clearDebris();
       debrisView.clear();
       wildlifeView.clear();
+      vision.reset();
       applyCarCondition();
       particles.clear();
       skids.clear();
@@ -299,6 +327,22 @@ async function main(): Promise<void> {
 
   controls.onMute = () => mixer.toggleMute();
 
+  // The windscreen effect is a taste setting, so it is cycled from the keyboard
+  // and remembered: at 0 a night stage is merely dim, at 1 you drive by the
+  // headlights alone. The URL parameter still wins, for the visual harness.
+  const VISION_STEPS = [0, 0.35, 0.6, 1];
+  visionPass.strength = visionParam !== null ? Number(visionParam) : career.profile.settings.vision;
+  controls.onVision = () => {
+    const next =
+      VISION_STEPS[(VISION_STEPS.findIndex((v) => v >= visionPass.strength - 0.01) + 1) % VISION_STEPS.length] ??
+      0.6;
+    visionPass.strength = next;
+    damagePanel.notice(`Visibility effect ${Math.round(next * 100)}%`);
+    void save.update((profile) => {
+      profile.settings.vision = next;
+    });
+  };
+
   controls.onGarage = () => {
     if (freeRoam) return;
     if (garage.isOpen) garage.setOpen(false);
@@ -341,6 +385,7 @@ async function main(): Promise<void> {
     const h = window.innerHeight;
     resize(w, h);
     camera.resize(w, h);
+    visionPass.setSize(w, h);
   };
 
   /** Screen pixels per world metre under the orthographic camera. */
@@ -390,7 +435,34 @@ async function main(): Promise<void> {
     key.target.position.set(transform.position.x, transform.position.y, transform.position.z);
     key.target.updateMatrixWorld();
 
-    renderer.render(scene, camera.camera);
+    // Through the windscreen. The cone is anchored to the car *on screen* and
+    // aimed along its heading, so it turns with the car rather than with the
+    // camera — which is what makes it read as headlights rather than a vignette.
+    const visionState = advanceVision(dt);
+
+    const toUv = (p: { x: number; y: number; z: number }) => {
+      SCRATCH.set(p.x, p.y, p.z).project(camera.camera);
+      return { x: SCRATCH.x * 0.5 + 0.5, y: SCRATCH.y * 0.5 + 0.5 };
+    };
+    const nose = rotate(transform.rotation, { x: 0, y: 0, z: 12 });
+    const origin = toUv(transform.position);
+    const ahead = toUv({
+      x: transform.position.x + nose.x,
+      y: transform.position.y + nose.y,
+      z: transform.position.z + nose.z,
+    });
+    const forwardX = ahead.x - origin.x;
+    const forwardY = ahead.y - origin.y;
+    const forwardLength = Math.hypot(forwardX, forwardY) || 1;
+
+    visionPass.render(
+      scene,
+      camera.camera,
+      visionState,
+      origin,
+      { x: forwardX / forwardLength, y: forwardY / forwardLength },
+      performance.now() / 1000,
+    );
   };
 
   window.RSC = {
@@ -411,6 +483,7 @@ async function main(): Promise<void> {
         // a player would see, rather than a suspiciously clean road.
         updateWheelEffects(particles, skids, world.state().wheels, world.state().velocity, world.dt);
         particles.update(world.dt);
+        advanceVision(world.dt);
       }
       if (crashFor > 0) {
         const until = world.time + crashFor;

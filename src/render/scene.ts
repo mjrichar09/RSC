@@ -112,9 +112,14 @@ const LIGHTING: Record<TimeOfDay, LightingPreset> = {
     // read is a bug rather than a difficulty — the car's silhouette and the
     // rough line of the road have to stay legible, and the headlights are what
     // turn "roughly there" into "I can take this corner".
-    key: { color: 0x8fa8d8, intensity: 0.85 },
-    hemisphere: { sky: 0x2c3c60, ground: 0x11151f, intensity: 0.5 },
-    fill: { color: 0x50709f, intensity: 0.3 },
+    //
+    // Lifted once the windscreen pass existed: the pass darkens everything
+    // outside the headlight cone, and it can only do that if there is something
+    // there to darken. A base night that is already black leaves the cone
+    // reading as the only lit thing in a void rather than as headlights.
+    key: { color: 0x8fa8d8, intensity: 1.15 },
+    hemisphere: { sky: 0x3a4d78, ground: 0x181d2a, intensity: 0.95 },
+    fill: { color: 0x50709f, intensity: 0.5 },
     background: 0x0b0f18,
     fog: 0x0b0f18,
     shadowStrength: 0.25,

@@ -35,6 +35,7 @@ export type PartId =
   | 'mirrorL'
   | 'mirrorR'
   | 'exhaust'
+  | 'wipers'
   | 'wing'
   | 'wheelFL'
   | 'wheelFR'
@@ -173,6 +174,19 @@ export const PARTS: PartDef[] = [
     rollsLoose: true,
     boundTo: component,
   })),
+  {
+    id: 'wipers',
+    label: 'Wipers',
+    at: v3(0, 0.34, 0.95),
+    reach: 0.7,
+    threshold: 2400,
+    scale: 7000,
+    mass: 0.6,
+    half: v3(0.02, 0.02, 0.32),
+    drags: false,
+    rollsLoose: true,
+    boundTo: 'wipers',
+  },
   {
     id: 'exhaust',
     label: 'Exhaust',
