@@ -420,6 +420,50 @@ three of them were exactly that until they were measured:
   it in the scenery, or roll over the finish line on momentum. The run ends when
   the car does.
 
+### The ground
+
+A centreline says where a road goes and almost nothing about what it is. Left to
+themselves the stages came out flat in both directions at once — level across,
+level along except where a crest had been typed in — and a flat road takes the
+same line at the same speed everywhere on it, which is the difference between
+driving a stage and following one. Three things fix that, all of them in `sim/`
+before the spline is built, so the collider, the AI, the camera and the props
+all agree about where the ground is:
+
+- **Elevation** from two long sine waves seeded off the stage's own id, applied
+  at spline-sample resolution rather than at the control points — those are 30
+  to 50 m apart, so a wave shaped there is sampled twice a cycle and arrives as
+  a hint of a slope. Wavelengths of 150 and 75 m at 1.1 m of amplitude: measured,
+  2.2 m at 96 m gave one-in-three slopes and put three quarters of one stage's
+  AI lap off the road.
+- **Camber** derived from the corner, and then modulated by a slow seeded wave
+  so that some corners fall away from you instead. Both matter and the second
+  matters more: a road that is always banked into the turn is a road that
+  flatters you, and the corner that quietly drops off is the one rally drivers
+  talk about. Authored banking always wins.
+- **A crown** down the middle of the road, about one and a half percent, as
+  every real road has because water has to run off it. It is why running wide
+  costs a little more than the width does.
+
+Both ends taper to flat: a grid on a slope, or a finish run-off tipping
+downhill, is a car rolling off the end of the world.
+
+`npm run stages` is the gate. All nine stages remain completable, none is above
+a quarter of its lap off the road, and the AI's best lap is within a few percent
+of what it was on seven of them and 6–20% faster on the other two, because
+camber helps it hold the road. Medal times were left where they are; that makes
+those two marginally more attainable and nothing harder.
+
+One thing this broke and how: elevation moves every arc length slightly, which
+moved the camera zones, and one zone on one stage crossed the line where the car
+starts driving out of the screen rather than into it. The zone rule bounded how
+far the road turns inside a zone, which is not the same as bounding how far the
+road ends up from the camera it was given — the yaw is snapped to an eighth of a
+turn and carries the isometric offset, and those stack. It had been passing by a
+hair. The zones are now checked metre by metre after they are built and split
+where they fail, so the property the tests check is the property the code
+enforces.
+
 ### Ghosts
 
 Ghosts store sampled transforms, not inputs. Replaying inputs would be smaller,

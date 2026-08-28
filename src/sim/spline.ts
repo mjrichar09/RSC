@@ -77,7 +77,20 @@ export class Spline {
   private readonly grid = new Map<string, number[]>();
   private readonly cellSize = 16;
 
-  constructor(points: readonly ControlPoint[], step = 2) {
+  constructor(
+    points: readonly ControlPoint[],
+    step = 2,
+    /**
+     * Height to add at a given distance along the road.
+     *
+     * Applied here, after resampling to an even 2 m, rather than at the control
+     * points: control points are 30 to 50 m apart, so a wave shaped there is
+     * sampled two or three times a cycle and comes out as a hint of a slope.
+     * Applied per sample, the road genuinely rolls, and the frames computed
+     * below pick up the pitch for free.
+     */
+    rise?: (distance: number) => number,
+  ) {
     if (points.length < 2) throw new Error('a stage spline needs at least two control points');
 
     // Duplicate the endpoints so the curve passes through the first and last
@@ -128,6 +141,18 @@ export class Spline {
           surface: t < 0.5 ? dense[i - 1]!.surface : dense[i]!.surface,
           banking: lerp(dense[i - 1]!.banking, dense[i]!.banking, t),
         });
+      }
+    }
+
+    if (rise) {
+      let along = 0;
+      for (let i = 0; i < picked.length; i++) {
+        const p = picked[i]!;
+        if (i > 0) {
+          const previous = picked[i - 1]!.pos;
+          along += Math.hypot(p.pos.x - previous.x, p.pos.z - previous.z);
+        }
+        p.pos = { ...p.pos, y: p.pos.y + rise(along) };
       }
     }
 

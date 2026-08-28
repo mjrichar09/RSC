@@ -16,6 +16,7 @@ import { CLEAR_DAY, type Conditions, describeConditions } from './conditions.js'
 import { type Vec3, add, scale, v3 } from './math.js';
 import { type ControlPoint, Spline, type SplineSample } from './spline.js';
 import { type Corner, findCorners } from './corners.js';
+import { shapeCamber, terrainRise } from './terrain.js';
 import type { SurfaceId } from './surfaces.js';
 
 export interface CameraZone {
@@ -181,6 +182,9 @@ const BANK_HEIGHT = 2.4;
  * straight through the world. It also gives the start somewhere to sit and the
  * finish somewhere to slow down, both of which the game needs regardless.
  */
+/** Height of the road's centre above its edges, metres. */
+const CROWN = 0.09;
+
 const APRON_LENGTH = 24;
 const APRON_STEP = 3;
 
@@ -297,7 +301,20 @@ export class Stage {
 
   constructor(def: StageDef) {
     this.def = def;
-    this.spline = new Spline(def.controlPoints);
+    // The authored centreline says where the road goes; the terrain says what
+    // it is. Applied here, before the spline, so the collider, the AI, the
+    // camera and the props all agree about where the ground is — terrain that
+    // existed only in the renderer would be a picture of a hill.
+    const roughLength = def.controlPoints.reduce((total, point, i) => {
+      if (i === 0) return 0;
+      const previous = def.controlPoints[i - 1]!.pos;
+      return total + Math.hypot(point.pos.x - previous.x, point.pos.z - previous.z);
+    }, 0);
+    this.spline = new Spline(
+      shapeCamber(def.controlPoints, def.id),
+      2,
+      terrainRise(def.id, roughLength),
+    );
     this.length = this.spline.length;
     this.geometry = this.buildGeometry();
     this.checkpoints = this.buildCheckpoints(def.checkpoints ?? 3);
@@ -329,7 +346,11 @@ export class Stage {
       { offset: -bank, height: BANK_HEIGHT },
       { offset: -verge, height: -VERGE_DROP },
       { offset: -edge, height: 0 },
-      { offset: 0, height: 0 },
+      // A crown down the middle, as every real road has: water has to run off
+      // it. Small — about one and a half percent — but it is the difference
+      // between a road that is a flat ribbon and one that has a line down it,
+      // and it is why running wide costs you a little more than the width.
+      { offset: 0, height: CROWN },
       { offset: edge, height: 0 },
       { offset: verge, height: -VERGE_DROP },
       { offset: bank, height: BANK_HEIGHT },
@@ -458,7 +479,16 @@ export class Stage {
    * boundaries, and eases over `zoneHalfLife`.
    */
   private buildCameraZones(): CameraZone[] {
-    const ZONE_TURN = Math.PI * 0.25;
+    // How far the road may turn inside one camera zone.
+    //
+    // The margin here is thinner than it looks: half this turn, plus up to an
+    // eighth-turn of snapping error, plus the isometric offset, all stack
+    // against the 90° at which the car starts driving out of the screen rather
+    // than into it. At a quarter turn it passed by a hair, and the moment the
+    // stages gained elevation — which moves every arc length slightly — one
+    // zone on one stage crossed over and mirrored the steering. Less turn per
+    // zone, more zones, and headroom that a change to the road cannot spend.
+    const ZONE_TURN = Math.PI * 0.2;
     const ISO_OFFSET = Math.PI * 0.11;
     const EIGHTH = Math.PI / 4;
     const authored = this.def.cameraZones ?? [];
@@ -511,7 +541,34 @@ export class Stage {
 
     // The first zone always starts at zero, whatever the walk above decided.
     zones[0]!.from = 0;
-    return zones;
+
+    // Then check what was built, metre by metre, and split anything that fails.
+    //
+    // The rule above bounds how far the road turns inside a zone, and that is
+    // not the same as bounding how far the road ends up from the camera it was
+    // given: the yaw is snapped to an eighth of a turn and carries the
+    // isometric offset, and those stack. It passed by a hair for a long time,
+    // and the moment the stages gained elevation — which moves every arc
+    // length slightly — one zone crossed over and mirrored the steering on a
+    // corner. This makes the property the tests check into the property the
+    // code enforces, rather than something the numbers happen to satisfy.
+    const MARGIN = -0.12;
+    const split: CameraZone[] = [];
+    for (const [i, zone] of zones.entries()) {
+      split.push(zone);
+      const until = zones[i + 1]?.from ?? this.length;
+      let yaw = zone.yaw!;
+      for (let d = zone.from + 5; d < until; d += 5) {
+        if (Math.cos(bearingAt(d) - yaw) < MARGIN) continue;
+        // Past the margin: start a fresh zone here, aimed at the road ahead.
+        const rest = Math.min(until, d + 60);
+        const behind = bearingAt((d + rest) / 2) + Math.PI + ISO_OFFSET * side;
+        yaw = Math.round(behind / EIGHTH) * EIGHTH;
+        side = -side;
+        split.push({ from: d, yaw, zoom: zoomAt(d) });
+      }
+    }
+    return split;
   }
 
   /**
