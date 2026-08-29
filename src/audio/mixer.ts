@@ -279,6 +279,50 @@ export class Mixer {
   }
 
   /**
+   * A fanfare, sized to the moment.
+   *
+   * A rising arpeggio rather than a jingle: it can be as long or as short as
+   * the award deserves without being a different piece of music, and the last
+   * note landing above the first is what makes it read as an achievement
+   * rather than as a notification. Bigger awards get more notes, a wider
+   * spread and a tail that rings.
+   */
+  fanfare(weight: number): void {
+    if (!this.ctx || !this.master) return;
+    const now = this.ctx.currentTime;
+    // A major triad plus the octave, and the ninth on top for the big ones.
+    const steps = [0, 4, 7, 12, 16, 19];
+    const notes = Math.min(3 + weight, steps.length);
+    const root = 392; // G4: high enough to cut through an engine, low enough to sit under it.
+
+    for (let i = 0; i < notes; i++) {
+      const at = now + i * (weight >= 3 ? 0.085 : 0.1);
+      const freq = root * Math.pow(2, steps[i]! / 12);
+      const ring = i === notes - 1 ? 1.1 + weight * 0.35 : 0.28;
+
+      for (const [ratio, level] of [
+        [1, 0.15],
+        [2, 0.05],
+        [3, 0.02],
+      ] as [number, number][]) {
+        const osc = this.ctx.createOscillator();
+        osc.type = i === notes - 1 ? 'triangle' : 'square';
+        osc.frequency.setValueAtTime(freq * ratio, at);
+        const gain = this.ctx.createGain();
+        gain.gain.setValueAtTime(0.0001, at);
+        gain.gain.exponentialRampToValueAtTime(level * (0.7 + weight * 0.12), at + 0.012);
+        gain.gain.exponentialRampToValueAtTime(0.0001, at + ring);
+        const tone = this.ctx.createBiquadFilter();
+        tone.type = 'lowpass';
+        tone.frequency.value = 3200;
+        osc.connect(tone).connect(gain).connect(this.master);
+        osc.start(at);
+        osc.stop(at + ring + 0.05);
+      }
+    }
+  }
+
+  /**
    * Silence the car — used when a menu opens or a run ends.
    *
    * The world keeps going, quietly. A menu that kills the wind as well as the

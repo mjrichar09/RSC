@@ -1231,3 +1231,94 @@ html, body {
   60% { transform: scale(1.18); opacity: 1; }
   to { transform: scale(1); opacity: 1; }
 }
+
+/* ---- Awards --------------------------------------------------------------- */
+
+.awards {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.award {
+  position: relative;
+  text-align: center;
+  padding: 18px 46px;
+  animation: award-in 0.42s cubic-bezier(0.16, 1.2, 0.3, 1);
+}
+.award-title {
+  font-family: var(--font-display);
+  font-size: 46px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  color: var(--ink);
+  text-shadow: 0 4px 24px rgba(0, 0, 0, 0.95), 0 0 40px rgba(0, 0, 0, 0.6);
+}
+.award-detail {
+  margin-top: 6px;
+  font-size: 13px;
+  letter-spacing: 0.22em;
+  color: var(--dim);
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.95);
+}
+
+/* Tier colour. The medal palette is the garage's, so a gold reads as gold
+   everywhere in the game. */
+.award.author .award-title { color: #b06bff; }
+.award.gold .award-title { color: #f2c14e; }
+.award.silver .award-title { color: #c8d0d9; }
+.award.bronze .award-title { color: #cd8642; }
+.award.record .award-title { color: #4fd6a0; }
+
+/* The flash: a bar of light that sweeps out from behind the word. It is the
+   part that makes the award land rather than appear. */
+.award-flash {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 10px;
+  height: 96px;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(closest-side, rgba(255, 255, 255, 0.55), transparent 70%);
+  animation: award-flash 0.5s ease-out forwards;
+}
+.award.w2 .award-title { font-size: 58px; }
+.award.w3 .award-title { font-size: 68px; letter-spacing: 0.14em; }
+.award.w3 { animation-duration: 0.55s; }
+
+@keyframes award-in {
+  from { transform: scale(0.72) translateY(14px); opacity: 0; filter: blur(6px); }
+  60% { transform: scale(1.06); opacity: 1; filter: blur(0); }
+  to { transform: scale(1); opacity: 1; }
+}
+@keyframes award-flash {
+  from { width: 10px; opacity: 0.95; }
+  to { width: 780px; opacity: 0; }
+}
+
+#hud.in-garage .awards,
+#hud.in-menu .awards,
+#hud.in-replay .awards { display: none; }
+
+/* Progress toward each clean sweep, so a milestone can be aimed at. */
+.sweeps { display: grid; gap: 6px; }
+.sweep {
+  display: grid;
+  grid-template-columns: 74px 1fr 44px;
+  gap: 10px;
+  align-items: center;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  color: var(--dim);
+}
+.sweep b { text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
+.sweep-bar {
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.09);
+  overflow: hidden;
+}
+.sweep-bar i { display: block; height: 100%; }
+.sweep.is-done b { color: var(--accent); }

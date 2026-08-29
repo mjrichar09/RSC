@@ -12,6 +12,8 @@ import { Career, type RaceTarget } from './game/career.js';
 import { rollcageMitigation } from './game/garage.js';
 import { Race } from './game/race.js';
 import { StartLights } from './game/startLights.js';
+import { awardsFor } from './game/awards.js';
+import { Celebrations } from './ui/celebrate.js';
 import { SaveStore } from './game/save.js';
 import { NEUTRAL_INPUT } from './sim/input.js';
 import { Driver } from './sim/driver.js';
@@ -191,6 +193,9 @@ async function main(): Promise<void> {
    * first movement.
    */
   const lights = new StartLights();
+  /** What a run was worth beyond the money, said out loud. */
+  const celebrations = new Celebrations(hudRoot);
+  celebrations.onLand = (award) => mixer.fanfare(award.weight);
   /** Set by the photo-mode save key; read at the end of the next frame. */
   let wantsCapture = false;
   /**
@@ -298,6 +303,7 @@ async function main(): Promise<void> {
     settled = false;
     terminal = null;
     lights.arm();
+    celebrations.clear();
     damagePanel.reset();
     raceHud.setStage(stage, variant.name, variant.medals);
     minimap.setStage(stage);
@@ -390,6 +396,7 @@ async function main(): Promise<void> {
       settled = false;
       terminal = null;
       lights.arm();
+      celebrations.clear();
       raceHud.setLedger(null);
       damagePanel.reset();
       camera.applyZones(stage.cameraZones, 0);
@@ -605,6 +612,9 @@ async function main(): Promise<void> {
     const time = race.finishTime;
     const previous = save.recordFor(currentKey())?.time ?? null;
 
+    // Records before the run, so the celebration can say what changed.
+    const before = { ...career.profile.records };
+
     const result = await career.settle(currentTarget(), {
       medal: race.medal,
       time,
@@ -616,6 +626,18 @@ async function main(): Promise<void> {
     // Everyone else wants to know you are done, and the host is the only one
     // who can say so — so a guest sends it up and the host passes it on.
     session?.report(0, time, retired);
+
+    // What it was worth beyond the money: a first gold, a personal best, the
+    // last grey stage on the list turning bronze.
+    celebrations.show(
+      awardsFor({
+        keys: career.targets().map((t) => career.keyFor(t)),
+        before,
+        after: career.profile.records,
+        key: currentKey(),
+        name: `${stage.def.name} · ${variant?.name ?? ''}`.trim(),
+      }),
+    );
 
     raceHud.setLedger(result);
     if (result.newRecord && time !== null) {
@@ -1167,6 +1189,29 @@ async function main(): Promise<void> {
       raceHud.setLights(reds, go);
     }
 
+    // `?award=gold` puts a celebration on screen. Earning one for a screenshot
+    // means driving a stage well enough to deserve it, which is a slow way to
+    // check that a word is centred.
+    const award = params.get('award');
+    if (award) {
+      const kinds: Record<string, { title: string; detail: string; weight: number; medal: string | null }> = {
+        record: { title: 'NEW RECORD', detail: '41.80s — 1.60s faster', weight: 2, medal: null },
+        gold: { title: 'GOLD', detail: 'Pine Loop · Day', weight: 2, medal: 'gold' },
+        sweep: { title: 'ALL GOLD', detail: '15 stages, every one of them', weight: 3, medal: 'gold' },
+      };
+      const chosen = kinds[award] ?? kinds.gold!;
+      celebrations.show([
+        {
+          kind: award === 'record' ? 'record' : award === 'sweep' ? 'sweep' : 'medal',
+          title: chosen.title,
+          detail: chosen.detail,
+          weight: chosen.weight,
+          medal: chosen.medal as never,
+        },
+      ]);
+      celebrations.update(0);
+    }
+
     const brakes = params.get('brakes');
     if (brakes) world!.damage?.brakeTemp.fill(Number(brakes));
     // `?zoom=8` pulls the orthographic camera in. Detail on the car itself —
@@ -1372,6 +1417,7 @@ async function main(): Promise<void> {
     updateParticleScale();
     precipitation.update(dt, camera.focus, window.innerHeight / (2 * camera.effectiveViewSize));
 
+    celebrations.update(dt);
     drawOnce(alpha, dt);
     // The visual harness waits on this, so the live loop has to set it too or
     // a garage screenshot waits for a frame that only the seek path reports.

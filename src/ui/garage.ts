@@ -13,6 +13,7 @@ import { Stage, type StageDef } from '../sim/stage.js';
 import { stageMapSvg } from './stageMap.js';
 import { UPGRADES, levelOf, maxLevel, nextCost } from '../game/garage.js';
 import { LIVERIES } from '../data/liveries.js';
+import { sweepProgress } from '../game/awards.js';
 import { formatTime } from './raceHud.js';
 
 const MEDAL_TINT: Record<string, string> = {
@@ -175,7 +176,7 @@ export class Garage {
         <div class="garage-cols">
           <section>${this.stagesPanel()}</section>
           <section>${this.repairsPanel()}</section>
-          <section>${this.upgradesPanel()}${this.paintPanel()}</section>
+          <section>${this.upgradesPanel()}${this.progressPanel()}${this.paintPanel()}</section>
         </div>
         <footer class="garage-foot">
           <span><b>1</b>–<b>${Math.min(9, this.career.targets().length)}</b> enter stage · <b>Esc</b> close · <b>drag</b> the car to turn it</span>
@@ -295,6 +296,31 @@ export class Garage {
    * Next to the turntable rather than in a menu of its own: the whole point is
    * that the car in front of you changes as you press the swatches.
    */
+  /**
+   * How close the career is to each clean sweep.
+   *
+   * A milestone nobody can see coming is a milestone nobody is chasing. This is
+   * what turns "eleven golds" into "two more".
+   */
+  private progressPanel(): string {
+    const keys = this.career.targets().map((t) => this.career.keyFor(t));
+    const rows = sweepProgress(keys, this.career.profile.records)
+      .reverse()
+      .map(({ medal, have, of }) => {
+        const done = have >= of;
+        const label = medal === 'finish' ? 'finished' : medal;
+        return `
+          <div class="sweep${done ? ' is-done' : ''}">
+            <span style="color:${MEDAL_TINT[medal] ?? 'inherit'}">${label}</span>
+            <div class="sweep-bar"><i style="width:${((have / Math.max(of, 1)) * 100).toFixed(0)}%;background:${MEDAL_TINT[medal] ?? '#8b95a5'}"></i></div>
+            <b>${have}/${of}</b>
+          </div>`;
+      })
+      .join('');
+
+    return `<h3>PROGRESS</h3><div class="sweeps">${rows}</div>`;
+  }
+
   private paintPanel(): string {
     const current = this.career.livery;
     const swatches = LIVERIES.map(
