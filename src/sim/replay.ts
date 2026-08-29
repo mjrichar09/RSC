@@ -52,7 +52,12 @@ export class GhostRecorder {
   /** Call once per fixed step while the race is running. */
   capture(time: number, distance: number, state: VehicleState): void {
     if (time < this.nextAt) return;
-    this.nextAt = time + this.interval;
+    // Advance the schedule by exactly one interval rather than from the moment
+    // this frame happened to land. Setting it from `time` carries the overshoot
+    // forward, so every frame is recorded a fraction later than the last and
+    // the whole recording drifts away from the clock it was meant to be on.
+    this.nextAt += this.interval;
+    if (this.nextAt <= time) this.nextAt = time + this.interval;
 
     const w = state.wheels;
     this.frames.push(
@@ -105,17 +110,32 @@ export class GhostPlayer {
     return this.ghost.frames[frame * GHOST_STRIDE + offset]!;
   }
 
-  /** Interpolated pose at a point in time, clamped to the ends of the run. */
+  /**
+   * Interpolated pose at a point in time, clamped to the ends of the run.
+   *
+   * Every frame carries its own timestamp and this reads them, rather than
+   * assuming frame `i` happened at `i / recordHz`. That assumption is what put
+   * the ghost ahead of an identical lap: the recorder fires on the first fixed
+   * step past each interval, so a frame lands a step or two late, and the
+   * playback index — which had no idea — looked up a frame from slightly
+   * further into the run. It read as the ghost getting a head start, it grew
+   * through a lap as the error accumulated, and it made every delta a lie.
+   *
+   * The index is still estimated rather than searched, then walked to the right
+   * frame; recordings are near-uniform, so the walk is a step or two.
+   */
   sampleAt(time: number): GhostSample | null {
     if (this.count === 0) return null;
 
     const last = this.count - 1;
-    // Frames are recorded at a fixed rate, so the index is a direct estimate
-    // rather than a search.
-    const raw = time * SIM.recordHz;
-    const i = Math.min(Math.max(Math.floor(raw), 0), last);
+    const at = (frame: number) => this.field(frame, 0);
+    let i = Math.min(Math.max(Math.floor(time * SIM.recordHz), 0), last);
+    while (i > 0 && at(i) > time) i--;
+    while (i < last && at(i + 1) <= time) i++;
+
     const j = Math.min(i + 1, last);
-    const t = j === i ? 0 : Math.min(Math.max(raw - i, 0), 1);
+    const span = at(j) - at(i);
+    const t = j === i || span <= 0 ? 0 : Math.min(Math.max((time - at(i)) / span, 0), 1);
 
     const pos = (f: number) => ({ x: this.field(f, 1), y: this.field(f, 2), z: this.field(f, 3) });
     const rot = (f: number) => ({

@@ -8,9 +8,15 @@
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import { STAGES } from '../src/data/stages/index.js';
-import { GHOST_STRIDE, GhostPlayer, type Ghost } from '../src/sim/replay.js';
+import { GHOST_STRIDE, GhostPlayer, GhostRecorder, type Ghost } from '../src/sim/replay.js';
 import { runStage } from '../src/sim/runStage.js';
 import { Stage } from '../src/sim/stage.js';
+import { stageById } from '../src/data/stages/index.js';
+import { createWorld } from '../src/sim/world.js';
+import { Driver } from '../src/sim/driver.js';
+import { Race } from '../src/game/race.js';
+import { NEUTRAL_INPUT } from '../src/sim/input.js';
+import type { VehicleState } from '../src/sim/vehicle.js';
 
 const stage = new Stage(STAGES[0]!);
 let ghost: Ghost;
@@ -136,5 +142,90 @@ describe('deltas', () => {
       expect(mid).toBeGreaterThan(ghost.frames[10 * GHOST_STRIDE]!);
       expect(mid).toBeLessThan(ghost.frames[11 * GHOST_STRIDE]!);
     }
+  });
+});
+
+
+/** A car sitting still, for feeding the recorder without a simulation. */
+function stillCar(): VehicleState {
+  const wheel = {
+    grounded: true,
+    compression: 0.5,
+    load: 3000,
+    saturation: 0,
+    slipAngle: 0,
+    slipRatio: 0,
+    spin: 0,
+    rotation: 0,
+    steer: 0,
+    surface: { id: 'tarmac' },
+    contact: { x: 0, y: 0, z: 0 },
+  };
+  return {
+    position: { x: 0, y: 0, z: 0 },
+    rotation: { x: 0, y: 0, z: 0, w: 1 },
+    velocity: { x: 0, y: 0, z: 0 },
+    speed: 0,
+    rpm: 1000,
+    gear: 1,
+    engineLoad: 0,
+    shifting: false,
+    driftAngle: 0,
+    wheels: [wheel, wheel, wheel, wheel],
+  } as unknown as VehicleState;
+}
+
+describe('a ghost of your own lap', () => {
+  it('sits exactly on top of the lap it recorded', async () => {
+    // The bug this protects against: the player assumed frame `i` happened at
+    // `i / recordHz`, while the recorder fires on the first fixed step past
+    // each interval — so every lookup returned a frame from slightly further
+    // into the run, the error grew through the lap, and the ghost appeared to
+    // get a head start off the line. Driving the identical lap again is the
+    // only test that catches it, because every part of it is individually fine.
+    const stage = new Stage(stageById('pine-loop'));
+    const lap = await runStage(stage, { recordGhost: true });
+    expect(lap.ghost).not.toBeNull();
+    const ghost = new GhostPlayer(lap.ghost!);
+
+    const world = await createWorld({ stage });
+    const driver = new Driver(stage);
+    const race = new Race(stage);
+    for (let i = 0; i < 60; i++) world.step(NEUTRAL_INPUT);
+    world.time = 0;
+
+    let worst = 0;
+    while (world.time < 20 && race.phase !== 'finished') {
+      world.step(driver.input(world.state(), world.dt));
+      race.update(world.state(), world.dt);
+      if (race.phase !== 'running') continue;
+      const sample = ghost.sampleAt(race.time);
+      if (!sample) continue;
+      const here = world.state().position;
+      worst = Math.max(worst, Math.hypot(sample.position.x - here.x, sample.position.z - here.z));
+    }
+    // Within a centimetre for twenty seconds. It used to be four metres.
+    expect(worst).toBeLessThan(0.01);
+  }, 60_000);
+
+  it('records on a fixed schedule rather than drifting off it', () => {
+    // Setting the next capture from the moment this one landed carries the
+    // overshoot forward, and a recording made that way slides later and later
+    // away from the clock it is supposed to share with the player.
+    const recorder = new GhostRecorder();
+    const state = stillCar();
+    for (let step = 0; step < 1200; step++) {
+      recorder.capture(step / 120, step * 0.1, state);
+    }
+    const ghost = recorder.finish('test', 10);
+    const times: number[] = [];
+    for (let i = 0; i < ghost.frames.length / GHOST_STRIDE; i++) {
+      times.push(ghost.frames[i * GHOST_STRIDE]!);
+    }
+    const last = times[times.length - 1]!;
+    // Sixty a second for ten seconds, and the last frame still lands where the
+    // clock says it should rather than a fifth of a second late.
+    expect(times.length).toBeGreaterThan(590);
+    expect(Math.abs(last - 9.99)).toBeLessThan(0.02);
   });
 });
