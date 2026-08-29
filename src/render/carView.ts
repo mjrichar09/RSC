@@ -164,6 +164,12 @@ export class CarView {
    * so the material is no longer where the paint can be read from.
    */
   private readonly paintOf = new Map<THREE.Mesh, THREE.Color>();
+  /** How far gone each corner's suspension is, 0..1, read by the wheel pose. */
+  private readonly cornerDamage: [number, number, number, number] = [0, 0, 0, 0];
+  /** Rest vertices of the windscreen, which shatters rather than folding. */
+  private screenRestGeometry: Float32Array | null = null;
+  /** Windscreen health the glass was last built for. */
+  private glassAt = -1;
   private readonly folds = new Map<
     THREE.Mesh,
     { axis: 0 | 1 | 2; sign: number; half: [number, number, number]; components: ComponentId[] }
@@ -778,14 +784,7 @@ export class CarView {
       }
     }
 
-    // The windscreen goes milky and dark as it crazes, rather than deforming.
-    const screenRest = this.restPose.get(this.screen);
-    if (screenRest) {
-      const cracked = 1 - damage.get('windscreen');
-      const material = this.screen.material as THREE.MeshStandardMaterial;
-      material.color.copy(screenRest.color).lerp(WINDSCREEN_CRAZED, cracked);
-      material.roughness = 0.2 + cracked * 0.7;
-    }
+    this.applyGlass(damage);
 
     // Headlights: below half health one side dies outright, so the beam goes
     // lopsided before it goes dark. That is a far more useful warning than a
@@ -805,6 +804,7 @@ export class CarView {
     for (let i = 0; i < 4; i++) {
       const key = ['FL', 'FR', 'RL', 'RR'][i]!;
       const view = this.wheels[i]!;
+      this.cornerDamage[i] = 1 - damage.get(`suspension${key}` as never);
       // A detached wheel is simply gone; a flat one squats on its rim.
       view.visible = damage.get(`hub${key}` as never) > 0;
       const tyre = damage.get(`tyre${key}` as never);
@@ -823,6 +823,56 @@ export class CarView {
   }
 
   /**
+   * The windscreen: crazes, then goes.
+   *
+   * Glass does not fold, so it gets its own path rather than going through
+   * `reshape`. It crazes milky first — that is the part you have to keep
+   * driving through — and then, past about a third of its health, it starts
+   * losing itself: the pane goes translucent and its vertices scatter, so what
+   * is left reads as shards in a frame rather than as a dirty window.
+   *
+   * Rebuilt only when the health has actually moved, in twentieths.
+   */
+  private applyGlass(damage: DamageModel): void {
+    const rest = this.restPose.get(this.screen);
+    if (!rest) return;
+    const health = damage.get('windscreen');
+    const material = this.screen.material as THREE.MeshStandardMaterial;
+    const cracked = 1 - health;
+
+    material.color.copy(rest.color).lerp(WINDSCREEN_CRAZED, cracked);
+    material.roughness = 0.2 + cracked * 0.7;
+
+    // Past a third gone the glass starts leaving the frame.
+    const blown = Math.min(Math.max((0.35 - health) / 0.35, 0), 1);
+    material.transparent = true;
+    material.opacity = 1 - blown * 0.86;
+
+    const step = Math.round(blown * 20);
+    if (step === this.glassAt) return;
+    this.glassAt = step;
+
+    const attribute = this.screen.geometry.getAttribute('position') as THREE.BufferAttribute;
+    const array = attribute.array as Float32Array;
+    this.screenRestGeometry ??= Float32Array.from(array);
+    const restVerts = this.screenRestGeometry;
+
+    for (let i = 0; i < array.length; i += 3) {
+      const x = restVerts[i]!;
+      const y = restVerts[i + 1]!;
+      const z = restVerts[i + 2]!;
+      // Scattered, not folded: each vertex is thrown its own way, so the pane
+      // breaks into slivers instead of denting like a panel.
+      const throwOut = blown * 0.16;
+      array[i] = x + (hash3(x, y, z) - 0.5) * throwOut;
+      array[i + 1] = y + (hash3(y, z, x) - 0.5) * throwOut;
+      array[i + 2] = z + (hash3(z, x, y) - 0.5) * throwOut * 0.4;
+    }
+    attribute.needsUpdate = true;
+    this.screen.geometry.computeVertexNormals();
+  }
+
+  /**
    * Show what the debris model says: a gone part is gone, and a dragging one
    * hangs at one corner and scrapes. The dragging pose is the telegraph — it is
    * the only warning the player gets before the part finally lets go.
@@ -836,8 +886,13 @@ export class CarView {
       // override it: a part that is hanging off is no longer sitting where its
       // dents left it.
       if (state === 'dragging') {
-        mesh.position.set(rest.x - 0.12, rest.y - 0.2, rest.z);
-        mesh.rotation.set(0, 0, 0.5);
+        // Hanging at one corner and flapping. A rigid dragging part reads as a
+        // panel that has simply been moved; the flap is what says it is only
+        // still attached by one bolt, and it is the last warning the player
+        // gets before it lets go.
+        const beat = performance.now() * 0.011 + rest.z;
+        mesh.position.set(rest.x - 0.12, rest.y - 0.2 + Math.sin(beat) * 0.035, rest.z);
+        mesh.rotation.set(Math.sin(beat * 1.3) * 0.16, 0, 0.5 + Math.sin(beat) * 0.12);
       } else if (debris.isLoose(id)) {
         // Sitting proud and skewed: the tell that this one is about to go.
         mesh.position.set(rest.x, rest.y + 0.07, rest.z);
@@ -899,8 +954,20 @@ export class CarView {
 
       // Suspension travel: an ungrounded wheel hangs at full droop.
       const drop = w.grounded ? (1 - w.compression) * CAR.suspensionRestLength : CAR.suspensionRestLength;
-      view.position.set(mount.x, mount.y - drop + CAR.suspensionRestLength * 0.5, mount.z);
-      view.rotation.set(w.rotation, w.steer, 0, 'YXZ');
+      // A collapsed corner: the body settles onto the wheel and the wheel
+      // leans. Read at a glance from a fixed camera, and it says which corner
+      // took the hit before any panel does — a car sitting nose-down on a dead
+      // left front is legible in a way a repair list is not.
+      const sag = this.cornerDamage[i]!;
+      view.position.set(
+        mount.x,
+        mount.y - drop + CAR.suspensionRestLength * 0.5 + sag * 0.085,
+        mount.z,
+      );
+      // 'YZX': spin about the axle first, then camber, then steer. With the
+      // old 'YXZ' the camber went on innermost and the spin carried it round
+      // with the wheel, which reads as a wobble rather than a lean.
+      view.rotation.set(w.rotation, w.steer, Math.sign(mount.x) * sag * 0.3, 'YZX');
 
     }
   }

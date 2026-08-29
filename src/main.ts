@@ -147,7 +147,10 @@ async function main(): Promise<void> {
   await save.open();
   const career = new Career(save, STAGES);
 
-  const params = new URLSearchParams(location.search);
+  /** Bright torn road where bodywork has been dragged along it. */
+const SCRAPE_COLOR = new THREE.Color(0xb9b2a4);
+
+const params = new URLSearchParams(location.search);
   // `?vision=0.6` scales the whole windscreen effect. It is the setting most
   // likely to need a human eye, so it is adjustable rather than baked in.
   const visionParam = params.get('vision');
@@ -893,6 +896,50 @@ async function main(): Promise<void> {
     }
   };
 
+  /**
+   * Anything scraping along the road throws sparks from where it touches, and
+   * leaves a gouge behind it.
+   *
+   * The mark is the part that lasts: sparks are gone in a tenth of a second,
+   * and a torn strip of road under the corner you dragged through is still
+   * there on the next lap.
+   *
+   * Shared with the screenshot harness rather than living inside the frame
+   * loop, because the harness steps the world directly — written into `frame`
+   * it produced nothing in any screenshot, which is exactly the sort of thing
+   * that gets called broken when it is only unreachable.
+   */
+  const dragEffects = (dt: number): void => {
+    const state = world.state();
+    const dragging = world.debris?.dragging() ?? [];
+    for (let slot = 0; slot < 2; slot++) {
+      const id = dragging[slot];
+      const at = id ? carView.dragPoint(id) : null;
+      if (!at) {
+        // Or the next mark bridges the gap back to wherever it last scraped.
+        skids.lift(4 + slot);
+        continue;
+      }
+      emitDragSparks(particles, at, state.velocity, Math.abs(state.speed), dt);
+      // Across the direction of travel, which is the way a scraped stripe lies.
+      const speed = Math.hypot(state.velocity.x, state.velocity.z);
+      const side =
+        speed > 0.5
+          ? { x: -state.velocity.z / speed, y: 0, z: state.velocity.x / speed }
+          : { x: 1, y: 0, z: 0 };
+      skids.lay(
+        4 + slot,
+        // A hair above where the part is touching: the mark is a decal on the
+        // road, and laid at the exact contact height it sinks into it.
+        { x: at.x, y: at.y + 0.02, z: at.z },
+        side,
+        0.24,
+        Math.min(Math.abs(state.speed) / 8, 1),
+        SCRAPE_COLOR,
+      );
+    }
+  };
+
   window.RSC = {
     ready: true,
     rendered: false,
@@ -913,6 +960,8 @@ async function main(): Promise<void> {
         // Accumulate spray and marks so a harness frame shows the same effects
         // a player would see, rather than a suspiciously clean road.
         updateWheelEffects(particles, skids, world.state().wheels, world.state().velocity, world.dt);
+        carView.update(world.renderTransform(1), world.state(), world.damage, world.debris);
+        dragEffects(world.dt);
         particles.update(world.dt);
         advanceVision(world.dt);
         // The crowd scatters as the car arrives, and a screenshot taken at the
@@ -1133,12 +1182,11 @@ async function main(): Promise<void> {
       for (let i = 0; i < 120 * Number(params.get('after') ?? '2'); i++) {
         world!.step({ throttle: 0.35, brake: 0, steer: 0, handbrake: 0 });
         updateWheelEffects(particles, skids, state().wheels, state().velocity, world!.dt);
-        // Sparks too, or a harness frame of a dragging bumper shows the pose
-        // without the shower that is the actual telegraph.
-        for (const id of world!.debris?.dragging() ?? []) {
-          const at = carView.dragPoint(id);
-          if (at) emitDragSparks(particles, at, state().velocity, Math.abs(state().speed), world!.dt);
-        }
+        // Pose the car before reading where the dragging part touches: sparks
+        // and the scrape both come off its world position, and an unposed view
+        // reports where the bumper was before it started hanging.
+        carView.update(world!.renderTransform(1), state(), world!.damage, world!.debris);
+        dragEffects(world!.dt);
         particles.update(world!.dt);
       }
       camera.jumpTo(world!.state().position);
@@ -1436,11 +1484,7 @@ async function main(): Promise<void> {
         );
       }
 
-      // Anything scraping along the road throws sparks from where it touches.
-      for (const id of world.debris?.dragging() ?? []) {
-        const at = carView.dragPoint(id);
-        if (at) emitDragSparks(particles, at, state.velocity, Math.abs(state.speed), dt);
-      }
+      dragEffects(dt);
       mixer.update(state, {
         maxRpm: world.vehicle.tuning.maxRpm,
         throttle: input.throttle,

@@ -171,8 +171,14 @@ export class SkidMarks {
   private readonly colors = new Float32Array(MAX_SKID_QUADS * 6 * 3);
   private readonly geometry = new THREE.BufferGeometry();
   private next = 0;
-  /** Last contact point per wheel, so a mark can be stretched between frames. */
-  private readonly previous: (Vec3 | null)[] = [null, null, null, null];
+  /**
+   * Last contact point per emitter, so a mark can be stretched between frames.
+   *
+   * Six, not four: the four wheels, then two spare slots for whatever is
+   * scraping. A dragging bumper lays a mark on the road the same way a locked
+   * tyre does, and it should — that gouge is the evidence you left behind.
+   */
+  private readonly previous: (Vec3 | null)[] = [null, null, null, null, null, null];
 
   constructor(parent: THREE.Object3D) {
     this.geometry.setAttribute('position', new THREE.BufferAttribute(this.positions, 3));
@@ -216,6 +222,7 @@ export class SkidMarks {
    * `strength` fades the mark in as the tyre passes its limit.
    */
   lay(
+    /** 0-3 are the wheels; 4 and 5 are scraping bodywork. */
     wheelIndex: number,
     at: Vec3,
     right: Vec3,
