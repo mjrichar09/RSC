@@ -709,7 +709,24 @@ export class Vehicle {
     }
     if (this.shiftTimer > 0) return;
 
-    const frac = this.engineRpm / t.maxRpm;
+    /*
+     * Shift on road speed, not on wheel speed.
+     *
+     * The rev counter reads off the driven wheels, which is what makes
+     * wheelspin audible and is right for everything except this decision. On a
+     * gravel launch the wheels hit the limiter while the car is doing walking
+     * pace, so the box upshifted, the wheels hooked up, the revs collapsed, and
+     * it dropped straight back to first — measured: four shifts in the first
+     * second, every launch. A real gearbox reads the output shaft, which turns
+     * with the road whatever the tyres are doing.
+     */
+    const wheelSpeed = Math.abs(speed) / t.wheelRadius;
+    const roadRpm = clamp(
+      wheelSpeed * ratio * t.finalDrive * RPM_PER_RAD_S,
+      t.idleRpm,
+      t.maxRpm,
+    );
+    const frac = roadRpm / t.maxRpm;
     if (frac > t.upshiftAt && this.gearIndex < t.gearRatios.length - 1) {
       // A damaged gearbox sometimes refuses the shift and sits on the limiter.
       // Drawn from the damage model's stream rather than Math.random, so a
