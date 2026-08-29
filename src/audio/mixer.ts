@@ -29,6 +29,14 @@ const SURFACE_VOICE: Record<SurfaceId, { frequency: number; q: number; gain: num
 export class Mixer {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
+  /**
+   * The muffle applied after a big impact: everything downstream of the mix
+   * goes briefly deaf, the way it does when you have just hit something.
+   * Transparent at rest, so it costs nothing when the effect is switched off.
+   */
+  private duckFilter: BiquadFilterNode | null = null;
+  private duckGain: GainNode | null = null;
+  private ducked = 0;
   private engine: EngineVoice | null = null;
   private ambience: Ambience | null = null;
   /** Where the ambience thinks it is, held until the graph exists to play it. */
@@ -73,7 +81,16 @@ export class Mixer {
     limiter.ratio.value = 8;
     limiter.attack.value = 0.003;
     limiter.release.value = 0.18;
-    this.master.connect(limiter).connect(ctx.destination);
+    // master -> muffle -> limiter -> out. The impact voices go through it too,
+    // and deliberately: the duck ramps in over a tenth of a second, so the
+    // crunch itself lands clean and only its tail is swallowed.
+    this.duckFilter = ctx.createBiquadFilter();
+    this.duckFilter.type = 'lowpass';
+    this.duckFilter.frequency.value = 20000;
+    this.duckFilter.Q.value = 0.4;
+    this.duckGain = ctx.createGain();
+    this.duckGain.gain.value = 1;
+    this.master.connect(this.duckFilter).connect(this.duckGain).connect(limiter).connect(ctx.destination);
 
     this.engine = new EngineVoice(ctx, this.master);
     this.engine.start();
@@ -200,6 +217,25 @@ export class Mixer {
     const skidLevel = airborne ? 0 : Math.min(slip * 1.4, 1) * 0.1 * Math.min(speed / 12, 1);
     this.skidGain?.gain.setTargetAtTime(skidLevel, now, 0.05);
     this.skidFilter?.frequency.setTargetAtTime(1700 + slip * 900, now, 0.08);
+  }
+
+  /**
+   * Muffle the mix, 0..1.
+   *
+   * Called every frame while an impact is being dramatised. Only touches the
+   * graph when the value has actually moved: a `setTargetAtTime` sixty times a
+   * second to say "still zero" is a scheduling event for nothing.
+   */
+  duck(amount: number): void {
+    const next = Math.min(Math.max(amount, 0), 1);
+    if (Math.abs(next - this.ducked) < 0.01) return;
+    this.ducked = next;
+    if (!this.ctx || !this.duckFilter || !this.duckGain) return;
+    const now = this.ctx.currentTime;
+    // Down fast, back up slowly: hearing returns over about half a second.
+    const glide = next > 0.05 ? 0.05 : 0.22;
+    this.duckFilter.frequency.setTargetAtTime(20000 - next * 19_400, now, glide);
+    this.duckGain.gain.setTargetAtTime(1 - next * 0.45, now, glide);
   }
 
   /**

@@ -36,6 +36,8 @@ export class Controls {
   onMute: (() => void) | null = null;
   /** Cycle the windscreen effect through its settings. */
   onVision: (() => void) | null = null;
+  /** Cycle the crash cinematic — including all the way off. */
+  onDrama: (() => void) | null = null;
   /** Fires on the multiplayer lobby key. */
   onMultiplayer: (() => void) | null = null;
   /** Fires on the photo-mode key. */
@@ -51,6 +53,7 @@ export class Controls {
       if (ev.code === 'KeyQ') this.onRescue?.();
       if (ev.code === 'KeyM') this.onMute?.();
       if (ev.code === 'KeyV') this.onVision?.();
+      if (ev.code === 'KeyK') this.onDrama?.();
       if (ev.code === 'KeyN') this.onMultiplayer?.();
       if (ev.code === 'KeyP') this.onPhoto?.();
       if (ev.code === 'Escape' || ev.code === 'Tab') {

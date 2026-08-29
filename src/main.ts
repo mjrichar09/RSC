@@ -11,6 +11,7 @@ import { TEST_PATCHES } from './data/testGround.js';
 import { Career, type RaceTarget } from './game/career.js';
 import { rollcageMitigation } from './game/garage.js';
 import { Race } from './game/race.js';
+import { ImpactDrama } from './game/drama.js';
 import { StartLights } from './game/startLights.js';
 import { awardsFor } from './game/awards.js';
 import { Celebrations } from './ui/celebrate.js';
@@ -150,6 +151,9 @@ async function main(): Promise<void> {
   // `?vision=0.6` scales the whole windscreen effect. It is the setting most
   // likely to need a human eye, so it is adjustable rather than baked in.
   const visionParam = params.get('vision');
+  // `?drama=0` runs the visual harness at real time, which every screenshot
+  // wants: a frame captured mid-dilation is a frame of a different run.
+  const dramaParam = params.get('drama');
   const freeRoam = params.has('free') || params.has('trace');
 
   let world: SimWorld;
@@ -193,6 +197,10 @@ async function main(): Promise<void> {
    * first movement.
    */
   const lights = new StartLights();
+  // Time dilation and a ducked mix on a big hit. `?drama=0` switches both off
+  // outright, as does the K key and the stored setting behind it — the effect
+  // is a taste call and has to be removable without touching any other code.
+  const drama = new ImpactDrama();
   /** What a run was worth beyond the money, said out loud. */
   const celebrations = new Celebrations(hudRoot);
   celebrations.onLand = (award) => mixer.fanfare(award.weight);
@@ -303,6 +311,7 @@ async function main(): Promise<void> {
     settled = false;
     terminal = null;
     lights.arm();
+    drama.reset();
     celebrations.clear();
     damagePanel.reset();
     raceHud.setStage(stage, variant.name, variant.medals);
@@ -396,6 +405,7 @@ async function main(): Promise<void> {
       settled = false;
       terminal = null;
       lights.arm();
+      drama.reset();
       celebrations.clear();
       raceHud.setLedger(null);
       damagePanel.reset();
@@ -510,6 +520,21 @@ async function main(): Promise<void> {
   // headlights alone. The URL parameter still wins, for the visual harness.
   const VISION_STEPS = [0, 0.35, 0.6, 1];
   visionPass.strength = visionParam !== null ? Number(visionParam) : career.profile.settings.vision;
+  // The crash cinematic, on the same pattern and for the same reason: some
+  // people will want it off entirely, and 0 means genuinely nothing happens.
+  const DRAMA_STEPS = [0, 0.5, 1];
+  drama.strength = dramaParam !== null ? Number(dramaParam) : career.profile.settings.drama;
+  controls.onDrama = () => {
+    const next =
+      DRAMA_STEPS[(DRAMA_STEPS.findIndex((v) => v >= drama.strength - 0.01) + 1) % DRAMA_STEPS.length] ?? 1;
+    drama.strength = next;
+    if (next === 0) drama.reset();
+    damagePanel.notice(next === 0 ? 'Crash slow-motion off' : `Crash slow-motion ${Math.round(next * 100)}%`);
+    void save.update((profile) => {
+      profile.settings.drama = next;
+    });
+  };
+
   controls.onVision = () => {
     const next =
       VISION_STEPS[(VISION_STEPS.findIndex((v) => v >= visionPass.strength - 0.01) + 1) % VISION_STEPS.length] ??
@@ -1288,15 +1313,26 @@ async function main(): Promise<void> {
       : garage.isOpen || multiplayer.isOpen || menu.isOpen
         ? NEUTRAL_INPUT
         : controls.sample(dt);
+    // The crash cinematic runs on the clock the world sees, not on the frame
+    // clock: the accumulator is simply fed less real time, so the fixed 120 Hz
+    // step, the physics and the netcode are all untouched. Never in a network
+    // race — slowing one client's world desyncs it from the host — and never
+    // while `drama.strength` is 0, where `timeScale` is exactly 1.
+    drama.update(dt);
+    mixer.duck(drama.duck);
+    const simDt = session ? dt : dt * drama.timeScale;
+
     // In a network race every fixed step goes through the host or the guest:
     // that is what puts inputs on the wire and takes snapshots off it.
-    const alpha = session ? session.advance(dt, input) : world.advance(dt, input);
+    const alpha = session ? session.advance(dt, input) : world.advance(simDt, input);
 
     const state = world.state();
     if (race && stage) {
       const wasRunning = race.phase === 'running';
       const splitsBefore = race.splits.length;
-      race.update(state, dt);
+      // The race clock is the world's clock. Left on real time, every big crash
+      // would quietly add half a second to the run.
+      race.update(state, simDt);
 
       // A bump the car shrugs off should still be felt and heard, so this reads
       // the raw impulse rather than waiting for a damage event.
@@ -1304,6 +1340,9 @@ async function main(): Promise<void> {
         const severity = Math.min((world.lastImpact - 1200) / 26_000, 1);
         camera.shake(severity);
         mixer.impact(severity);
+        // Only a hit worth watching gets the cinematic; `hit` decides, and
+        // returns false for everything below its own threshold.
+        if (!session) drama.hit(world.lastImpact);
       }
 
       // What happened first, then what it broke.

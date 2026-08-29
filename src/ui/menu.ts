@@ -131,7 +131,7 @@ export class StartMenu {
           </button>
         </div>
         <div class="menu-foot">
-          <span><b>Esc</b> menu · <b>R</b> restart · <b>Q</b> rescue · <b>T</b> tuning · <b>V</b> visibility</span>
+          <span><b>Esc</b> menu · <b>R</b> restart · <b>Q</b> rescue · <b>T</b> tuning · <b>V</b> visibility · <b>K</b> slow-mo</span>
         </div>
       </div>`;
   }

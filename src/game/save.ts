@@ -67,9 +67,19 @@ export interface Settings {
    * a night stage is merely dim, at 1 you drive by the headlights alone.
    */
   vision: number;
+  /**
+   * How much of the crash cinematic to apply, 0..1.
+   *
+   * Time dilation and a ducked mix on a big impact. **0 turns both off
+   * completely** — the world runs at real time and the mixer is never touched,
+   * so nothing about the effect survives except this number. It is here rather
+   * than as a constant precisely so it can be switched off without a code
+   * change if we decide against it.
+   */
+  drama: number;
 }
 
-export const DEFAULT_SETTINGS: Settings = { vision: 0.6 };
+export const DEFAULT_SETTINGS: Settings = { vision: 0.6, drama: 1 };
 
 /** Exposed for tests: bringing a stored profile up to date and making it safe. */
 export { migrate as migrateProfile };
@@ -129,7 +139,10 @@ function migrate(stored: unknown): Profile {
     // would not fit on the roof.
     raceNumber: Math.min(Math.max(Math.round(number(stored.raceNumber, base.raceNumber)), 1), 99),
     settings: isObject(stored.settings)
-      ? { vision: clamp01(number(stored.settings.vision, DEFAULT_SETTINGS.vision)) }
+      ? {
+          vision: clamp01(number(stored.settings.vision, DEFAULT_SETTINGS.vision)),
+          drama: clamp01(number(stored.settings.drama, DEFAULT_SETTINGS.drama)),
+        }
       : { ...DEFAULT_SETTINGS },
   };
 

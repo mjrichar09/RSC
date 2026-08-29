@@ -39,7 +39,7 @@ const page = await browser.newPage({ viewport: { width: 900, height: 600 } });
 page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 const status = async () => (await page.evaluate(() => window.RSC!.status())) as Record<string, unknown>;
 
-await page.goto('http://localhost:5181/?vision=0');
+await page.goto('http://localhost:5181/?vision=0&drama=0');
 await page.waitForFunction(() => window.RSC?.ready === true);
 await page.waitForSelector('.menu.is-open');
 console.log('menu opens on boot');
