@@ -52,6 +52,8 @@ const WET_SENSITIVITY: Record<SurfaceId, number> = {
   snow: 0.04,
   ice: 0.26,
   grass: 0.12,
+  // Already water. Rain adds nothing to a stream.
+  water: 0,
 };
 
 /** Grip multiplier for a surface under these conditions. 1 is dry. */

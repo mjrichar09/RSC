@@ -21,6 +21,9 @@ const SURFACE_VOICE: Record<SurfaceId, { frequency: number; q: number; gain: num
   snow: { frequency: 700, q: 0.8, gain: 0.6 },
   ice: { frequency: 2600, q: 2.0, gain: 0.35 },
   grass: { frequency: 950, q: 0.6, gain: 0.8 },
+  // A ford is the loudest thing a tyre ever drives through, and it is broadband
+  // rather than pitched: a wall of water, not a texture.
+  water: { frequency: 480, q: 0.35, gain: 1.4 },
 };
 
 export class Mixer {

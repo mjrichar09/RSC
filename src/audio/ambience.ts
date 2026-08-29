@@ -44,6 +44,11 @@ const PLACES: Record<string, Place> = {
   winter: { wind: 0.12, windCutoff: 900, surf: 0, surfPeriod: 0, birds: 0, birdPitch: 0, chorus: 0 },
   moor: { wind: 0.34, windCutoff: 420, surf: 0, surfPeriod: 0, birds: 6, birdPitch: 2100, chorus: 0.02 },
   coast: { wind: 0.26, windCutoff: 520, surf: 0.16, surfPeriod: 7.5, birds: 12, birdPitch: 1800, chorus: 0.02 },
+  // Between buildings: little wind, and the birds are town birds — lower and
+  // fewer than a forest's, but never silent the way the mountain is.
+  town: { wind: 0.08, windCutoff: 700, surf: 0, surfPeriod: 0, birds: 10, birdPitch: 1500, chorus: 0.04 },
+  // Thin air over a pass: wind with nothing to break it and nothing living.
+  alpine: { wind: 0.38, windCutoff: 780, surf: 0, surfPeriod: 0, birds: 2, birdPitch: 2600, chorus: 0.01 },
 };
 
 /** Weather multiplies the wind and adds its own noise on top. */

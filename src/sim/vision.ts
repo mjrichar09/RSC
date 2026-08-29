@@ -34,6 +34,9 @@ const SOILING_RATE: Record<string, number> = {
 
 /** Surfaces that throw material onto the screen, and how much of it. */
 const SPRAY: Partial<Record<SurfaceId, number>> = {
+  // A ford throws more onto the glass than anything else on a stage, and it is
+  // clear water: it goes on hard and the wipers take it straight off again.
+  water: 1.5,
   mud: 0.55,
   dirt: 0.22,
   gravel: 0.12,

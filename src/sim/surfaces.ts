@@ -3,7 +3,15 @@
  * fields drive drag, particle spray and audio in later phases.
  */
 
-export type SurfaceId = 'tarmac' | 'gravel' | 'dirt' | 'mud' | 'snow' | 'ice' | 'grass';
+export type SurfaceId =
+  | 'tarmac'
+  | 'gravel'
+  | 'dirt'
+  | 'mud'
+  | 'snow'
+  | 'ice'
+  | 'grass'
+  | 'water';
 
 export interface Surface {
   readonly id: SurfaceId;
@@ -32,6 +40,16 @@ export const SURFACES: Record<SurfaceId, Surface> = {
   snow: { id: 'snow', grip: 0.45, rollingResistance: 0.055, spray: 1.1, abrasion: 0.2, color: 0xd6dde4 },
   ice: { id: 'ice', grip: 0.35, rollingResistance: 0.012, spray: 0.1, abrasion: 0.1, color: 0xbcd4dd },
   grass: { id: 'grass', grip: 0.6, rollingResistance: 0.06, spray: 0.7, abrasion: 0.55, color: 0x4f6b3a },
+  /*
+   * A ford: a stream running across the road.
+   *
+   * The grip is poor but not hopeless — there is a stone bed under it — and the
+   * rolling resistance is enormous, which is the part that matters. Water does
+   * not spin a car so much as *stop* one, and hitting a ford flat out should
+   * throw a wall of spray, wash the speed off and leave the car pointing
+   * somewhere it did not choose. Crossable at pace by somebody who lifts.
+   */
+  water: { id: 'water', grip: 0.42, rollingResistance: 0.34, spray: 1.6, abrasion: 0.1, color: 0x3f6d80 },
 };
 
 export const surface = (id: SurfaceId): Surface => SURFACES[id];

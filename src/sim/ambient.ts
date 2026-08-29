@@ -23,6 +23,9 @@ const EXPOSURE: Record<string, number> = {
   winter: 0.6,
   quarry: 0.35,
   forest: 0.1,
+  // A street is sheltered; a pass over the top is the most exposed place here.
+  town: 0.15,
+  alpine: 0.95,
 };
 
 /** Weather that actually blows. Fog is still air, by definition. */

@@ -123,7 +123,7 @@ export function buildStageView(stage: Stage, markers: Markers): StageView {
  * things you can hit are the stage's hazards, and they are data.
  */
 interface Scatter {
-  kind: 'conifer' | 'broadleaf' | 'deadTree' | 'bush' | 'boulder' | 'tuft' | 'snowFir';
+  kind: 'conifer' | 'broadleaf' | 'deadTree' | 'bush' | 'boulder' | 'tuft' | 'snowFir' | 'building' | 'wall';
   /**
    * Which band it grows in.
    *
@@ -142,6 +142,14 @@ interface Scatter {
   color: number;
   /** Second colour, mixed in per instance so a wood is not one flat green. */
   colorB?: number;
+  /**
+   * Extra metres to hold the `far` band back from the corridor.
+   *
+   * Trees can crowd the road; a nine-metre building cannot. Without this the
+   * town's houses stood on the embankment and filled the frame, and the street
+   * they were meant to line was invisible underneath them.
+   */
+  push?: number;
 }
 
 const DRESSING: Record<string, Scatter[]> = {
@@ -185,6 +193,25 @@ const DRESSING: Record<string, Scatter[]> = {
     { kind: 'bush', band: 'verge', density: 34, size: [0.22, 0.5], color: 0x74566f, colorB: 0x84713a },
     { kind: 'tuft', band: 'verge', density: 30, size: [0.28, 0.55], color: 0x8a8149 },
   ],
+  // A town stage is walls, not vegetation. Buildings crowd the far band right
+  // up to the corridor so the road reads as a street with no run-off, and the
+  // verge carries low stone walls rather than anything soft to land in.
+  town: [
+    { kind: 'building', band: 'far', density: 10, size: [0.55, 1.1], color: 0xe8dcc2, colorB: 0xcdb89a, push: 26 },
+    { kind: 'wall', band: 'verge', density: 22, size: [0.9, 1.4], color: 0xc8bca8, colorB: 0xa89b89 },
+    { kind: 'tuft', band: 'verge', density: 8, size: [0.2, 0.45], color: 0x5f6b3c },
+    { kind: 'broadleaf', band: 'far', density: 4, size: [0.6, 1.0], color: 0x4a6b3a, push: 8 },
+  ],
+  // High alpine: firs at the bottom, rock and nothing at the top. The stage
+  // crosses three surfaces, so its dressing has to cover the whole range.
+  alpine: [
+    { kind: 'snowFir', band: 'far', density: 14, size: [0.8, 1.7], color: 0x2a4433, colorB: 0x1f3628 },
+    { kind: 'boulder', band: 'far', density: 12, size: [0.8, 2.6], color: 0x8f8a82, colorB: 0x746f68 },
+    { kind: 'boulder', band: 'near', density: 18, size: [0.35, 0.9], color: 0xa8a49c, colorB: 0x827d75 },
+    { kind: 'tuft', band: 'near', density: 14, size: [0.4, 0.9], color: 0x6d7a4c },
+    { kind: 'boulder', band: 'verge', density: 24, size: [0.18, 0.45], color: 0xb2ada4, colorB: 0x8d887f },
+    { kind: 'tuft', band: 'verge', density: 14, size: [0.25, 0.5], color: 0x74804f },
+  ],
   // Wind-bent pines and dune grass, thinning toward the water.
   coast: [
     { kind: 'conifer', band: 'far', density: 9, size: [0.6, 1.1], color: 0x3d5a3c, colorB: 0x4a6440 },
@@ -216,6 +243,19 @@ function scatterGeometry(kind: Scatter['kind']): THREE.BufferGeometry {
       return new THREE.DodecahedronGeometry(1.1, 0);
     case 'tuft':
       return new THREE.ConeGeometry(0.55, 1.1, 4);
+    // Buildings and walls are the only scenery that stands on the ground rather
+    // than being sunk into it, so their geometry is translated up by half its
+    // height: a box centred on the origin buries half a house.
+    case 'building': {
+      const box = new THREE.BoxGeometry(6, 9, 6);
+      box.translate(0, 4.5, 0);
+      return box;
+    }
+    case 'wall': {
+      const box = new THREE.BoxGeometry(3.4, 1.4, 0.6);
+      box.translate(0, 0.7, 0);
+      return box;
+    }
   }
 }
 
@@ -262,7 +302,11 @@ function buildScenery(stage: Stage): THREE.Group {
     );
     // Only the tall things cast: the shadow camera rides with the car and a
     // thousand shadow-casting tufts is a bill for something nobody can see.
-    mesh.castShadow = recipe.kind === 'conifer' || recipe.kind === 'snowFir' || recipe.kind === 'broadleaf';
+    mesh.castShadow =
+      recipe.kind === 'conifer' ||
+      recipe.kind === 'snowFir' ||
+      recipe.kind === 'broadleaf' ||
+      recipe.kind === 'building';
     mesh.receiveShadow = false;
 
     const a = new THREE.Color(recipe.color);
@@ -278,7 +322,7 @@ function buildScenery(stage: Stage): THREE.Group {
       const vergeTo = sample.width + CORRIDOR.vergeWidth - 0.4;
       const bankFrom = sample.width + CORRIDOR.vergeWidth + 0.6;
       const bankTo = sample.width + CORRIDOR.vergeWidth + CORRIDOR.bankWidth - 0.5;
-      const beyond = sample.width + CORRIDOR.vergeWidth + CORRIDOR.bankWidth + 2;
+      const beyond = sample.width + CORRIDOR.vergeWidth + CORRIDOR.bankWidth + 2 + (recipe.push ?? 0);
 
       for (let k = 0; k < perSample && n < count; k++) {
         if (perSample < 1 && random() > perSample) continue;
@@ -303,9 +347,19 @@ function buildScenery(stage: Stage): THREE.Group {
 
         const size = recipe.size[0] + random() * (recipe.size[1] - recipe.size[0]);
         // Sunk slightly so nothing hovers over ground that undulates under it.
-        position.y -= 0.6 * size;
+        // Buildings and walls stand on it instead: their geometry already has
+        // its base at the origin, and a sunk house loses its ground floor.
+        const standing = recipe.kind === 'building' || recipe.kind === 'wall';
+        position.y -= standing ? 0.15 : 0.6 * size;
         scale.set(size, size * (0.85 + random() * 0.4), size);
-        quaternion.setFromAxisAngle(up, random() * Math.PI * 2);
+        // A wall follows the road. Given a random yaw like everything else it
+        // read as scattered planks rather than as the edge of a street.
+        quaternion.setFromAxisAngle(
+          up,
+          recipe.kind === 'wall'
+            ? Math.atan2(sample.forward.x, sample.forward.z) + (random() - 0.5) * 0.12
+            : random() * Math.PI * 2,
+        );
         matrix.compose(position, quaternion, scale);
         mesh.setMatrixAt(n, matrix);
 
@@ -595,6 +649,8 @@ const TERRAIN_COLOUR: Record<string, [number, number]> = {
   winter: [0xc3cdd6, 0xa8b4c0],
   moor: [0x3f4a30, 0x333c26],
   coast: [0x415034, 0x33402a],
+  town: [0x8a8172, 0x6d665b],
+  alpine: [0x4a5340, 0x6e6a60],
 };
 
 /**
