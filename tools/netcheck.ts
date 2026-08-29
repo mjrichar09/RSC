@@ -30,7 +30,7 @@ function findChromium(): string | undefined {
   return undefined;
 }
 
-const WAIT = { timeout: 30_000 };
+const WAIT = { timeout: 60_000 };
 
 /** The game's own status JSON, which is cheaper to check than a screenshot. */
 async function status(page: Page): Promise<Record<string, unknown>> {
@@ -122,6 +122,15 @@ async function main(): Promise<void> {
     await host.click('[data-act="start"]');
     for (const page of [host, guest]) {
       await page.waitForFunction(() => (window.RSC!.status() as { cars: number }).cars === 2, WAIT);
+      // The start lights hold the car on the line, and the countdown runs on
+      // frame time — two pages sharing one software renderer take minutes of
+      // wall clock to get through four seconds of it. Waited on as state
+      // rather than as the green lamp on screen, which shows for a second and
+      // a half and is a coin toss to catch. Without this the host presses the
+      // throttle against the handbrake and the netcode gets the blame.
+      await page.waitForFunction(() => (window.RSC!.status() as { held: boolean }).held === false, {
+        timeout: 120_000,
+      });
     }
 
     // Drive the host's car and watch it move on the guest's screen. This is the

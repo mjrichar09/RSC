@@ -122,7 +122,22 @@ export class MultiplayerPanel {
     this.say('Making an invite — gathering network candidates…');
     try {
       this.invite = await createInvite();
-      this.say('Send the invite code, then paste their reply below.');
+      // What this end found to connect on. An invite with no reachable
+      // addresses will never connect, and saying so here is the difference
+      // between a diagnosis and a lobby that sits there.
+      this.say(`Send the invite code, then paste their reply below. (found ${this.invite.addresses})`);
+      this.invite.onPhase = (phase, detail) => {
+        if (phase === 'checking') this.say('Reply accepted — trying to reach them…');
+        else if (phase === 'failed') {
+          this.say(
+            `Could not connect: ${detail}. Getting through needs a relay to bounce the ` +
+              'traffic off, and the game has no server. If you have one, add ' +
+              '?turn=turn:host:3478|user|password to the address.',
+          );
+          this.invite = null;
+          this.render();
+        }
+      };
       void this.invite.connected
         .then(() => {
           if (this.invite) this.host!.accept(this.invite.link);
@@ -140,11 +155,19 @@ export class MultiplayerPanel {
 
   private async takeReply(reply: string): Promise<void> {
     if (!this.invite) return;
+    const invite = this.invite;
     try {
-      await this.invite.accept(reply.trim());
+      await invite.accept(reply.trim());
       this.say('Reply accepted — waiting for the connection to open…');
     } catch (error) {
-      this.say(`That reply was not readable: ${String(error)}`);
+      const message = error instanceof Error ? error.message : String(error);
+      this.say(`That reply did not work: ${message}`);
+      // A dead invite cannot be retried, and leaving it on screen invites the
+      // player to paste into it again and get the same error forever.
+      if (invite.spent) {
+        this.invite = null;
+        this.render();
+      }
     }
   }
 
@@ -173,11 +196,22 @@ export class MultiplayerPanel {
     this.busy = true;
     this.say('Reading the invite…');
     try {
-      const { reply, link, connected } = await acceptInvite(code.trim());
-      // The reply goes on screen first: the host needs it before the channel
-      // this guest is waiting for can exist.
+      const { reply, addresses, link, connected } = await acceptInvite(code.trim(), (phase, detail) => {
+        if (phase === 'checking') this.say('Reaching the host…');
+        else if (phase === 'failed') {
+          this.say(
+            `Could not connect: ${detail}. Getting through needs a relay to bounce the ` +
+              'traffic off, and the game has no server. If you have one, add ' +
+              '?turn=turn:host:3478|user|password to the address.',
+          );
+        }
+      });
+      // The reply goes on screen first, and `say` renders: the host needs it
+      // before the channel this guest is waiting for can exist, so anything
+      // that waits for the channel before painting the reply deadlocks the
+      // handshake with each side waiting for the other.
       this.reply = reply;
-      this.say('Send your reply code back to the host.');
+      this.say(`Send your reply code back to the host. (found ${addresses})`);
       this.guest = new RaceGuest(await link, {
         name: this.name,
         onLobby: (players) => {

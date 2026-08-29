@@ -130,6 +130,33 @@ Two browsers on one machine both render through software WebGL and only one of
 them is ever in front, so a page can run at two frames a second: `netcheck`
 turns off the vision pass, uses a small viewport, and enables CDP focus
 emulation. Without that the "host" barely moves and the netcode gets the blame.
+The same slowness is why `netcheck` waits for `.lights-word.go` rather than for
+a duration — the start countdown runs on frame time, so on a page managing one
+frame a second it takes minutes of wall clock, and the host presses the throttle
+against the handbrake.
+
+The invite codes are a compact encoding of the five things that matter in an
+SDP — ICE username, ICE password, DTLS fingerprint, setup role, candidates —
+and the rest of the SDP is rebuilt on the far side from a fixed template. That
+is 96 characters against 560 for the whole thing deflated. Two rules for it:
+
+- **`.local` mDNS candidates are kept only when there is nothing better.**
+  Chrome hides local IPs behind names that resolve on their own network only.
+  With a public address they are dead weight; without one they are the only way
+  two players on the same wifi connect at all.
+- **STUN cannot get through every NAT**, and there is no relay. `?turn=…` takes
+  one; a failure without one is reported as needing a relay rather than left as
+  a lobby doing nothing.
+
+Two lifetime bugs, both of which read as "multiplayer is broken":
+
+- **`connectionState === 'disconnected'` is transient.** Tearing the peer
+  connection down on it threw away races that were about to recover, and left
+  the lobby unable to set a remote description afterwards — which surfaces as
+  `InvalidStateError: signalingState is 'closed'` when the reply is finally
+  pasted, blaming the reply code for a connection that died earlier.
+- **The signalling channel is two people copying strings into a chat window.**
+  A one-minute timeout fires in the middle of that. It is five now.
 
 ## Tuning and calibration
 

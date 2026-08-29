@@ -12,6 +12,7 @@ import { Career, type RaceTarget } from './game/career.js';
 import { rollcageMitigation } from './game/garage.js';
 import { Race } from './game/race.js';
 import { ImpactDrama } from './game/drama.js';
+import { useRelay } from './net/webrtc.js';
 import { StartLights } from './game/startLights.js';
 import { awardsFor } from './game/awards.js';
 import { Celebrations } from './ui/celebrate.js';
@@ -157,6 +158,10 @@ const params = new URLSearchParams(location.search);
   // `?drama=0` runs the visual harness at real time, which every screenshot
   // wants: a frame captured mid-dilation is a frame of a different run.
   const dramaParam = params.get('drama');
+  // `?turn=turn:host:3478|user|password` points the handshake at a relay. STUN
+  // cannot get through a NAT that hands out a different port per destination,
+  // and the game has no server of its own to bounce off.
+  useRelay(params.get('turn'));
   const freeRoam = params.has('free') || params.has('trace');
 
   let world: SimWorld;
@@ -1083,6 +1088,11 @@ const params = new URLSearchParams(location.search);
       return {
         stage: stage?.def.id ?? 'free',
         phase: race?.phase ?? 'n/a',
+        // Whether the start lights still have the car. A test that waits for
+        // the green lamp on screen is waiting for something that shows for a
+        // second and a half; on a page rendering one frame a second that is a
+        // coin toss, and the car gets driven against the handbrake.
+        held: lights.holding,
         money: career.money,
         medal: race?.medal ?? null,
         time: race?.time.toFixed(2),

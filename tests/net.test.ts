@@ -23,6 +23,7 @@ import { RaceGuest } from '../src/net/guest.js';
 import { LoopbackWire } from '../src/net/loopback.js';
 import { MAX_PLAYERS, PROTOCOL_VERSION, type NetMessage } from '../src/net/protocol.js';
 import { MultiplayerSession } from '../src/game/multiplayer.js';
+import { codec } from '../src/net/webrtc.js';
 
 const DT = 1 / 120;
 
@@ -345,5 +346,97 @@ describe('prediction', () => {
     // car first — so this also checks the permutation is applied at the wire.
     const behind = disagreement(hostWorld, guestWorld, 0, 1) / Math.max(speed, 1);
     expect(behind).toBeLessThan(0.25);
+  });
+});
+
+describe('invite codes', () => {
+  // A real Chrome offer for a data-channel-only connection, with the mDNS host
+  // candidate Chrome actually emits and a server-reflexive one behind it.
+  const OFFER = [
+    'v=0',
+    'o=- 2515236907401582204 2 IN IP4 127.0.0.1',
+    's=-',
+    't=0 0',
+    'a=group:BUNDLE 0',
+    'a=extmap-allow-mixed',
+    'a=msid-semantic: WMS',
+    'm=application 60896 UDP/DTLS/SCTP webrtc-datachannel',
+    'c=IN IP4 203.0.113.7',
+    'a=candidate:1 1 udp 2113937151 6f1a2b3c-0000-4000-8000-000000000000.local 60896 typ host generation 0',
+    'a=candidate:2 1 udp 1677729535 203.0.113.7 51820 typ srflx raddr 0.0.0.0 rport 0 generation 0',
+    'a=candidate:3 1 tcp 1518280447 203.0.113.7 9 typ host tcptype active',
+    'a=ice-ufrag:b9d6',
+    'a=ice-pwd:4YVFwSg4x1swi1rAMzVgeUEZ',
+    'a=ice-options:trickle',
+    `a=fingerprint:sha-256 ${Array.from({ length: 32 }, (_, i) => i.toString(16).padStart(2, '0').toUpperCase()).join(':')}`,
+    'a=setup:actpass',
+    'a=mid:0',
+    'a=sctp-port:5000',
+    'a=max-message-size:262144',
+    '',
+  ].join('\r\n');
+
+  it('carries everything the far side needs to connect', async () => {
+    const code = await codec.encode({ type: 'offer', sdp: OFFER });
+    const back = await codec.decode(code);
+
+    expect(back.type).toBe('offer');
+    expect(back.sdp).toContain('a=ice-ufrag:b9d6');
+    expect(back.sdp).toContain('a=ice-pwd:4YVFwSg4x1swi1rAMzVgeUEZ');
+    expect(back.sdp).toContain('a=fingerprint:sha-256 00:01:02:03');
+    expect(back.sdp).toContain('a=setup:actpass');
+    expect(back.sdp).toContain('UDP/DTLS/SCTP webrtc-datachannel');
+    expect(back.sdp).toContain('a=end-of-candidates');
+  });
+
+  it('is short enough to read out loud', async () => {
+    const code = await codec.encode({ type: 'offer', sdp: OFFER });
+    // The whole SDP, deflated and base64'd, came to about 560 characters.
+    expect(code.length).toBeLessThan(160);
+  });
+
+  it('keeps the candidate that can actually connect and drops the ones that cannot', async () => {
+    const back = await codec.decode(await codec.encode({ type: 'offer', sdp: OFFER }));
+    // The public address survives.
+    expect(back.sdp).toContain('203.0.113.7 51820 typ srflx');
+    // Chrome's mDNS host name only resolves on its own network, and the TCP
+    // candidate is not something this transport uses. Both are pure weight.
+    expect(back.sdp).not.toContain('.local');
+    expect(back.sdp).not.toContain('tcp');
+  });
+
+  it('keeps the answer an answer, with its DTLS role', async () => {
+    const answer = OFFER.replace('a=setup:actpass', 'a=setup:active');
+    const back = await codec.decode(await codec.encode({ type: 'answer', sdp: answer }));
+    expect(back.type).toBe('answer');
+    expect(back.sdp).toContain('a=setup:active');
+  });
+
+  it('still reads a code from the old long format', async () => {
+    // Built the way the previous build built them: the whole description as
+    // JSON, base64'd with a 'P' marker. Somebody will paste one of these.
+    const json = JSON.stringify({ t: 'offer', s: OFFER });
+    const old = `P${btoa(json).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`;
+    const back = await codec.decode(old);
+    expect(back.sdp).toBe(OFFER);
+  });
+
+  it('keeps the mDNS name when there is nothing else to go on', async () => {
+    // Two players on the same wifi with STUN blocked have only these, and they
+    // do resolve — on that network. Dropping them outright broke LAN play.
+    const lanOnly = OFFER.split('\r\n')
+      .filter((line) => !line.includes('typ srflx'))
+      .join('\r\n');
+    const back = await codec.decode(await codec.encode({ type: 'offer', sdp: lanOnly }));
+    expect(back.sdp).toContain('.local 60896 typ host');
+  });
+
+  it('survives an IPv6 address', async () => {
+    const v6 = OFFER.replace(
+      'a=candidate:2 1 udp 1677729535 203.0.113.7 51820 typ srflx raddr 0.0.0.0 rport 0 generation 0',
+      'a=candidate:2 1 udp 1677729535 2001:db8::1 51820 typ srflx generation 0',
+    );
+    const back = await codec.decode(await codec.encode({ type: 'offer', sdp: v6 }));
+    expect(back.sdp).toContain('2001:db8:0:0:0:0:0:1 51820 typ srflx');
   });
 });

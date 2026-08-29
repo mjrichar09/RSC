@@ -620,6 +620,27 @@ however they already talk, and pastes back the reply. Two data channels — one
 ordered and reliable for the lobby, one unordered with no retransmits for inputs
 and snapshots, because a late input is worse than a lost one.
 
+**The codes are 96 characters.** A browser's SDP is about 600 characters of
+boilerplate around five things that matter — ICE username, ICE password, DTLS
+fingerprint, setup role, and the candidate addresses — so only those are sent
+and the rest is rebuilt from a fixed template on the far side. Short enough to
+read out over a voice call. Chrome's `.local` mDNS candidates are carried only
+when there is no public address to use instead: they resolve on their own
+network only, so they are weight when there is something better and the only
+way two players on one wifi connect when there is not.
+
+**When it will not connect.** STUN tells each side what its public address
+looks like from outside, which gets through most home routers. It cannot help
+when either end is behind a NAT that hands out a different public port per
+destination — there is no single address to advertise, and the only way through
+is a relay carrying every byte. The game has no server, so it ships without
+one, and says so plainly instead of leaving the lobby sitting there. Anyone
+with a TURN server can point the game at it:
+
+```
+https://…/RSC/?turn=turn:your.host:3478|user|password
+```
+
 ```bash
 npm run netcheck   # two real browsers, one race, over a real data channel
 ```
