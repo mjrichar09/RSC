@@ -94,6 +94,26 @@ function numberTexture(value: number, ink: number, ground: number): THREE.Canvas
   return texture;
 }
 
+/**
+ * Steel showing through the paint along a fold.
+ *
+ * Paint does not bend; it cracks off the ridge of a crease and leaves primer
+ * and bare metal behind. A panel that only darkens reads as dirty, and a panel
+ * with bright metal along its ridges reads as bent.
+ */
+const BARE_METAL = new THREE.Color(0x9aa0a6);
+
+/**
+ * Spacing of the fold planes, metres.
+ *
+ * Crumpled sheet does not curve, it kinks: it buckles onto a few flat facets
+ * that meet at hard lines. Snapping displaced vertices onto planes this far
+ * apart is what produces those lines, and it is the single thing that most
+ * separates folded metal from a dented balloon. Roughly a hand's width, which
+ * is about the size of a real buckle in a door skin.
+ */
+const CREASE = 0.13;
+
 /** A crazed windscreen: milky, not shattered — this car still has to be driven. */
 const WINDSCREEN_CRAZED = new THREE.Color(0xd8dee3);
 
@@ -128,8 +148,26 @@ export class CarView {
    * fold itself flat in about ten seconds.
    */
   private readonly restGeometry = new Map<THREE.Mesh, Float32Array>();
-  /** Dent set the current geometry was built from. */
-  private dentVersion = -1;
+  /** Signature of the damage the current geometry was built from. */
+  private shapeKey = -1;
+  /** Bumped by a repaint, so the vertex colours are rebuilt with the new paint. */
+  private paintEpoch = 0;
+  /**
+   * How each deformable mesh folds: which of its own axes collapses, which way
+   * is outward along it, how far the mesh reaches that way, and which
+   * components' health drives the fold.
+   */
+  /**
+   * The livery colour a deformable mesh wears.
+   *
+   * Its material is held at white so the vertex colours can carry the paint,
+   * so the material is no longer where the paint can be read from.
+   */
+  private readonly paintOf = new Map<THREE.Mesh, THREE.Color>();
+  private readonly folds = new Map<
+    THREE.Mesh,
+    { axis: 0 | 1 | 2; sign: number; half: [number, number, number]; components: ComponentId[] }
+  >();
   /** Undamaged pose of each deformable part, to deform away from. */
   private readonly restPose = new Map<THREE.Mesh, { position: THREE.Vector3; scale: THREE.Vector3; color: THREE.Color }>();
   private nose!: THREE.Mesh;
@@ -160,7 +198,7 @@ export class CarView {
     // corners cannot be dented: crumple is vertices moving, and a face with no
     // vertices in the middle of it can only ever be scaled.
     const body = new THREE.Mesh(
-      new THREE.BoxGeometry(h.x * 2, h.y * 1.3, h.z * 2, 5, 3, 7),
+      new THREE.BoxGeometry(h.x * 2, h.y * 1.3, h.z * 2, 8, 5, 11),
       flat(bodyColor, 0.6, isGhost),
     );
     body.position.y = -0.05;
@@ -170,7 +208,7 @@ export class CarView {
     // Cabin, set back and narrowed — this is what makes the direction of travel
     // readable at a glance from a fixed isometric angle.
     const cabin = new THREE.Mesh(
-      new THREE.BoxGeometry(h.x * 1.62, h.y * 1.0, h.z * 0.92, 4, 3, 4),
+      new THREE.BoxGeometry(h.x * 1.62, h.y * 1.0, h.z * 0.92, 6, 5, 6),
       flat(trimColor, 0.4, isGhost),
     );
     cabin.position.set(0, h.y * 1.05, -0.16);
@@ -181,7 +219,7 @@ export class CarView {
     // front" cue, which matters enormously when the car is sideways under a
     // fixed camera and you have to read its heading instantly.
     const nose = new THREE.Mesh(
-      new THREE.BoxGeometry(h.x * 1.5, h.y * 0.42, h.z * 0.34, 5, 2, 2),
+      new THREE.BoxGeometry(h.x * 1.5, h.y * 0.42, h.z * 0.34, 7, 4, 4),
       flat(accentColor, 0.5, isGhost),
     );
     nose.position.set(0, h.y * 0.42, h.z * 0.86);
@@ -191,7 +229,7 @@ export class CarView {
     // Rear wing, in the dark cabin colour rather than the nose accent — two
     // bright ends would make the car's heading ambiguous at a glance.
     const wing = new THREE.Mesh(
-      new THREE.BoxGeometry(h.x * 1.95, h.y * 0.16, h.z * 0.2),
+      new THREE.BoxGeometry(h.x * 1.95, h.y * 0.16, h.z * 0.2, 7, 3, 3),
       flat(trimColor, 0.5, isGhost),
     );
     wing.position.set(0, h.y * 1.55, -h.z * 0.92);
@@ -209,8 +247,11 @@ export class CarView {
     const trimMat = () => flat(trimColor, 0.55, isGhost);
 
     const box = (x: number, y: number, z: number) =>
-      // Enough segments to fold, few enough that twelve panels cost nothing.
-      new THREE.BoxGeometry(x, y, z, 3, 2, 3);
+      // A 3x2x3 box has about four vertices under a dent, which cannot show a
+      // fold at all — the crease had nowhere to land and every impact came out
+      // as a smooth bowl. Six segments an axis is a few hundred extra vertices
+      // across the whole car, reshaped a handful of times in a race.
+      new THREE.BoxGeometry(x, y, z, 6, 4, 6);
     /** id, geometry, position, material, and the component that deforms it. */
     const panels: [PartId, THREE.BoxGeometry, [number, number, number], THREE.Material, ComponentId][] = [
       ['bonnet', box(h.x * 1.5, h.y * 0.12, h.z * 0.6), [0, h.y * 0.62, h.z * 0.42], panelMat(), 'bonnet'],
@@ -252,11 +293,11 @@ export class CarView {
       this.parts.set(id, mesh);
       this.partRest.set(id, mesh.position.clone());
       this.partComponent.set(id, component);
-      if (!isGhost) this.keepRestGeometry(mesh);
+      if (!isGhost) this.keepRestGeometry(mesh, [component]);
       this.restPose.set(mesh, {
         position: mesh.position.clone(),
         scale: mesh.scale.clone(),
-        color: (mesh.material as THREE.MeshStandardMaterial).color.clone(),
+        color: this.paintOf.get(mesh)?.clone() ?? (mesh.material as THREE.MeshStandardMaterial).color.clone(),
       });
     }
 
@@ -314,26 +355,36 @@ export class CarView {
 
     parent.add(this.group);
 
-    if (!isGhost) {
-      this.buildHeadlights(h);
-      this.buildDecals(h);
-      this.setLivery(livery, options.number ?? 0);
-    }
-
     this.body = body;
     this.cabin = cabin;
     this.nose = nose;
     this.bodyMeshes.push(body);
     this.trimMeshes.push(cabin, wing);
     this.accentMesh = nose;
-    for (const mesh of [body, cabin, nose, wing]) {
-      if (!isGhost) this.keepRestGeometry(mesh);
+    // Registered before the paint pass, not after it: `keepRestGeometry` moves
+    // a mesh's paint into its vertex colours, and `setLivery` has to already
+    // know which meshes carry their colour that way.
+    const hull: [THREE.Mesh, ComponentId[]][] = [
+      [body, ['panelLeft', 'panelRight', 'panelFloor']],
+      [cabin, ['panelRoof']],
+      [nose, ['panelFront']],
+      [wing, ['panelRear']],
+    ];
+    for (const [mesh, components] of hull) {
+      if (!isGhost) this.keepRestGeometry(mesh, components);
       this.restPose.set(mesh, {
         position: mesh.position.clone(),
         scale: mesh.scale.clone(),
-        color: (mesh.material as THREE.MeshStandardMaterial).color.clone(),
+        color: this.paintOf.get(mesh)?.clone() ?? (mesh.material as THREE.MeshStandardMaterial).color.clone(),
       });
     }
+
+    if (!isGhost) {
+      this.buildHeadlights(h);
+      this.buildDecals(h);
+      this.setLivery(livery, options.number ?? 0);
+    }
+
   }
 
   /**
@@ -387,12 +438,23 @@ export class CarView {
 
     const paint = (meshes: THREE.Mesh[], color: number) => {
       for (const mesh of meshes) {
-        const material = mesh.material as THREE.MeshStandardMaterial;
-        material.color.setHex(color);
         const rest = this.restPose.get(mesh);
         if (rest) rest.color.setHex(color);
+        // A deformable panel keeps its paint in its vertices and its material
+        // at white; painting the material as well would multiply the two.
+        const base = this.paintOf.get(mesh);
+        if (base) {
+          base.setHex(color);
+          this.fillColour(mesh, base);
+        } else {
+          (mesh.material as THREE.MeshStandardMaterial).color.setHex(color);
+        }
       }
     };
+    // Force the next reshape to re-lay the vertex colours, or a repaint made
+    // over a damaged car would leave the creases wearing the old livery.
+    this.paintEpoch++;
+    this.shapeKey = -1;
     paint(this.bodyMeshes, livery.body);
     paint(this.trimMeshes, livery.trim);
     if (this.accentMesh) paint([this.accentMesh], livery.accent);
@@ -414,11 +476,56 @@ export class CarView {
    * one BufferGeometry would crumple as one — a dent in the left door would
    * appear in the right one too.
    */
-  private keepRestGeometry(mesh: THREE.Mesh): void {
+  private keepRestGeometry(mesh: THREE.Mesh, components: ComponentId[] = []): void {
     if (this.restGeometry.has(mesh)) return;
     mesh.geometry = mesh.geometry.clone();
     const position = mesh.geometry.getAttribute('position') as THREE.BufferAttribute;
-    this.restGeometry.set(mesh, Float32Array.from(position.array as Float32Array));
+    const rest = Float32Array.from(position.array as Float32Array);
+    this.restGeometry.set(mesh, rest);
+
+    // Paint moves into the vertices. A crease has to be able to show bare metal
+    // along its ridge while the flat beside it keeps the livery, and one colour
+    // on the material can only ever say one of those two things.
+    const material = mesh.material as THREE.MeshStandardMaterial;
+    const base = material.color.clone();
+    this.paintOf.set(mesh, base);
+    material.vertexColors = true;
+    material.color.setHex(0xffffff);
+    mesh.geometry.setAttribute(
+      'color',
+      new THREE.BufferAttribute(new Float32Array((rest.length / 3) * 3), 3),
+    );
+    this.fillColour(mesh, base);
+
+    // Which of the mesh's own axes collapses, and which way along it is
+    // outward. Taken from where the part sits on the car: a door faces
+    // sideways and folds across the car, a bonnet faces forward and
+    // concertinas along it. The hull sits at the middle and has no facing, so
+    // it pinches across its flanks.
+    let half: [number, number, number] = [0.001, 0.001, 0.001];
+    for (let i = 0; i < rest.length; i += 3) {
+      half[0] = Math.max(half[0], Math.abs(rest[i]!));
+      half[1] = Math.max(half[1], Math.abs(rest[i + 1]!));
+      half[2] = Math.max(half[2], Math.abs(rest[i + 2]!));
+    }
+    const away = [mesh.position.x, mesh.position.y, mesh.position.z];
+    let axis: 0 | 1 | 2 = 0;
+    for (const a of [1, 2] as const) if (Math.abs(away[a]!) > Math.abs(away[axis]!)) axis = a;
+    const sign = Math.abs(away[axis]!) < 0.05 ? 1 : Math.sign(away[axis]!);
+    this.folds.set(mesh, { axis, sign, half, components });
+  }
+
+  /** Lay one flat colour into a mesh's vertex colours. */
+  private fillColour(mesh: THREE.Mesh, color: THREE.Color): void {
+    const attribute = mesh.geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
+    if (!attribute) return;
+    const array = attribute.array as Float32Array;
+    for (let i = 0; i < array.length; i += 3) {
+      array[i] = color.r;
+      array[i + 1] = color.g;
+      array[i + 2] = color.b;
+    }
+    attribute.needsUpdate = true;
   }
 
   /**
@@ -471,108 +578,175 @@ export class CarView {
    * Purely presentational — nothing here feeds back into the simulation.
    */
   /**
-   * Fold the metal in where the car was actually hit.
+   * Fold the metal.
    *
-   * The damage model records dents — a point in the car's own frame and a
-   * depth — and this pushes every vertex within reach of one toward it, with a
-   * hashed wobble so the fold is uneven. That unevenness is the whole effect:
-   * a panel displaced smoothly reads as a dented balloon, and the same panel
-   * displaced by a couple of centimetres of noise reads as sheet metal that has
-   * been folded and cannot be unfolded.
+   * One pass, from the rest vertices, doing three things that used to be done
+   * in two places and fought each other:
    *
-   * Rebuilt only when the dents change. They change a handful of times in a
-   * race and never between them, and reshaping fifteen meshes is not something
-   * to do sixty times a second for no reason.
+   * 1. **Buckle**, from component health. The panel collapses along the axis it
+   *    faces and *fattens across the other two* — the metal has to go
+   *    somewhere. The old version scaled the whole mesh down instead, which is
+   *    why a wrecked car read as a small tidy car rather than a wrecked one:
+   *    at full damage the silhouette shrank by half and the dents went with it.
+   * 2. **Dents**, from where the car was actually hit. Same as before, except
+   *    the core pushes in and a ring around it pushes *out*, so a dent displaces
+   *    metal rather than deleting it.
+   * 3. **Creases**. Displacement is snapped onto planes `CREASE` apart, so the
+   *    fold lands on flat facets meeting at hard lines. Sheet metal kinks; it
+   *    does not curve. With `flatShading` the normals follow for free, and this
+   *    is the single change that most makes the result read as bent metal.
+   *
+   * Bare steel is written into the vertex colours wherever the surface moved,
+   * because paint cracks off a ridge — a panel that only darkens reads as
+   * dirty rather than damaged.
+   *
+   * Rebuilt only when the damage or the paint changes. Both change a handful of
+   * times in a race and never between them, and reshaping the whole car is not
+   * something to do sixty times a second for no reason.
    */
-  private applyCrumple(damage: DamageModel): void {
-    if (damage.dentVersion === this.dentVersion) return;
-    this.dentVersion = damage.dentVersion;
+  private reshape(damage: DamageModel): void {
+    // Health is quantised into 24ths: a fold that rebuilt on every hundredth of
+    // a percent of wear would rebuild every frame the car was touching anything.
+    let key = damage.dentVersion * 131 + this.paintEpoch * 7;
+    for (const [, fold] of this.folds) {
+      for (const c of fold.components) key = (key * 31 + Math.round(damage.get(c) * 24)) | 0;
+    }
+    if (key === this.shapeKey) return;
+    this.shapeKey = key;
 
     for (const [mesh, rest] of this.restGeometry) {
       const attribute = mesh.geometry.getAttribute('position') as THREE.BufferAttribute;
       const array = attribute.array as Float32Array;
-      array.set(rest);
+      const colors = (mesh.geometry.getAttribute('color') as THREE.BufferAttribute | undefined)
+        ?.array as Float32Array | undefined;
+      const fold = this.folds.get(mesh)!;
+      const paint = this.paintOf.get(mesh) ?? new THREE.Color(0xffffff);
 
-      if (damage.dents.length > 0) {
-        for (let i = 0; i < array.length; i += 3) {
-          // The vertex in the car's frame, which is the frame the dents are in.
-          const x = rest[i]! + mesh.position.x;
-          const y = rest[i + 1]! + mesh.position.y;
-          const z = rest[i + 2]! + mesh.position.z;
+      // Worst of the components this panel answers to: a hull with a folded
+      // left flank is folded, whatever the right one is doing.
+      let health = 1;
+      for (const c of fold.components) health = Math.min(health, damage.get(c));
+      const wear = 1 - health;
 
-          let dx = 0;
-          let dy = 0;
-          let dz = 0;
-          for (const dent of damage.dents) {
-            const ox = dent.at.x - x;
-            const oy = dent.at.y - y;
-            const oz = dent.at.z - z;
-            const distance = Math.hypot(ox, oy, oz);
-            if (distance > dent.reach) continue;
+      const { axis, sign, half } = fold;
+      const across: [number, number] = axis === 0 ? [1, 2] : axis === 1 ? [0, 2] : [0, 1];
 
-            // Squared falloff: sharp at the point of contact, gone by the edge.
-            const fall = (1 - distance / dent.reach) ** 2;
-            const push = fall * dent.depth * 0.85;
-            const scale = distance > 1e-4 ? push / distance : 0;
-            dx += ox * scale;
-            dy += oy * scale;
-            dz += oz * scale;
+      for (let i = 0; i < array.length; i += 3) {
+        const local = [rest[i]!, rest[i + 1]!, rest[i + 2]!];
+        const move = [0, 0, 0];
 
-            // Torn rather than pressed: a few centimetres of deterministic
-            // noise, keyed off the vertex position so the same car crumples
-            // the same way on every machine showing it.
-            const wobble = fall * dent.depth * 0.09;
-            dx += (hash3(x, y, z) - 0.5) * wobble;
-            dy += (hash3(y, z, x) - 0.5) * wobble;
-            dz += (hash3(z, x, y) - 0.5) * wobble;
+        // --- 1. buckle, and the swell that pays for it ---------------------
+        if (wear > 0.01) {
+          // 1 at the face that took the hit, 0 at the far side.
+          const t = Math.min(Math.max((sign * local[axis]! / half[axis]! + 1) * 0.5, 0), 1);
+          const squeeze = wear * 0.34 * t ** 1.6;
+          move[axis]! -= sign * squeeze * half[axis]!;
+          // Displaced metal goes sideways. Proportional to how far the vertex
+          // already is from the mesh's own axis, so the panel splays rather
+          // than inflating uniformly. Kept well under the squeeze: at parity
+          // the panels splay into plates wider than the car they are on.
+          for (const b of across) move[b]! += local[b]! * squeeze * 0.32;
+        }
+
+        // --- 2. dents ------------------------------------------------------
+        // The vertex in the car's frame, which is the frame the dents are in.
+        const x = local[0]! + mesh.position.x;
+        const y = local[1]! + mesh.position.y;
+        const z = local[2]! + mesh.position.z;
+
+        for (const dent of damage.dents) {
+          const ox = dent.at.x - x;
+          const oy = dent.at.y - y;
+          const oz = dent.at.z - z;
+          const distance = Math.hypot(ox, oy, oz);
+          if (distance > dent.reach) continue;
+
+          // Sharp at the point of contact, crossing zero at a third of the
+          // reach and pushing outward beyond it: the fold has a lip, the way a
+          // real one does, and the panel keeps roughly the volume it had.
+          const t = distance / dent.reach;
+          const shape = (1 - t) ** 2 * (1 - 3 * t);
+          const push = (shape > 0 ? shape : shape * 2.4) * dent.depth * 0.9;
+          const scale = distance > 1e-4 ? push / distance : 0;
+          move[0]! += ox * scale;
+          move[1]! += oy * scale;
+          move[2]! += oz * scale;
+
+          // Torn rather than pressed: a few centimetres of deterministic
+          // noise, keyed off the vertex position so the same car crumples the
+          // same way on every machine showing it.
+          const wobble = Math.abs(shape) * dent.depth * 0.1;
+          move[0]! += (hash3(x, y, z) - 0.5) * wobble;
+          move[1]! += (hash3(y, z, x) - 0.5) * wobble;
+          move[2]! += (hash3(z, x, y) - 0.5) * wobble;
+        }
+
+        // --- 3. creases ----------------------------------------------------
+        // Pull the displaced surface onto discrete planes. Weighted by how far
+        // this vertex actually moved, so undamaged metal stays exactly where it
+        // was and only the folded part facets.
+        const moved = Math.hypot(move[0]!, move[1]!, move[2]!);
+        let crease = 0;
+        if (moved > 0.004) {
+          const bite = Math.min(moved * 5, 0.85);
+          for (let a = 0; a < 3; a++) {
+            const at = local[a]! + move[a]!;
+            const snap = (Math.round(at / CREASE) * CREASE - at) * bite;
+            move[a]! += snap;
+            crease += Math.abs(snap);
           }
+        }
 
-          array[i] = rest[i]! + dx;
-          array[i + 1] = rest[i + 1]! + dy;
-          array[i + 2] = rest[i + 2]! + dz;
+        array[i] = local[0]! + move[0]!;
+        array[i + 1] = local[1]! + move[1]!;
+        array[i + 2] = local[2]! + move[2]!;
+
+        // --- bare metal along the folds ------------------------------------
+        if (colors) {
+          // Keyed to the crease correction rather than to total displacement.
+          // Paint cracks off a ridge, not off a panel that has been pushed
+          // bodily inward — driven off the whole move, a folded car went
+          // uniformly grey and lost its livery entirely. Capped short of bare,
+          // because even a wreck has paint left between its creases.
+          const exposed = Math.min(crease / 0.075, 1) ** 1.2 * 0.62;
+          const dull = 1 - wear * 0.3;
+          colors[i] = (paint.r * (1 - exposed) + BARE_METAL.r * exposed) * dull;
+          colors[i + 1] = (paint.g * (1 - exposed) + BARE_METAL.g * exposed) * dull;
+          colors[i + 2] = (paint.b * (1 - exposed) + BARE_METAL.b * exposed) * dull;
         }
       }
 
       attribute.needsUpdate = true;
+      const colorAttribute = mesh.geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
+      if (colorAttribute) colorAttribute.needsUpdate = true;
       mesh.geometry.computeVertexNormals();
     }
   }
 
   private applyDamage(damage: DamageModel): void {
-    const crush = (
-      mesh: THREE.Mesh,
-      health: number,
-      axis: 'x' | 'y' | 'z',
-      shift: number,
-      /** How dark this part may get. The nose keeps its brightness because it
-       *  is the cue for which end is the front, and losing that on a damaged
-       *  car costs more than the realism gains. */
-      darkestAllowed = 0.45,
-    ) => {
+    /**
+     * Where a damaged panel *sits*. What it looks like is `reshape`'s job.
+     *
+     * This used to scale the mesh down along its axis, which is why a badly
+     * wrecked car read as a neat small car: at full damage every panel was half
+     * its size and the silhouette shrank instead of getting uglier. Metal that
+     * folds does not go away, so nothing here touches scale any more — a
+     * damaged panel is only shoved into the car and left rough.
+     */
+    const shove = (mesh: THREE.Mesh, health: number, axis: 'x' | 'y' | 'z', shift: number) => {
       const rest = this.restPose.get(mesh);
       if (!rest) return;
       const hurt = 1 - health;
 
       mesh.scale.copy(rest.scale);
-      mesh.scale[axis] = rest.scale[axis] * (1 - hurt * 0.52);
       mesh.position.copy(rest.position);
-      // Crumple inward, toward the middle of the car.
       mesh.position[axis] = rest.position[axis] - shift * hurt;
-
-      // Damaged bodywork goes dull and dark rather than staying showroom.
-      const material = mesh.material as THREE.MeshStandardMaterial;
-      material.color.copy(rest.color).multiplyScalar(1 - hurt * (1 - darkestAllowed));
-      material.roughness = 0.6 + hurt * 0.35;
+      (mesh.material as THREE.MeshStandardMaterial).roughness = 0.6 + hurt * 0.35;
     };
 
-    crush(this.nose, damage.get('panelFront'), 'z', 0.55, 0.8);
-    crush(this.cabin, damage.get('panelRoof'), 'y', 0.22);
-    crush(
-      this.body,
-      Math.min(damage.get('panelLeft'), damage.get('panelRight')),
-      'x',
-      0,
-    );
+    shove(this.nose, damage.get('panelFront'), 'z', 0.3);
+    shove(this.cabin, damage.get('panelRoof'), 'y', 0.16);
+    shove(this.body, Math.min(damage.get('panelLeft'), damage.get('panelRight')), 'x', 0);
 
     // Every bolt-on panel folds along the axis it faces, toward the middle of
     // the car, and takes a twist with it. The twist is what turns a uniform
@@ -587,11 +761,13 @@ export class CarView {
 
       // Panels on the flanks fold inward across the car; ends fold along it.
       const lateral = Math.abs(rest.x) > 0.5;
-      crush(mesh, health, lateral ? 'x' : 'z', lateral ? Math.sign(rest.x) * 0.16 : Math.sign(rest.z) * 0.3);
+      shove(mesh, health, lateral ? 'x' : 'z', lateral ? Math.sign(rest.x) * 0.1 : Math.sign(rest.z) * 0.18);
       if (hurt > 0.02) {
         // Signed from the panel's own position so the two sides fold opposite
-        // ways rather than all leaning together.
-        const twist = hurt * 0.68;
+        // ways rather than all leaning together. Halved when the panels stopped
+        // shrinking: 39 degrees on a full-size door swings it clear of the car
+        // and reads as a plate lying on the roof rather than as a folded skin.
+        const twist = hurt * 0.34;
         mesh.rotation.set(
           lateral ? 0 : twist * Math.sign(rest.z || 1),
           twist * 0.6 * Math.sign(rest.x || 1),
@@ -709,7 +885,7 @@ export class CarView {
     if (this.ghost) return;
     if (damage) {
       this.applyDamage(damage);
-      this.applyCrumple(damage);
+      this.reshape(damage);
     }
     if (debris) this.applyDebris(debris);
     const { position, rotation } = transform;
