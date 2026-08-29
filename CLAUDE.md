@@ -39,6 +39,11 @@ question is genuinely "does this look right", not before.
 `telemetry`, `sweep` and `stages` all take `--set=key=value,...` to try tuning
 values without editing and reverting a file.
 
+The crash cinematic (time dilation and a ducked mix) is off with `?drama=0`,
+with the `K` key, or by setting `settings.drama` to 0 — at 0 it is genuinely
+inert, not merely quiet. The harness steps the world directly and never sees
+it; `uicheck` passes `drama=0` anyway.
+
 ## Things that have already gone wrong here
 
 Each of these cost real time and is easy to repeat:
@@ -88,6 +93,19 @@ Each of these cost real time and is easy to repeat:
   1 m/s, so every wheel reads locked at walking pace whatever it was doing at
   speed. Sample mid-stop; a slip ratio taken at the end told me the car was
   locking when it was not, and I nearly retuned the tyre model on it.
+- **Effects written only inside the frame loop.** `shoot` and the `?stage=&t=`
+  harness step the world directly and never call `frame()`, so anything that
+  only lives there produces nothing in any screenshot and looks broken when it
+  is merely unreachable. Put per-frame effects in a function both call. The
+  same block also has to pose the car (`carView.update`) before reading a
+  dragging part's world position, or sparks come off where the bumper sat
+  before it started hanging.
+- **Scaling a mesh down to say "damaged".** A panel at half size reads as a
+  smaller panel; a wrecked car built that way is a small tidy car. Damage is
+  vertices moving, and the metal has to go somewhere — collapse along one axis,
+  fatten across the others, and snap the displacement onto planes so the fold
+  facets. `shoot --cells=garage:5000,garage:12000,garage:22000,garage:45000` is
+  the ladder to judge it against.
 - **three.js needing an explicit call after you change a shadow camera's
   frustum** (`light.shadow.camera.updateProjectionMatrix()`), and needing the
   key light on the opposite azimuth from the camera or the car sits on its own
