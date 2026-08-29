@@ -40,6 +40,9 @@ export class RaceHud {
   private readonly notes: HTMLElement;
   /** The order of the field in a network race. Empty when racing alone. */
   private readonly standings: HTMLElement;
+  /** The start countdown, over the middle of the screen. */
+  private readonly lights: HTMLElement;
+  private lightsKey = '';
   private standingsKey = '';
   /** What the notes currently say, so the DOM is only touched when it changes. */
   private notesKey = '';
@@ -64,11 +67,13 @@ export class RaceHud {
         <div class="race-progress"><div id="race-progress-fill"></div></div>
         <div class="race-cps" id="race-cps"></div>
       </div>
+      <div class="race-lights" id="race-lights"></div>
       <div class="race-standings" id="race-standings"></div>
       <div class="race-notes" id="race-notes"></div>
       <div class="race-panel" id="race-panel"></div>`;
     parent.appendChild(this.root);
 
+    this.lights = this.root.querySelector('#race-lights')!;
     this.standings = this.root.querySelector('#race-standings')!;
     this.clock = this.root.querySelector('#race-clock')!;
     this.stageName = this.root.querySelector('#race-stage')!;
@@ -113,6 +118,30 @@ export class RaceHud {
         }<span>${gap}</span></div>`;
       })
       .join('');
+  }
+
+  /**
+   * The start lights, on the HUD as well as on the gantry.
+   *
+   * The gantry is where they belong and the HUD is where they can be seen: the
+   * camera can be anywhere on the apron when a race begins, and a countdown you
+   * might be looking away from is not a countdown.
+   */
+  setLights(reds: number, go: boolean): void {
+    const key = `${reds}:${go}`;
+    if (key === this.lightsKey) return;
+    this.lightsKey = key;
+
+    if (reds === 0 && !go) {
+      this.lights.innerHTML = '';
+      return;
+    }
+    const lamps = [0, 1, 2]
+      .map((i) => `<i class="${go ? 'go' : i < reds ? 'lit' : ''}"></i>`)
+      .join('');
+    this.lights.innerHTML = `
+      <div class="lights-row">${lamps}</div>
+      <div class="lights-word ${go ? 'go' : ''}">${go ? 'GO' : 'READY'}</div>`;
   }
 
   setNotes(upcoming: UpcomingCorner[]): void {

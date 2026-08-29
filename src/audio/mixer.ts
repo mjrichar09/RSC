@@ -237,6 +237,48 @@ export class Mixer {
   }
 
   /**
+   * A start-gantry lamp, and the green.
+   *
+   * Two tones from the same shape: a short dry beep for each red and a longer,
+   * brighter one a fifth above for the green. The interval is the whole trick —
+   * three of the same note and then a higher one is a countdown in any
+   * language, and nobody has to be told which one means go.
+   */
+  startLight(go: boolean): void {
+    if (!this.ctx || !this.master) return;
+    const now = this.ctx.currentTime;
+    const base = go ? 880 : 587;
+    const parts: [number, number][] = go
+      ? [
+          [1, 0.22],
+          [1.5, 0.14],
+          [2, 0.06],
+        ]
+      : [
+          [1, 0.16],
+          [2, 0.04],
+        ];
+
+    for (const [ratio, level] of parts) {
+      const osc = this.ctx.createOscillator();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(base * ratio, now);
+      const gain = this.ctx.createGain();
+      const length = go ? 0.55 : 0.16;
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(level, now + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + length);
+      // Filtered, or a square wave at this level is a fire alarm.
+      const tone = this.ctx.createBiquadFilter();
+      tone.type = 'lowpass';
+      tone.frequency.value = go ? 2600 : 1600;
+      osc.connect(tone).connect(gain).connect(this.master);
+      osc.start(now);
+      osc.stop(now + length + 0.05);
+    }
+  }
+
+  /**
    * Silence the car — used when a menu opens or a run ends.
    *
    * The world keeps going, quietly. A menu that kills the wind as well as the

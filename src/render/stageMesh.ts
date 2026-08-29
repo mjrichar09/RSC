@@ -13,6 +13,7 @@
 import * as THREE from 'three';
 import { CORRIDOR, type PropKind, type Stage } from '../sim/stage.js';
 import type { Markers } from '../sim/markers.js';
+import type { Vec3 } from '../sim/math.js';
 import { SURFACES } from '../sim/surfaces.js';
 
 /** Slight per-vertex value jitter so large flat areas do not read as dead. */
@@ -37,6 +38,8 @@ export interface StageView {
   markers: MarkerView;
   /** The crowd, which gets out of the way. */
   crowd: CrowdView;
+  /** The lamps over the start line. */
+  startLights: StartLightsView;
   dispose: () => void;
 }
 
@@ -80,6 +83,9 @@ export function buildStageView(stage: Stage, markers: Markers): StageView {
 
   group.add(buildTerrain(stage));
   group.add(buildGates(stage));
+  const first = stage.spline.samples[0]!;
+  const startLights = new StartLightsView(first.position, first.left, first.width);
+  group.add(startLights.group);
   group.add(buildScenery(stage));
   const crowd = buildCrowd(stage);
   group.add(crowd.group);
@@ -94,6 +100,7 @@ export function buildStageView(stage: Stage, markers: Markers): StageView {
     signBoards: signs.boards,
     markers: markerView,
     crowd,
+    startLights,
     dispose: () => {
       geometry.dispose();
       (road.material as THREE.Material).dispose();
@@ -724,6 +731,65 @@ function buildProps(stage: Stage): THREE.Group {
   }
 
   return group;
+}
+
+/**
+ * The lamps on the start gantry.
+ *
+ * Three reds and a green, hung over the start line where the car is already
+ * looking. A HUD countdown alone would work and would say nothing about the
+ * place: a gantry with lamps on it is the difference between a timer and a
+ * start line.
+ */
+export class StartLightsView {
+  readonly group = new THREE.Group();
+
+  private readonly lamps: THREE.Mesh[] = [];
+  private readonly green: THREE.Mesh;
+
+  constructor(at: Vec3, left: Vec3, width: number) {
+    const beam = new THREE.Mesh(
+      new THREE.BoxGeometry(width * 1.15, 0.3, 0.3),
+      new THREE.MeshStandardMaterial({ color: 0x232830, roughness: 0.8, flatShading: true }),
+    );
+    beam.position.set(at.x, at.y + 4.3, at.z);
+    beam.lookAt(at.x + left.x, at.y + 4.3, at.z + left.z);
+    beam.rotateY(Math.PI / 2);
+    beam.castShadow = true;
+    this.group.add(beam);
+
+    // Unlit lamps are dark glass; lighting one is a colour and an emissive,
+    // which reads from any distance and costs nothing.
+    const dark = () =>
+      new THREE.MeshStandardMaterial({ color: 0x1a1d22, emissive: 0x000000, roughness: 0.4 });
+
+    for (let i = 0; i < 4; i++) {
+      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.3, 10, 8), dark());
+      // Strung across the beam, reds first and the green on the end.
+      const across = (i - 1.5) * 1.0;
+      lamp.position.set(
+        at.x + left.x * across,
+        at.y + 3.95,
+        at.z + left.z * across,
+      );
+      this.group.add(lamp);
+      this.lamps.push(lamp);
+    }
+    this.green = this.lamps[3]!;
+  }
+
+  /** Light `reds` of the three red lamps, and the green if `go`. */
+  set(reds: number, go: boolean): void {
+    for (let i = 0; i < 3; i++) {
+      const material = this.lamps[i]!.material as THREE.MeshStandardMaterial;
+      const lit = i < reds && !go;
+      material.color.setHex(lit ? 0xff3b21 : 0x2a1a18);
+      material.emissive.setHex(lit ? 0xd42a12 : 0x000000);
+    }
+    const material = this.green.material as THREE.MeshStandardMaterial;
+    material.color.setHex(go ? 0x4fd6a0 : 0x18241f);
+    material.emissive.setHex(go ? 0x2fbb84 : 0x000000);
+  }
 }
 
 /** Start line, checkpoint gates and finish line, as paired posts plus a banner. */

@@ -11,6 +11,7 @@ import { TEST_PATCHES } from './data/testGround.js';
 import { Career, type RaceTarget } from './game/career.js';
 import { rollcageMitigation } from './game/garage.js';
 import { Race } from './game/race.js';
+import { StartLights } from './game/startLights.js';
 import { SaveStore } from './game/save.js';
 import { NEUTRAL_INPUT } from './sim/input.js';
 import { Driver } from './sim/driver.js';
@@ -183,6 +184,13 @@ async function main(): Promise<void> {
   tagLayer.className = 'tags';
   hudRoot.appendChild(tagLayer);
   let stuckFor = 0;
+  /**
+   * The countdown on the gantry. The car is held while it runs, so a jumped
+   * start is impossible rather than penalised — and every time recorded before
+   * this existed stays comparable, because the clock still starts on the car's
+   * first movement.
+   */
+  const lights = new StartLights();
   /** Set by the photo-mode save key; read at the end of the next frame. */
   let wantsCapture = false;
   /**
@@ -289,6 +297,7 @@ async function main(): Promise<void> {
     race = new Race(stage, variant.medals);
     settled = false;
     terminal = null;
+    lights.arm();
     damagePanel.reset();
     raceHud.setStage(stage, variant.name, variant.medals);
     minimap.setStage(stage);
@@ -380,6 +389,7 @@ async function main(): Promise<void> {
       skids.clear();
       settled = false;
       terminal = null;
+      lights.arm();
       raceHud.setLedger(null);
       damagePanel.reset();
       camera.applyZones(stage.cameraZones, 0);
@@ -840,6 +850,9 @@ async function main(): Promise<void> {
     ready: true,
     rendered: false,
     seekStage(stageId, seconds, crashFor = 0, grip = 0.6) {
+      // The AI, the validator and the harness all drive from a standstill and
+      // none of them should sit through a countdown.
+      lights.skip();
       // Reuse the loaded stage when possible: reloading would drop the ghost
       // that seedGhostAndSeek has just attached.
       if (!stage || stage.def.id !== stageId) loadStage(stageId);
@@ -896,6 +909,7 @@ async function main(): Promise<void> {
       hud.update(world.state(), 60);
     },
     async seedGhostAndSeek(stageId, seconds) {
+      lights.skip();
       if (!stage || stage.def.id !== stageId) loadStage(stageId);
       const driver = new Driver(stage!);
       for (let i = 0; i < 60; i++) world.step(NEUTRAL_INPUT);
@@ -918,6 +932,7 @@ async function main(): Promise<void> {
       this.seekStage(stageId, seconds);
     },
     seekTrace(traceName, seconds) {
+      lights.skip();
       const trace = TRACES[traceName];
       if (!trace) throw new Error(`unknown trace: ${traceName}`);
       world.vehicle.reset({ x: 0, y: 1.2, z: 0 }, 0);
@@ -933,6 +948,7 @@ async function main(): Promise<void> {
       window.RSC!.rendered = true;
     },
     async finishWithAi(timeout = 240) {
+      lights.skip();
       if (!stage || !race) return { error: 'no stage loaded' };
       const driver = new Driver(stage);
       for (let i = 0; i < 60; i++) world.step(NEUTRAL_INPUT);
@@ -1138,6 +1154,19 @@ async function main(): Promise<void> {
       world!.markers.version++;
     }
 
+    // `?lights=2` lights two reds on the gantry, `?lights=go` the green. The
+    // countdown is over in four seconds and a screenshot of it is otherwise a
+    // race against the harness.
+    const lamps = params.get('lights');
+    if (lamps) {
+      const go = lamps === 'go';
+      const reds = go ? 3 : Number(lamps);
+      // Cast because the assignment happens inside `loadStage`, which the
+      // compiler cannot see from here.
+      (stageView as StageView | null)?.startLights.set(reds, go);
+      raceHud.setLights(reds, go);
+    }
+
     const brakes = params.get('brakes');
     if (brakes) world!.damage?.brakeTemp.fill(Number(brakes));
     // `?zoom=8` pulls the orthographic camera in. Detail on the car itself —
@@ -1201,8 +1230,19 @@ async function main(): Promise<void> {
       return;
     }
 
-    const input =
-      garage.isOpen || multiplayer.isOpen || menu.isOpen ? NEUTRAL_INPUT : controls.sample(dt);
+    // The start. While the lamps are lit the car is held on the line: the
+    // handbrake is on and nothing the player does reaches the wheels.
+    const lit = lights.update(dt);
+    if (lit) mixer.startLight(lit === 'go');
+    stageView?.startLights.set(lights.lamps, lights.greenFor > 0);
+    raceHud.setLights(lights.holding ? lights.lamps : 0, lights.greenFor > 0);
+
+    const held = lights.holding && race !== null;
+    const input = held
+      ? { ...NEUTRAL_INPUT, handbrake: 1 }
+      : garage.isOpen || multiplayer.isOpen || menu.isOpen
+        ? NEUTRAL_INPUT
+        : controls.sample(dt);
     // In a network race every fixed step goes through the host or the guest:
     // that is what puts inputs on the wire and takes snapshots off it.
     const alpha = session ? session.advance(dt, input) : world.advance(dt, input);

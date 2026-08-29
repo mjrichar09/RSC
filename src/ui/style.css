@@ -1185,3 +1185,49 @@ html, body {
 #hud.in-replay .tags,
 #hud.in-replay .tuning { display: none; }
 #hud.no-chrome .replay { display: none; }
+
+/* ---- Start lights --------------------------------------------------------- */
+
+.race-lights {
+  position: absolute;
+  top: 34%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+}
+.lights-row { display: flex; gap: 14px; justify-content: center; }
+.lights-row i {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+.lights-row i.lit {
+  background: #ff3b21;
+  border-color: #ff8a72;
+  box-shadow: 0 0 18px rgba(255, 59, 33, 0.8);
+}
+.lights-row i.go {
+  background: #4fd6a0;
+  border-color: #9df0cd;
+  box-shadow: 0 0 22px rgba(79, 214, 160, 0.9);
+}
+.lights-word {
+  margin-top: 10px;
+  font-family: var(--font-display);
+  font-size: 15px;
+  letter-spacing: 0.4em;
+  color: var(--dim);
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.9);
+}
+.lights-word.go {
+  color: #4fd6a0;
+  font-size: 26px;
+  animation: go-pop 0.45s ease-out;
+}
+@keyframes go-pop {
+  from { transform: scale(0.7); opacity: 0; }
+  60% { transform: scale(1.18); opacity: 1; }
+  to { transform: scale(1); opacity: 1; }
+}

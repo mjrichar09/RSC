@@ -59,9 +59,14 @@ await page.locator('.menu-row[data-id="quarry-run:night"]').click();
 await page.waitForFunction(() => (window.RSC!.status() as { stage: string }).stage === 'quarry-run');
 console.log(`arcade lists ${rows} races and drives one`);
 
+// Wait for the start lights. The car is held on the line until the green, so a
+// check that stamps on the throttle immediately is checking the countdown.
+await page.waitForSelector('.lights-word.go', { timeout: 20_000 });
+console.log('start lights count down and go green');
+
 // Drive it, and check the run banks nothing.
 await page.keyboard.down('w');
-await page.waitForTimeout(4000);
+await page.waitForTimeout(5000);
 await page.keyboard.up('w');
 const driving = await status();
 console.log('arcade run:', JSON.stringify({ stage: driving.stage, phase: driving.phase, money: driving.money, time: driving.time, recorded: driving.recorded }));
