@@ -165,7 +165,13 @@ const northPass: StageDef = {
   // from 56.84s to 65.12s, because snow is where crude braking costs most and
   // locking now gives up 45% of peak grip rather than 26%. Same ratios to the
   // measured lap as before, moved with it.
-  medals: { author: 52, gold: 61, silver: 76, bronze: 97 },
+  // Recalibrated after the gearbox fix. These were set against a car whose box
+  // upshifted on wheelspin, which on snow left it in the wrong gear for most of
+  // the stage: the AI's best lap here went from 62.3s to 47.0s once the shift
+  // logic started reading the road. Medal times come from a measured AI lap, so
+  // they move with it — at the same ratios this stage already had, so it is
+  // exactly as hard relative to the car as it was.
+  medals: { author: 39, gold: 46, silver: 57, bronze: 73 },
   controlPoints: [
     cp(0, 0, 0, 6.4, 'snow'),
     cp(-8, 65, 2, 6.4, 'snow'),

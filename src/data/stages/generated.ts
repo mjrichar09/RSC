@@ -154,10 +154,10 @@ export const GENERATED_STAGES: StageDef[] = [
     },
     "checkpoints": 3,
     "medals": {
-      "author": 42,
-      "gold": 50,
-      "silver": 61,
-      "bronze": 81
+      "author": 31,
+      "gold": 37,
+      "silver": 46,
+      "bronze": 60
     },
     "entryFee": 255,
     "payouts": {

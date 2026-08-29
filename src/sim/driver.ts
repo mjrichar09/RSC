@@ -12,10 +12,17 @@ import { clamp, cross, dot, rotate, rotateInverse, sub, v3 } from './math.js';
 import type { DriverInput } from './input.js';
 import type { Stage } from './stage.js';
 import type { VehicleState } from './vehicle.js';
+import { CLEAR_DAY, type Conditions, gripMultiplier } from './conditions.js';
+import { surface } from './surfaces.js';
 
 export interface DriverOptions {
   /** Lateral acceleration the driver believes it can sustain, in g. */
   gripBudget?: number;
+  /**
+   * Conditions the lap is being driven in, so the driver knows the road is wet.
+   * Without it, it plans every corner as though it were dry.
+   */
+  conditions?: Conditions;
   /** Lookahead distance at rest, metres. */
   baseLookahead?: number;
   /** Extra lookahead per m/s of speed. */
@@ -44,6 +51,7 @@ export class Driver {
     this.stage = stage;
     this.options = {
       gripBudget: options.gripBudget ?? 0.6,
+      conditions: options.conditions ?? CLEAR_DAY,
       baseLookahead: options.baseLookahead ?? 9,
       lookaheadPerSpeed: options.lookaheadPerSpeed ?? 0.6,
       maxSpeed: options.maxSpeed ?? 45,
@@ -61,7 +69,19 @@ export class Driver {
       if (curvature < 1e-4) continue;
 
       const radius = 1 / curvature;
-      const corner = Math.sqrt(gripBudget * 9.81 * radius);
+      /*
+       * Corner speed from the grip that is actually under the car.
+       *
+       * The budget used to be a flat number: the same target speed for a snow
+       * hairpin as for a dry tarmac one. It went unnoticed for as long as the
+       * car could not reach those speeds on snow — the gearbox was upshifting
+       * on wheelspin and leaving it in the wrong gear — and the moment that was
+       * fixed the driver started arriving at winter corners a third too fast
+       * and spending half the stage in the scenery.
+       */
+      const ground = surface(s.surface);
+      const grip = ground.grip * gripMultiplier(this.options.conditions, ground);
+      const corner = Math.sqrt(gripBudget * grip * 9.81 * radius);
       // Allow a higher speed for a corner that is still far off — there is time
       // to shed speed before reaching it. Kept conservative: arriving too fast
       // on a narrow stage means going over the bank, not just running wide.

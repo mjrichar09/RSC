@@ -115,7 +115,12 @@ export async function runStage(
     ...(options.conditions ? { conditions: options.conditions } : {}),
     ...(options.damage ? { damage: true } : {}),
   });
-  const driver = new Driver(stage, options.driver);
+  // The driver is told what it is driving in: a lap in the wet is planned in
+  // the wet, or it brakes for every corner as though the road were dry.
+  const driver = new Driver(stage, {
+    ...options.driver,
+    ...(options.conditions ? { conditions: options.conditions } : {}),
+  });
   const race = new Race(stage);
   const recorder = new TelemetryRecorder();
   const ghostRecorder = options.recordGhost ? new GhostRecorder() : null;
