@@ -202,3 +202,54 @@ describe('the setting', () => {
     expect(migrateProfile({ version: 4, settings: { vision: 42 } }).settings.vision).toBe(1);
   });
 });
+
+
+describe('the glass outside the arc', () => {
+  const wet = { conditions: { timeOfDay: 'day', weather: 'rain' } } as Partial<VisionInput>;
+
+  it('cakes up, and the wipers never touch it', () => {
+    // The blades clear an arc. Everything outside it — the corners, the top,
+    // the strip along the bottom — keeps what lands on it for the whole stage,
+    // and that hard boundary between swept and caked glass is the single thing
+    // that most separates a windscreen from a grain filter over the frame.
+    const vision = new Vision();
+    let crust = 0;
+    let sweeps = 0;
+    let previous: number | null = null;
+    for (let i = 0; i < 120 * 40; i++) {
+      const state = vision.update(1 / 120, { ...base, ...wet });
+      // The crust only ever goes up, whatever the wipers are doing.
+      expect(state.crust).toBeGreaterThanOrEqual(crust - 1e-9);
+      crust = state.crust;
+      if (previous !== null && state.wiper !== null && previous > state.wiper) sweeps++;
+      previous = state.wiper;
+    }
+    expect(crust).toBeGreaterThan(0.2);
+    // ...and the swept glass was cleared many times over the same run.
+    expect(sweeps).toBeGreaterThan(3);
+  });
+
+  it('stays clear on a dry road', () => {
+    // Fine dust off dry gravel dirties a screen; it does not build a crust on
+    // it, and a stage that ends with the corners packed solid after a dry
+    // afternoon is a windscreen nobody recognises.
+    const dry = run(new Vision(), 60, { surface: 'gravel', speed: 30 });
+    expect(dry.crust).toBeLessThan(0.05);
+  });
+
+  it('packs deepest in mud and least in rain', () => {
+    const water = run(new Vision(), 60, { ...wet, wiperHealth: 1 });
+    const filth = run(new Vision(), 60, { surface: 'mud', speed: 30 });
+    expect(filth.crust).toBeGreaterThan(water.crust);
+    // Never quite total: even a caked screen has gaps, and a black rectangle is
+    // not difficulty.
+    expect(filth.crust).toBeLessThan(0.95);
+  });
+
+  it('is washed off by a restart, like everything else', () => {
+    const vision = new Vision();
+    run(vision, 30, wet);
+    vision.reset();
+    expect(vision.update(1 / 120, { ...base, ...wet }).crust).toBeLessThan(0.01);
+  });
+});

@@ -54,6 +54,18 @@ const MAX_OCCLUSION: Record<VisionKind, number> = {
   mud: 0.88,
 };
 
+/**
+ * How far the crust outside the arc is allowed to go.
+ *
+ * Higher than the swept glass, because nothing clears it. Mud packs in solid;
+ * water beads and runs and never quite does.
+ */
+const MAX_CRUST: Record<VisionKind, number> = {
+  water: 0.68,
+  snow: 0.9,
+  mud: 0.92,
+};
+
 /** Seconds for one wiper stroke across the screen. A cycle is two of them. */
 const SWEEP_TIME = 0.55;
 /** Seconds between sweeps at full speed. Slower when there is less to clear. */
@@ -76,6 +88,16 @@ export interface VisionState {
   coneAngle: number;
   /** How much of the screen is covered by whatever is landing on it, 0..1. */
   occlusion: number;
+  /**
+   * How caked the glass outside the wiper's arc is, 0..1.
+   *
+   * The blades only clear the arc they sweep. Everything outside it — the
+   * corners, the top, the strip along the bottom — keeps whatever lands on it
+   * for the whole stage, which is exactly what a windscreen looks like in rain,
+   * mud or snow and is the single thing that most separates the real ones from
+   * a grain filter over the frame.
+   */
+  crust: number;
   /** What is on the screen, which decides how it is drawn. */
   kind: VisionKind;
   /**
@@ -116,6 +138,8 @@ export interface VisionInput {
 export class Vision {
   /** 0 = clean screen, 1 = cannot see through it. */
   private soiling = 0;
+  /** What has built up where the blades never reach. */
+  private caked = 0;
   /** Seconds since the current sweep began, or null when parked. */
   private sweep: number | null = null;
   /** Whether the outbound stroke of the current cycle has already cleared. */
@@ -134,6 +158,13 @@ export class Vision {
       spray > weather ? 'mud' : conditions.weather === 'snowfall' ? 'snow' : 'water';
 
     this.soiling = clamp(this.soiling + arriving * dt, 0, MAX_OCCLUSION[kind]);
+    // The corners fill in far more slowly than the swept glass and never
+    // empty. Only real weather and real mud cake glass: the fine dust off a dry
+    // gravel road dirties a screen, it does not build a crust on it, and a
+    // stage that ends with the corners packed solid after a dry afternoon is a
+    // windscreen nobody recognises.
+    const caking = Math.max(arriving - 0.12, 0);
+    this.caked = clamp(this.caked + caking * dt * 0.28, 0, MAX_CRUST[kind]);
 
     // Wipers. They run when there is something to clear and they still work.
     const wipersDead = wiperHealth <= 0;
@@ -186,6 +217,7 @@ export class Vision {
       coneReach: 0.34 + 0.42 * lit,
       coneAngle: 0.34 + 0.14 * lit,
       occlusion: this.soiling,
+      crust: this.caked,
       kind,
       wiper,
       wiperReturning,
@@ -195,6 +227,7 @@ export class Vision {
 
   reset(): void {
     this.soiling = 0;
+    this.caked = 0;
     this.sweep = null;
     this.swept = false;
     this.sinceSweep = 0;

@@ -69,6 +69,11 @@ Each of these cost real time and is easy to repeat:
   laid on the ground want `side: THREE.DoubleSide` unless you have checked the
   winding — and the way to check is one frame with the fragment shader forced to
   solid red, which took three guesses off the list in one shot.
+- **`smoothstep` with its edges crossed over.** Adding noise to the far edge of
+  a band (`smoothstep(a, b + lumps, x)`) can push it past the near one, and GLSL
+  says nothing about what happens then — here it was crust blooming in the
+  middle of a clean windscreen wherever the noise dipped. Offset the whole band
+  instead: `smoothstep(e - w, e + w, x)` with `e` carrying the noise.
 - **Setting SVG `fill` with `setAttribute`.** A stylesheet rule outranks a
   presentation attribute, so the damage panel's zones stayed green however
   wrecked the car was. Use `style.fill`.

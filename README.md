@@ -465,6 +465,16 @@ takes, so they are built and the direction is still open (see `docs/style.md`):
   severity so a hairpin draws a knot of people and a flat-out kink draws nobody,
   and marshals either side of every gate. An empty road is a test track.
 
+**The windscreen** is modelled as a windscreen rather than as a filter. The
+blades sweep an arc from a pivot below the frame, and everything outside that
+arc — the top corners, the strip along the bottom — keeps whatever lands on it
+for the whole stage. That hard, crumbling boundary between swept glass and caked
+glass is what makes a photograph of a windscreen unmistakable, and no amount of
+grain over the whole frame gets near it. Inside the arc: beads of water with
+clear glass between them and bright rims that catch the light, snow in packing
+clumps, mud in hard-edged blobs. Only real weather cakes the corners — fine dust
+off a dry gravel road dirties a screen without building a crust on it.
+
 **Photo mode** (`P`) plays back the run's own recording: scrub, slow it to an
 eighth, turn the camera an eighth of a turn at a time, zoom, hide the chrome,
 save a PNG. The camera rule is intact — still orthographic, still fixed, still
