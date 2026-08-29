@@ -36,7 +36,7 @@ export interface MedalTimes {
   bronze: number;
 }
 
-export type PropKind = 'tree' | 'rock' | 'bale' | 'pole';
+export type PropKind = 'tree' | 'rock' | 'bale' | 'pole' | 'gatePost';
 
 /** A corner warning board standing on the verge. */
 export interface CornerSign {
@@ -166,6 +166,9 @@ const PROP_SHAPE: Record<PropKind, { radius: number; height: number }> = {
   rock: { radius: 0.85, height: 1.3 },
   bale: { radius: 0.75, height: 1.5 },
   pole: { radius: 0.16, height: 2.2 },
+  // The scaffolding either side of a start, checkpoint or finish gate. Drawn by
+  // the gate builder rather than with the hazards, so the renderer skips it.
+  gatePost: { radius: 0.28, height: 3.4 },
 };
 
 /** Corridor cross-section, in metres either side of the driveable width. */
@@ -643,11 +646,11 @@ export class Stage {
   }
 
   private buildProps(): StageProp[] {
+    const props: StageProp[] = [...this.gatePosts()];
     const profile = this.def.hazards;
-    if (!profile || profile.kinds.length === 0) return [];
+    if (!profile || profile.kinds.length === 0) return props;
 
     const random = seededRandom(hashString(this.def.id));
-    const props: StageProp[] = [];
     const gateClearance = 14;
 
     for (let d = 12; d < this.length - 12; d += profile.spacing * (0.6 + random() * 0.8)) {
@@ -681,6 +684,39 @@ export class Stage {
       });
     }
     return props;
+  }
+
+  /**
+   * The posts either side of every gate, as things you can hit.
+   *
+   * A gate you can drive through the middle of is a line on the ground with
+   * decoration around it; a gate with solid posts is a target you have to aim
+   * at, and clipping one on the way past a checkpoint is a mistake with a
+   * price. They stand at the road edge, where they were already drawn.
+   */
+  private gatePosts(): StageProp[] {
+    const shape = PROP_SHAPE.gatePost;
+    const posts: StageProp[] = [];
+    const at = (sample: SplineSample) => {
+      for (const side of [-1, 1]) {
+        posts.push({
+          kind: 'gatePost',
+          position: v3(
+            sample.position.x + sample.left.x * sample.width * side,
+            sample.position.y,
+            sample.position.z + sample.left.z * sample.width * side,
+          ),
+          radius: shape.radius,
+          height: shape.height,
+          yaw: 0,
+        });
+      }
+    };
+
+    at(this.spline.samples[0]!);
+    for (const checkpoint of this.checkpoints) at(this.spline.at(checkpoint.distance));
+    at(this.spline.samples[this.spline.samples.length - 1]!);
+    return posts;
   }
 
   /** Total half-width of the corridor at a sample, including verge and bank. */

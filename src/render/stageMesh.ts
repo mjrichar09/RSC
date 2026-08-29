@@ -35,6 +35,8 @@ export interface StageView {
   signBoards: THREE.Mesh[];
   /** The marker poles, which have to be re-synced whenever one goes over. */
   markers: MarkerView;
+  /** The crowd, which gets out of the way. */
+  crowd: CrowdView;
   dispose: () => void;
 }
 
@@ -79,7 +81,8 @@ export function buildStageView(stage: Stage, markers: Markers): StageView {
   group.add(buildTerrain(stage));
   group.add(buildGates(stage));
   group.add(buildScenery(stage));
-  group.add(buildCrowd(stage));
+  const crowd = buildCrowd(stage);
+  group.add(crowd.group);
   const markerView = buildEdgeMarkers(markers);
   group.add(markerView.group);
   group.add(buildProps(stage));
@@ -90,6 +93,7 @@ export function buildStageView(stage: Stage, markers: Markers): StageView {
     group,
     signBoards: signs.boards,
     markers: markerView,
+    crowd,
     dispose: () => {
       geometry.dispose();
       (road.material as THREE.Material).dispose();
@@ -351,9 +355,7 @@ function buildScenery(stage: Stage): THREE.Group {
  * Making them collidable would mean deciding what happens when it does, and
  * that is a different game.
  */
-function buildCrowd(stage: Stage): THREE.Group {
-  const group = new THREE.Group();
-
+export function buildCrowd(stage: Stage): CrowdView {
   let seed = 0x9e3779b9;
   for (let i = 0; i < stage.def.id.length; i++) seed = (seed * 31 + stage.def.id.charCodeAt(i)) >>> 0;
   const random = () => {
@@ -361,18 +363,12 @@ function buildCrowd(stage: Stage): THREE.Group {
     return seed / 4294967296;
   };
 
-  interface Person {
-    at: THREE.Vector3;
-    yaw: number;
-    coat: THREE.Color;
-    height: number;
-  }
   const people: Person[] = [];
 
   /** Somebody standing `out` metres to `side` of the road at `distance`. */
   const stand = (distance: number, side: -1 | 1, out: number, marshal: boolean) => {
     const sample = stage.spline.at(Math.max(Math.min(distance, stage.length - 1), 0));
-    const at = new THREE.Vector3(
+    const home = new THREE.Vector3(
       sample.position.x + sample.left.x * out * side,
       sample.position.y + CORRIDOR.heightAt(sample.width, out),
       sample.position.z + sample.left.z * out * side,
@@ -382,7 +378,19 @@ function buildCrowd(stage: Stage): THREE.Group {
     const coat = marshal
       ? new THREE.Color(random() < 0.5 ? 0xf2c14e : 0xe8552f)
       : new THREE.Color().setHSL(random(), 0.35 + random() * 0.4, 0.28 + random() * 0.3);
-    people.push({ at, yaw, coat, height: 0.9 + random() * 0.22 });
+    people.push({
+      home,
+      at: home.clone(),
+      // Which way they will go when they move: away from the road, because
+      // that is where the space is and where everyone else is not.
+      away: new THREE.Vector3(sample.left.x * side, 0, sample.left.z * side).normalize(),
+      yaw,
+      facing: yaw,
+      coat,
+      height: 0.9 + random() * 0.22,
+      alarm: 0,
+      bob: random() * Math.PI * 2,
+    });
   };
 
   // Spectators, at the corners worth watching. Severity is the pacenote scale:
@@ -409,50 +417,168 @@ function buildCrowd(stage: Stage): THREE.Group {
     }
   }
 
-  if (people.length === 0) return group;
+  return new CrowdView(people);
+}
 
-  // A body and a head. Two instanced meshes and no animation: at this distance
-  // a standing figure is a silhouette, and a walk cycle would cost more than
-  // every other thing in this file put together.
-  const bodies = new THREE.InstancedMesh(
-    new THREE.CylinderGeometry(0.17, 0.22, 1.25, 5),
-    new THREE.MeshStandardMaterial({ roughness: 0.9, flatShading: true }),
-    people.length,
-  );
-  const heads = new THREE.InstancedMesh(
-    new THREE.IcosahedronGeometry(0.13, 0),
-    new THREE.MeshStandardMaterial({ color: 0xc9a68a, roughness: 0.95, flatShading: true }),
-    people.length,
-  );
-  bodies.castShadow = true;
-  heads.castShadow = false;
+interface Person {
+  /** Where they stand when nothing is happening. */
+  home: THREE.Vector3;
+  /** Where they are now. */
+  at: THREE.Vector3;
+  /** Unit vector away from the road. */
+  away: THREE.Vector3;
+  /** Facing when settled, and facing now. */
+  yaw: number;
+  facing: number;
+  coat: THREE.Color;
+  height: number;
+  /** 0 calm, 1 running. Decays once the car has gone. */
+  alarm: number;
+  /** Phase of their run cycle, such as it is. */
+  bob: number;
+}
 
-  const matrix = new THREE.Matrix4();
-  const quaternion = new THREE.Quaternion();
-  const position = new THREE.Vector3();
-  const scale = new THREE.Vector3();
-  const up = new THREE.Vector3(0, 1, 0);
+/** How close a car has to be before anyone thinks about moving. */
+const SCARE_RANGE = 16;
+/** How far back from where they were standing they will go. */
+const SCARE_DEPTH = 5;
 
-  people.forEach((person, i) => {
-    quaternion.setFromAxisAngle(up, person.yaw);
+/**
+ * The crowd, and what it does when a car arrives.
+ *
+ * People standing perfectly still while a rally car comes at them sideways is
+ * the single least believable thing left on a stage — real spectators are
+ * famous for exactly this, standing in the road until the last possible moment
+ * and then not quite standing in it. So they scatter: backwards, away from the
+ * road, at a speed that depends on how close the car is, and they wander back
+ * once it has gone.
+ *
+ * They are still not collidable. A car cannot hit them and never will — making
+ * them collidable would mean deciding what happens when it does, and that is a
+ * different game — but a crowd that gets out of the way says the thing a crowd
+ * that ignores you cannot.
+ */
+export class CrowdView {
+  readonly group = new THREE.Group();
 
-    scale.set(1, person.height, 1);
-    position.set(person.at.x, person.at.y + 0.62 * person.height, person.at.z);
-    matrix.compose(position, quaternion, scale);
-    bodies.setMatrixAt(i, matrix);
-    bodies.setColorAt(i, person.coat);
+  private readonly people: Person[];
+  private readonly bodies: THREE.InstancedMesh;
+  private readonly heads: THREE.InstancedMesh;
+  private readonly matrix = new THREE.Matrix4();
+  private readonly quaternion = new THREE.Quaternion();
+  private readonly position = new THREE.Vector3();
+  private readonly scale = new THREE.Vector3();
+  private readonly up = new THREE.Vector3(0, 1, 0);
 
-    scale.set(1, 1, 1);
-    position.set(person.at.x, person.at.y + 1.32 * person.height, person.at.z);
-    matrix.compose(position, quaternion, scale);
-    heads.setMatrixAt(i, matrix);
-  });
+  constructor(people: Person[]) {
+    this.people = people;
+    const count = Math.max(people.length, 1);
 
-  bodies.instanceMatrix.needsUpdate = true;
-  if (bodies.instanceColor) bodies.instanceColor.needsUpdate = true;
-  heads.instanceMatrix.needsUpdate = true;
-  group.add(bodies, heads);
-  return group;
+    // A body and a head. Two instanced meshes and no animation beyond a bob: at
+    // this distance a standing figure is a silhouette, and a walk cycle would
+    // cost more than every other thing in this file put together.
+    this.bodies = new THREE.InstancedMesh(
+      new THREE.CylinderGeometry(0.17, 0.22, 1.25, 5),
+      new THREE.MeshStandardMaterial({ roughness: 0.9, flatShading: true }),
+      count,
+    );
+    this.heads = new THREE.InstancedMesh(
+      new THREE.IcosahedronGeometry(0.13, 0),
+      new THREE.MeshStandardMaterial({ color: 0xc9a68a, roughness: 0.95, flatShading: true }),
+      count,
+    );
+    this.bodies.castShadow = true;
+    this.heads.castShadow = false;
+    this.bodies.count = people.length;
+    this.heads.count = people.length;
+
+    people.forEach((person, i) => this.bodies.setColorAt(i, person.coat));
+    if (this.bodies.instanceColor) this.bodies.instanceColor.needsUpdate = true;
+    this.group.add(this.bodies, this.heads);
+    this.write();
+  }
+
+  /**
+   * Move anyone the car is about to arrive at.
+   *
+   * Only people within scaring distance are considered, and the whole crowd is
+   * only rewritten when somebody actually moved — a stage's crowd is a couple
+   * of hundred figures and almost all of them are somewhere else.
+   */
+  update(dt: number, car: THREE.Vector3 | { x: number; y: number; z: number }): void {
+    let moved = false;
+
+    for (const person of this.people) {
+      const dx = person.at.x - car.x;
+      const dz = person.at.z - car.z;
+      const distance = Math.hypot(dx, dz);
+
+      if (distance < SCARE_RANGE) {
+        // Closer is more urgent, and the last few metres are the urgent ones.
+        const urgency = 1 - distance / SCARE_RANGE;
+        person.alarm = Math.min(1, Math.max(person.alarm, urgency * urgency * 1.8));
+      }
+
+      if (person.alarm > 0.002) {
+        const back = person.alarm * SCARE_DEPTH;
+        // Away from the road, and away from the car: a spectator on the inside
+        // of a corner does not run into the one on the outside.
+        const flee = distance > 0.001 ? 0.45 / Math.max(distance, 3) : 0;
+        const targetX = person.home.x + person.away.x * back + dx * flee * back;
+        const targetZ = person.home.z + person.away.z * back + dz * flee * back;
+
+        // Running is quick, coming back is not: a scattered crowd re-forms over
+        // seconds, which is also what stops the whole hillside twitching.
+        const rate = person.alarm > 0.3 ? 9 : 1.6;
+        const k = 1 - Math.pow(0.5, dt * rate);
+        person.at.x += (targetX - person.at.x) * k;
+        person.at.z += (targetZ - person.at.z) * k;
+        person.at.y = person.home.y;
+
+        person.bob += dt * 14 * person.alarm;
+        // Turned to watch the thing that is frightening them.
+        const toCar = Math.atan2(car.x - person.at.x, car.z - person.at.z);
+        person.facing += shortest(person.facing, toCar) * Math.min(1, dt * 6);
+
+        person.alarm = Math.max(0, person.alarm - dt * 0.45);
+        moved = true;
+      } else if (person.alarm !== 0) {
+        person.alarm = 0;
+        person.at.copy(person.home);
+        person.facing = person.yaw;
+        moved = true;
+      }
+    }
+
+    if (moved) this.write();
+  }
+
+  private write(): void {
+    this.people.forEach((person, i) => {
+      this.quaternion.setFromAxisAngle(this.up, person.facing);
+      const hop = person.alarm > 0.15 ? Math.abs(Math.sin(person.bob)) * 0.12 * person.alarm : 0;
+
+      this.scale.set(1, person.height, 1);
+      this.position.set(person.at.x, person.at.y + 0.62 * person.height + hop, person.at.z);
+      this.matrix.compose(this.position, this.quaternion, this.scale);
+      this.bodies.setMatrixAt(i, this.matrix);
+
+      this.scale.set(1, 1, 1);
+      this.position.set(person.at.x, person.at.y + 1.32 * person.height + hop, person.at.z);
+      this.matrix.compose(this.position, this.quaternion, this.scale);
+      this.heads.setMatrixAt(i, this.matrix);
+    });
+    this.bodies.instanceMatrix.needsUpdate = true;
+    this.heads.instanceMatrix.needsUpdate = true;
+  }
+}
+
+/** Shortest signed angle from `a` to `b`. */
+function shortest(a: number, b: number): number {
+  let d = (b - a) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return d;
 }
 
 /** Rolling ground colour per biome, under and beyond the corridor. */
@@ -552,6 +678,9 @@ function buildProps(stage: Stage): THREE.Group {
 
   const byKind = new Map<PropKind, typeof stage.props>();
   for (const prop of stage.props) {
+    // Gate posts are props so the simulation gives them colliders; they are
+    // drawn with their gate, banner and all, rather than as another hazard.
+    if (prop.kind === 'gatePost') continue;
     const list = byKind.get(prop.kind) ?? [];
     list.push(prop);
     byKind.set(prop.kind, list);
@@ -563,6 +692,8 @@ function buildProps(stage: Stage): THREE.Group {
     rock: () => ({ geometry: new THREE.DodecahedronGeometry(0.95, 0), color: 0x6a6a68 }),
     bale: () => ({ geometry: new THREE.CylinderGeometry(0.75, 0.75, 1.5, 8), color: 0xb59a55 }),
     pole: () => ({ geometry: new THREE.BoxGeometry(0.22, 2.2, 0.22), color: 0xdcd6c6 }),
+    // Never built: gate posts are drawn by `buildGates`.
+    gatePost: () => ({ geometry: new THREE.BoxGeometry(0.4, 3.4, 0.4), color: 0xf2c14e }),
   };
 
   for (const [kind, props] of byKind) {

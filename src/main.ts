@@ -705,6 +705,9 @@ async function main(): Promise<void> {
     // and it is the only way they stay readable through a zone change.
     for (const board of stageView?.signBoards ?? []) board.rotation.y = camera.yaw;
     if (world.markers && stageView) stageView.markers.sync(world.markers);
+    // The crowd gets out of the way. Driven from the car's drawn position, so
+    // people react to where it looks like it is rather than to a fixed step.
+    stageView?.crowd.update(dt, transform.position);
     wildlifeView.update(world.wildlife?.animals ?? []);
 
     if (ghost && race) {
@@ -852,6 +855,9 @@ async function main(): Promise<void> {
         updateWheelEffects(particles, skids, world.state().wheels, world.state().velocity, world.dt);
         particles.update(world.dt);
         advanceVision(world.dt);
+        // The crowd scatters as the car arrives, and a screenshot taken at the
+        // end of a seek should show a scattered crowd rather than a tidy one.
+        stageView?.crowd.update(world.dt, world.state().position);
       }
       if (crashFor > 0) {
         const until = world.time + crashFor;
