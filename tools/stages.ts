@@ -15,11 +15,27 @@ import { medalFor } from '../src/game/race.js';
 import { visibilityPenalty } from '../src/sim/conditions.js';
 import { runStage, validateStage } from '../src/sim/runStage.js';
 import { Stage, stageVariants } from '../src/sim/stage.js';
+import type { VehicleTuning } from '../src/data/tuning.js';
 
 function arg(name: string): string | undefined {
   const hit = process.argv.find((a) => a.startsWith(`--${name}=`));
   return hit?.split('=').slice(1).join('=');
 }
+
+/**
+ * `--set=yawDamping=1900,slideGripFloor=0.8` overrides tuning for this run.
+ *
+ * This was documented and not implemented, which quietly made every "the AI
+ * still gets round with the new handling" check meaningless — it drove the
+ * committed tuning and reported the committed times.
+ */
+const overrides: Partial<VehicleTuning> = {};
+for (const entry of (arg('set') ?? '').split(',').filter(Boolean)) {
+  const [k, v] = entry.split('=');
+  if (k && v !== undefined) (overrides as Record<string, unknown>)[k] = Number(v);
+}
+const tuning = Object.keys(overrides).length > 0 ? overrides : undefined;
+if (tuning) console.log(`overrides: ${JSON.stringify(tuning)}`);
 
 const only = arg('stage');
 const grip = Number(arg('grip') ?? '0.75');
@@ -28,12 +44,15 @@ const defs = only ? [stageById(only)] : STAGES;
 for (const def of defs) {
   const stage = new Stage(def);
   const overlaps = stage.selfIntersections();
-  const result = await runStage(stage, { driver: { gripBudget: grip } });
+  const result = await runStage(stage, {
+    driver: { gripBudget: grip },
+    ...(tuning ? { tuning } : {}),
+  });
   // Calibrate variants against the best of several driving styles rather than
   // one run: the AI is chaotic near its own limit, and a single lap flips
   // between a clean run and one with an off. Measuring the base the same way
   // the variants are measured is the only way the ratio means anything.
-  const baseline = await validateStage(stage);
+  const baseline = await validateStage(stage, undefined, tuning);
 
   const status = result.finished
     ? `finished in ${result.time!.toFixed(2)}s  (${medalFor(result.time!, def.medals)})`
@@ -61,7 +80,7 @@ for (const def of defs) {
   // Every variant has to be completable too, and each one's measured lap is
   // what its medal times are scaled from.
   for (const v of stageVariants(def).slice(1)) {
-    const run = await validateStage(stage, v.conditions);
+    const run = await validateStage(stage, v.conditions, tuning);
     const gripFactor = run.time && baseline.time ? run.time / baseline.time : NaN;
     const suggested = gripFactor * visibilityPenalty(v.conditions);
     console.log(

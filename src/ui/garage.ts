@@ -106,6 +106,9 @@ export class Garage {
       case 'salvage':
         await this.career.salvage();
         break;
+      case 'practice':
+        await this.career.setPractice(!this.career.profile.settings.practice);
+        break;
       case 'reset':
         this.confirmingReset = true;
         break;
@@ -318,7 +321,23 @@ export class Garage {
       })
       .join('');
 
-    return `<h3>PROGRESS</h3><div class="sweeps">${rows}</div>`;
+    // Practice aids live here rather than on a key, because turning them off is
+    // a decision about how you want to play rather than something to do mid-corner.
+    const on = this.career.profile.settings.practice;
+    const practice = `
+      <h3>PRACTICE</h3>
+      <button class="wide${on ? ' is-on' : ''}" data-action="practice">
+        Restart and rescue: ${on ? 'ON' : 'OFF'}
+      </button>
+      <p class="hint">
+        ${
+          on
+            ? 'R and Q work in a career run. Off is how a career is meant to be played.'
+            : 'A career run has to be finished or retired. Arcade keeps them either way.'
+        }
+      </p>`;
+
+    return `<h3>PROGRESS</h3><div class="sweeps">${rows}</div>${practice}`;
   }
 
   private paintPanel(): string {

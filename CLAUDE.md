@@ -24,6 +24,7 @@ npm run sweep      # balance: lateral g, turn radius, front-minus-rear slip
 npm run stages     # is every stage still completable, and how fast
 npm run crash      # what an impact at a given speed breaks and costs
 npm run telemetry -- --trace=stops --damage   # brake temperature
+npm run telemetry -- --trace=drift            # can it be held sideways, and swapped
 npm run crash -- --drop=1,3,5 --pitch=0.35    # what a landing costs
 npm run crash -- --balance=45,66              # can it sit on two wheels?
 npm run crash -- --deer=60,90,120             # what a deer strike costs
@@ -37,7 +38,18 @@ prints the game's own status JSON beside each frame. Reach for it when the
 question is genuinely "does this look right", not before.
 
 `telemetry`, `sweep` and `stages` all take `--set=key=value,...` to try tuning
-values without editing and reverting a file.
+values without editing and reverting a file. `stages` only gained it after the
+documentation had claimed it for months — every "the AI still gets round with
+the new handling" check before that was driving the committed tuning and
+reporting the committed times.
+
+Handling questions that are about *feel* need a closed-loop trace, not a
+recording. With fixed inputs, changing the tuning changes what the trace is
+testing: the `drift` trace counter-steers the way a driver does, so a tuning
+A/B measures the car. `held drift` reports the longest unbroken stretch
+between 12° and 55° and how many separate stretches there were — one long
+drift and two with a transition between them are very different cars, and
+`max drift` counts a spin as a triumph.
 
 The crash cinematic (time dilation and a ducked mix) is off with `?drama=0`,
 with the `K` key, or by setting `settings.drama` to 0 — at 0 it is genuinely
@@ -93,6 +105,15 @@ Each of these cost real time and is easy to repeat:
   1 m/s, so every wheel reads locked at walking pace whatever it was doing at
   speed. Sample mid-stop; a slip ratio taken at the end told me the car was
   locking when it was not, and I nearly retuned the tyre model on it.
+- **Using the physics `dt` for something a person experiences as a duration.**
+  The frame delta is capped at 0.1 s so a stall cannot hand the accumulator a
+  second to catch up on in one go. The start countdown ran on that capped
+  clock, so on a machine managing a few frames a second a four-second countdown
+  took most of a minute. `wallDt` is the real one; `dt` is only for the world.
+- **Reading a raw quaternion component as if it were an angle.** They are only
+  proportional near zero. A test asserting the car still steers under braking
+  read `body.rotation().y` and saw 0.007 against a 0.02 bar while the car was
+  rotating seventy degrees.
 - **Effects written only inside the frame loop.** `shoot` and the `?stage=&t=`
   harness step the world directly and never call `frame()`, so anything that
   only lives there produces nothing in any screenshot and looks broken when it

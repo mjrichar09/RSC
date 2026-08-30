@@ -92,6 +92,13 @@ export class Career {
     });
   }
 
+  /** Whether restart and rescue are offered in a career run. */
+  async setPractice(on: boolean): Promise<void> {
+    await this.save.update((p) => {
+      p.settings.practice = on;
+    });
+  }
+
   async setRaceNumber(value: number): Promise<void> {
     const clamped = Math.min(Math.max(Math.round(value), 1), 99);
     await this.save.update((p) => {

@@ -7,6 +7,7 @@
  * show up as a number rather than as "it feels different now".
  */
 
+import { clamp } from './math.js';
 import type { DriverInput } from './input.js';
 
 export interface TraceSegment {
@@ -19,6 +20,27 @@ export interface Trace {
   readonly name: string;
   readonly description: string;
   readonly segments: readonly TraceSegment[];
+  /**
+   * A closed-loop driver, for traces that ask a question an open-loop input
+   * cannot answer.
+   *
+   * "Can this car hold a drift" is one of them: with fixed inputs the answer
+   * depends on whether the recorded steer angle happens to suit the car, so
+   * changing the tuning changes what the trace is testing. Given the drift
+   * angle and the yaw rate, this steers the way a driver would — and then the
+   * measurement is about the car.
+   */
+  readonly drive?: (t: number, state: TraceState) => Partial<DriverInput>;
+}
+
+/** What a closed-loop trace gets to look at. Deliberately very little. */
+export interface TraceState {
+  /** Degrees between the nose and the direction of travel; signed. */
+  drift: number;
+  /** Degrees per second, positive turning right. */
+  yawRate: number;
+  /** Metres per second along the nose. */
+  speed: number;
 }
 
 export function traceDuration(trace: Trace): number {
@@ -26,7 +48,10 @@ export function traceDuration(trace: Trace): number {
 }
 
 /** Input at time `t` seconds into the trace. Past the end, everything releases. */
-export function sampleTrace(trace: Trace, t: number): DriverInput {
+export function sampleTrace(trace: Trace, t: number, state?: TraceState): DriverInput {
+  if (trace.drive && state) {
+    return { throttle: 0, brake: 0, steer: 0, handbrake: 0, ...trace.drive(t, state) };
+  }
   let acc = 0;
   for (const seg of trace.segments) {
     acc += seg.duration;
@@ -105,6 +130,44 @@ export const TRACES: Record<string, Trace> = {
       // angle by design, so measuring recovery needs a lift first.
       seg(1.5, { throttle: 0.45 }),
     ],
+  },
+
+  /**
+   * Held sideways, then swapped, by a driver rather than by a recording.
+   *
+   * Closed-loop on purpose. With fixed inputs the answer depends on whether
+   * the recorded steer angle happens to suit the car, so changing the tuning
+   * changes what the trace is testing — and every tuning A/B then measures the
+   * trace instead of the car. This one counter-steers proportionally to how
+   * far past the target the car has gone, the way a person does, and the
+   * target flips sign twice so the transitions are in the measurement.
+   */
+  drift: {
+    name: 'drift',
+    description:
+      'A driver holding a drift, then swapping it, twice. Says whether the car ' +
+      'can be driven sideways on purpose: a slide you can only survive is not a ' +
+      'drift, and a drift you cannot swap out of cannot be chained.',
+    segments: [seg(16, {})],
+    drive: (t, state) => {
+      if (t < 3) return { throttle: 1 };
+      // Provoke once, on the handbrake, and never again — everything after
+      // this has to come from the throttle and the steering.
+      if (t < 3.5) return { throttle: 0.6, steer: -0.8, handbrake: 1 };
+
+      // Thirty degrees, swapping sides every three and a half seconds.
+      const phase = Math.floor((t - 3.5) / 3.5) % 2;
+      const target = phase === 0 ? -30 : 30;
+      const error = target - state.drift;
+      // Counter-steer opposes the slide, so it works against the error; the
+      // yaw-rate term is the damping a driver applies without thinking about
+      // it, and without it this oscillates rather than settling.
+      const steer = clamp(-error * 0.055 - state.yawRate * 0.012, -1, 1);
+      // More throttle the further short of the angle it is: once the handbrake
+      // has let go, throttle is what holds it out.
+      const want = Math.min(Math.abs(state.drift) / Math.abs(target), 1);
+      return { throttle: 0.55 + (1 - want) * 0.45, steer };
+    },
   },
 
   circle: {

@@ -84,3 +84,73 @@ describe('start lights', () => {
     expect(lights.lamps).toBe(0);
   });
 });
+
+describe('timing the light', () => {
+  /** Run the countdown to the green, holding `throttle` throughout. */
+  const runTo = (lights: StartLights, throttle: number, after = 0) => {
+    const dt = 1 / 120;
+    lights.arm();
+    while (!lights.released) lights.update(dt, throttle);
+    for (let t = 0; t < after; t += dt) lights.update(dt, throttle);
+    return lights;
+  };
+
+  it('punishes sitting on the limiter through the countdown', () => {
+    const lights = runTo(new StartLights(), 1);
+    // The common mistake, and it has to be the slow way to leave the line —
+    // otherwise the countdown has no decision in it and the light is scenery.
+    expect(lights.launch).toBe('bogged');
+    expect(lights.throttleScale).toBeLessThan(1);
+  });
+
+  it('rewards going at the light', () => {
+    const lights = new StartLights();
+    const dt = 1 / 120;
+    lights.arm();
+    while (!lights.released) lights.update(dt, 0.4);
+    // Flat within a tenth of the green.
+    for (let t = 0; t < 0.1; t += dt) lights.update(dt, 1);
+    expect(lights.launch).toBe('perfect');
+    expect(lights.throttleScale).toBe(1);
+  });
+
+  it('calls a slow reaction slow, without taking anything away', () => {
+    const lights = new StartLights();
+    const dt = 1 / 120;
+    lights.arm();
+    while (!lights.released) lights.update(dt, 0);
+    for (let t = 0; t < 0.5; t += dt) lights.update(dt, 0);
+    for (let t = 0; t < 0.1; t += dt) lights.update(dt, 1);
+    expect(lights.launch).toBe('clean');
+    expect(lights.throttleScale).toBe(1);
+  });
+
+  it('recovers from a bogged launch rather than ruining the run', () => {
+    const lights = runTo(new StartLights(), 1);
+    const bogged = lights.throttleScale;
+    for (let t = 0; t < 2; t += 1 / 120) lights.update(1 / 120, 1);
+    expect(bogged).toBeLessThan(1);
+    expect(lights.throttleScale).toBe(1);
+  });
+
+  it('grades the launch once and does not change its mind', () => {
+    const lights = runTo(new StartLights(), 1, 1.5);
+    const first = lights.launch;
+    for (let t = 0; t < 2; t += 1 / 120) lights.update(1 / 120, 0.2);
+    expect(lights.launch).toBe(first);
+  });
+
+  it('holds without counting until somebody says go', () => {
+    const lights = new StartLights();
+    lights.hold();
+    for (let t = 0; t < 5; t += 1 / 120) lights.update(1 / 120, 1);
+    // A network race: the host holds the whole grid until every guest has a
+    // world, so a countdown that ran on its own would defeat the point.
+    expect(lights.holding).toBe(true);
+    expect(lights.lamps).toBe(0);
+    lights.arm();
+    expect(lights.holding).toBe(true);
+    for (let t = 0; t < 5; t += 1 / 120) lights.update(1 / 120, 0);
+    expect(lights.released).toBe(true);
+  });
+});

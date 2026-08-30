@@ -30,6 +30,16 @@ export interface ReplayHandle {
   yaw: number;
   /** Orthographic half-height. */
   zoom: number;
+  /**
+   * An automatic replay: the crash cinematic, not photo mode.
+   *
+   * Plays itself, shows a banner instead of the scrub controls, ignores every
+   * key except the one that skips it, and closes when it reaches the end. The
+   * point of it is that a crash you only saw from the driving camera did not
+   * look like anything happened — slowing the world down at a fixed isometric
+   * angle just makes a slow crash.
+   */
+  auto?: { label: string; until: number };
 }
 
 const EIGHTH = Math.PI / 4;
@@ -75,6 +85,12 @@ export class ReplayUi {
     this.root.innerHTML = '';
   }
 
+  /** True when an automatic replay has run to its end and should close. */
+  get finished(): boolean {
+    const handle = this.handle;
+    return handle?.auto !== undefined && handle.time >= handle.auto.until;
+  }
+
   /** Advance the playhead. Returns the time to pose the car at. */
   advance(dt: number): number {
     const handle = this.handle;
@@ -93,6 +109,15 @@ export class ReplayUi {
   private key(event: KeyboardEvent): void {
     const handle = this.handle;
     if (!handle) return;
+    // An automatic replay is not a mode the player is in, it is something
+    // happening to them. The only control it offers is getting out of it.
+    if (handle.auto) {
+      if (event.code === 'Escape' || event.code === 'Space' || event.code === 'KeyP') {
+        event.preventDefault();
+        this.onExit?.();
+      }
+      return;
+    }
     const step = event.shiftKey ? 0.1 : 0.5;
 
     switch (event.code) {
@@ -153,6 +178,15 @@ export class ReplayUi {
     const handle = this.handle;
     if (!handle) return;
     const progress = handle.player.duration > 0 ? handle.time / handle.player.duration : 0;
+
+    if (handle.auto) {
+      this.root.innerHTML = `
+        <div class="replay-bar">
+          <div class="replay-fill" style="width:${(progress * 100).toFixed(1)}%"></div>
+        </div>
+        <div class="replay-slug">${handle.auto.label}</div>`;
+      return;
+    }
 
     this.root.innerHTML = `
       <div class="replay-bar">

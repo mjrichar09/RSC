@@ -97,6 +97,8 @@ export interface GuestOptions {
   onLobby?: (players: PlayerInfo[], pick: { stageId: string; variantId: string }) => void;
   /** The host has started a race; build a world for this setup and `attach` it. */
   onStart?: (setup: RaceSetup) => void;
+  /** Everybody is on the grid: start the countdown. */
+  onGo?: () => void;
   /** Somebody finished or retired. */
   onResult?: (player: PlayerId, time: number | null, retired: boolean) => void;
   /** The host hung up, or refused us. */
@@ -269,6 +271,13 @@ export class RaceGuest {
         this.players = message.setup.players;
         this.started = true;
         this.options.onStart?.(message.setup);
+        // Report in. The host holds the whole grid until everyone has a world,
+        // so the green comes up at the same moment on every screen rather than
+        // whenever each machine happened to finish loading.
+        this.link.send({ t: 'ready', ready: true });
+        break;
+      case 'go':
+        this.options.onGo?.();
         break;
       case 'snap':
         this.absorb(message.cars, message.time);

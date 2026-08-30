@@ -441,8 +441,30 @@ const params = new URLSearchParams(location.search);
     stuckFor = 0;
   };
 
-  controls.onReset = restart;
+  /**
+   * Practice aids, and where they stop.
+   *
+   * A career run you can restart the instant it goes wrong has no consequences
+   * in it, which is what the damage model and the economy are for. Arcade
+   * banks nothing, so it keeps them; a career only has them while the practice
+   * setting is on. The automatic rescue for a genuinely beached car stays
+   * either way — that is not an aid, it is the alternative to sitting in a
+   * ditch until the timeout.
+   */
+  const practiceAllowed = () => mode !== 'career' || career.profile.settings.practice;
+
+  controls.onReset = () => {
+    if (!practiceAllowed()) {
+      damagePanel.notice('No restarts in a career run — finish it or retire.');
+      return;
+    }
+    restart();
+  };
   controls.onRescue = () => {
+    if (!practiceAllowed()) {
+      damagePanel.notice('No rescues in a career run — the car has to get itself out.');
+      return;
+    }
     world.rescue(race?.furthest);
     stuckFor = 0;
   };
@@ -470,10 +492,24 @@ const params = new URLSearchParams(location.search);
       ...(start.slots ? { slots: start.slots } : {}),
     });
 
+    // Nobody counts down yet. Building a world is asynchronous and takes a
+    // different amount of time on every machine, so a countdown armed by
+    // `loadStage` put the green up at a different instant on each screen — and
+    // the joiner was still on the line while the host was two corners away.
+    // The host releases the whole grid once everyone has reported in.
+    lights.hold();
+    start.onGo?.(() => lights.arm());
+
     // The host is the authority and starts the clock; a guest hands its world
     // over and is corrected toward the host's from the first snapshot.
     if (start.host) start.host.start(start.setup, world);
     else start.guest!.attach(world);
+
+    // A guest that never reports in cannot hold the grid forever.
+    if (start.host) {
+      const host = start.host;
+      window.setTimeout(() => host.releaseGrid(), 8000);
+    }
 
     session = new MultiplayerSession(
       { ...(start.host ? { host: start.host } : {}), ...(start.guest ? { guest: start.guest } : {}) },
@@ -612,7 +648,60 @@ const params = new URLSearchParams(location.search);
     mixer.quiet();
   };
 
-  replayUi.onExit = () => replayUi.close();
+  /**
+   * The crash, played back from somewhere you can see it.
+   *
+   * Slowing the world down was not enough on its own: at a fixed isometric
+   * camera a slow crash is a slow crash, and it did not read as the game
+   * reacting to anything. This cuts to the last two and a half seconds from an
+   * angle three eighths round from the one being driven, close in, at a third
+   * speed — and then puts the player back exactly where they were.
+   *
+   * Never in a network race: the world is paused while it plays, and pausing
+   * one client desynchronises it from the host. Never on top of photo mode,
+   * which the player opened on purpose.
+   */
+  const showCrashReplay = () => {
+    if (session || replayUi.active || garage.isOpen || menu.isOpen || freeRoam) return;
+    if (!stage || !race || race.phase !== 'running' || recorder.frameCount < 8) return;
+    // The live value, not the stored one: `?drama=0` and the K key both set
+    // this, and the stored setting is only where it starts. Reading the profile
+    // meant the harness asked for no cinematic and got one anyway.
+    if (drama.strength <= 0) return;
+
+    const ghost = recorder.finish(currentKey(), race.time);
+    const player = new GhostPlayer(ghost);
+    const from = Math.max(player.duration - 2.5, 0);
+    replayUi.open({
+      player,
+      time: from,
+      playing: true,
+      rate: 0.34,
+      // Three eighths round, so the impact is seen across the car rather than
+      // down the same line it was driven into.
+      yaw: camera.yaw + Math.PI * 0.75,
+      zoom: 8,
+      auto: { label: 'REPLAY', until: player.duration },
+    });
+    // Where the race clock has to be put back to: the replay pauses the world,
+    // and a crash that gave you two free seconds would be worth having.
+    crashReplayFrom = race.time;
+    mixer.quiet();
+  };
+
+  /** Race time when the crash replay started, so the clock can be made whole. */
+  let crashReplayFrom: number | null = null;
+
+  const endCrashReplay = () => {
+    replayUi.close();
+    // The world resumes from exactly where it stopped, so nothing is owed —
+    // but `settleRun` and the ghost both read `race.time`, and the frame that
+    // closes the replay must not hand back a clock that drifted while paused.
+    if (crashReplayFrom !== null && race) race.time = crashReplayFrom;
+    crashReplayFrom = null;
+  };
+
+  replayUi.onExit = () => (replayUi.state?.auto ? endCrashReplay() : replayUi.close());
   replayUi.onCapture = () => {
     // The canvas has to be read in the same tick it was drawn — a WebGL context
     // without `preserveDrawingBuffer` is empty by the next one — so the capture
@@ -1008,6 +1097,10 @@ const params = new URLSearchParams(location.search);
         // The crowd scatters as the car arrives, and a screenshot taken at the
         // end of a seek should show a scattered crowd rather than a tidy one.
         stageView?.crowd.update(world.dt, world.state().position);
+        // And the run is recorded, the way a player's is — the crash replay
+        // plays back the ghost recording, so without this there is nothing for
+        // the harness to photograph.
+        if (race!.phase === 'running') recorder.capture(race!.time, race!.furthest, world.state());
       }
       if (crashFor > 0) {
         const until = world.time + crashFor;
@@ -1041,6 +1134,10 @@ const params = new URLSearchParams(location.search);
       raceHud.update(race!, world.damage);
       updateStandings();
       raceHud.setNotes(cornersAhead(stage!.corners, race!.furthest, 2));
+      // `?replay=1` opens the crash replay on whatever has just happened. It is
+      // otherwise only reachable by crashing hard enough, in a real browser, at
+      // the right moment, which is not a thing a screenshot can wait for.
+      if (params.has('replay')) showCrashReplay();
       minimap.update(world.state().position, race!.progress);
       damagePanel.update(world.damage!);
       hud.update(world.state(), 60);
@@ -1388,7 +1485,14 @@ const params = new URLSearchParams(location.search);
   let fps = 60;
 
   const frame = (now: number) => {
-    const dt = Math.min((now - last) / 1000, 0.1);
+    // Two clocks. `dt` is capped so a stall cannot hand the physics accumulator
+    // a second of time to catch up on in one frame; `wallDt` is the real one,
+    // for anything a player experiences as a duration. The start countdown ran
+    // on the capped clock, so on a machine managing a few frames a second the
+    // four-second countdown took the best part of a minute — and the automated
+    // browser checks, which run through software WebGL, sat through all of it.
+    const wallDt = Math.min((now - last) / 1000, 0.5);
+    const dt = Math.min(wallDt, 0.1);
     last = now;
     fps += (1 / Math.max(dt, 1e-4) - fps) * 0.08;
 
@@ -1396,23 +1500,31 @@ const params = new URLSearchParams(location.search);
     // it takes no input while a menu is up.
     if (replayUi.active) {
       drawReplay(dt);
+      // An automatic replay closes itself; photo mode waits for the player.
+      if (replayUi.finished) endCrashReplay();
       requestAnimationFrame(frame);
       return;
     }
 
     // The start. While the lamps are lit the car is held on the line: the
     // handbrake is on and nothing the player does reaches the wheels.
-    const lit = lights.update(dt);
+    const driving = garage.isOpen || multiplayer.isOpen || menu.isOpen ? NEUTRAL_INPUT : controls.sample(dt);
+    const lit = lights.update(wallDt, driving.throttle);
     if (lit) mixer.startLight(lit === 'go');
     stageView?.startLights.set(lights.lamps, lights.greenFor > 0);
-    raceHud.setLights(lights.holding ? lights.lamps : 0, lights.greenFor > 0);
+    raceHud.setLights(lights.holding ? lights.lamps : 0, lights.greenFor > 0, lights.launch);
 
     const held = lights.holding && race !== null;
     const input = held
-      ? { ...NEUTRAL_INPUT, handbrake: 1 }
-      : garage.isOpen || multiplayer.isOpen || menu.isOpen
-        ? NEUTRAL_INPUT
-        : controls.sample(dt);
+      ? // The throttle still reaches the engine while the car is held: the revs
+        // are what there is to time, and a countdown you can only watch is a
+        // countdown with no decision in it. The handbrake holds the car.
+        { ...NEUTRAL_INPUT, throttle: driving.throttle, handbrake: 1 }
+      : // A launch fluffed by sitting on the limiter through the whole
+        // countdown does not hook up. This is the only place the start can
+        // cost you anything, and it is what makes timing the light worth more
+        // than holding the pedal down.
+        { ...driving, throttle: driving.throttle * lights.throttleScale };
     // The crash cinematic runs on the clock the world sees, not on the frame
     // clock: the accumulator is simply fed less real time, so the fixed 120 Hz
     // step, the physics and the netcode are all untouched. Never in a network
@@ -1442,7 +1554,7 @@ const params = new URLSearchParams(location.search);
         mixer.impact(severity);
         // Only a hit worth watching gets the cinematic; `hit` decides, and
         // returns false for everything below its own threshold.
-        if (!session) drama.hit(world.lastImpact);
+        if (!session && drama.hit(world.lastImpact)) showCrashReplay();
       }
 
       // What happened first, then what it broke.

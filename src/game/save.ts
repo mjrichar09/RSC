@@ -77,9 +77,22 @@ export interface Settings {
    * change if we decide against it.
    */
   drama: number;
+  /**
+   * Practice aids: restart (R) and rescue (Q).
+   *
+   * They do not belong in a career — a career run you can restart the instant
+   * it goes wrong has no consequences in it, which is the whole point of the
+   * damage model and the economy. They stay available in arcade, which banks
+   * nothing anyway, and this switch is what keeps them to hand while the game
+   * is being built and tested.
+   *
+   * Default on for now. Shipping means turning it off here, and everything
+   * else already reads it.
+   */
+  practice: boolean;
 }
 
-export const DEFAULT_SETTINGS: Settings = { vision: 0.6, drama: 1 };
+export const DEFAULT_SETTINGS: Settings = { vision: 0.6, drama: 1, practice: true };
 
 /** Exposed for tests: bringing a stored profile up to date and making it safe. */
 export { migrate as migrateProfile };
@@ -142,6 +155,10 @@ function migrate(stored: unknown): Profile {
       ? {
           vision: clamp01(number(stored.settings.vision, DEFAULT_SETTINGS.vision)),
           drama: clamp01(number(stored.settings.drama, DEFAULT_SETTINGS.drama)),
+          practice:
+            typeof stored.settings.practice === 'boolean'
+              ? stored.settings.practice
+              : DEFAULT_SETTINGS.practice,
         }
       : { ...DEFAULT_SETTINGS },
   };

@@ -223,6 +223,58 @@ describe('the lobby between races', () => {
   });
 });
 
+describe('a level grid', () => {
+  it('holds the countdown until every guest has a world', async () => {
+    const wire = new LoopbackWire();
+    let hostGo = 0;
+    const host = new RaceHost({ onGo: () => hostGo++ });
+    host.accept(wire.a);
+    let guestGo = 0;
+    new RaceGuest(wire.b, { onGo: () => guestGo++ });
+    wire.flush();
+
+    const world = await createWorld({ baseSurface: 'tarmac', cars: 2 });
+    host.start(SETUP, world);
+    // The guest has been told what to build but has not said it is ready, so
+    // nobody counts down yet. Building a world is asynchronous and takes a
+    // different length of time on every machine — each side running its own
+    // countdown from whenever it finished loading is what left the joiner on
+    // the line while the host was two corners away.
+    expect(hostGo).toBe(0);
+
+    // `RaceGuest` reports in on `start`, so one flush is the whole handshake.
+    wire.flush();
+    expect(hostGo).toBe(1);
+    expect(guestGo).toBe(1);
+  });
+
+  it('releases the grid anyway when a guest never reports in', async () => {
+    const wire = new LoopbackWire();
+    let hostGo = 0;
+    const host = new RaceHost({ onGo: () => hostGo++ });
+    host.accept(wire.a);
+    new RaceGuest(wire.b);
+    wire.flush();
+
+    const world = await createWorld({ baseSurface: 'tarmac', cars: 2 });
+    host.start(SETUP, world);
+    // Whatever happened to them, the race cannot wait forever.
+    host.releaseGrid();
+    expect(hostGo).toBe(1);
+    // And it only ever fires once.
+    host.releaseGrid();
+    expect(hostGo).toBe(1);
+  });
+
+  it('counts down immediately for a host racing alone', async () => {
+    let hostGo = 0;
+    const host = new RaceHost({ onGo: () => hostGo++ });
+    const world = await createWorld({ baseSurface: 'tarmac' });
+    host.start(SETUP, world);
+    expect(hostGo).toBe(1);
+  });
+});
+
 describe('the grid, as two copies of it', () => {
   it('spawns the guest on its own slot rather than on pole', async () => {
     // The guest keeps its own car at index 0 locally, which would put it on

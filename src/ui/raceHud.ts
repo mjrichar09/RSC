@@ -9,6 +9,7 @@
 
 import type { SettleResult } from '../game/career.js';
 import type { Medal, Race } from '../game/race.js';
+import type { LaunchQuality } from '../game/startLights.js';
 import type { DamageModel } from '../sim/damage.js';
 import type { Stage } from '../sim/stage.js';
 import type { UpcomingCorner } from '../sim/corners.js';
@@ -25,6 +26,14 @@ const MEDAL_LABEL: Record<Medal, string> = {
   silver: 'SILVER',
   bronze: 'BRONZE',
   finish: 'FINISHED',
+};
+
+/** What the HUD calls each launch. Short, because it is on screen for a second. */
+const LAUNCH_WORD: Record<LaunchQuality, string> = {
+  perfect: 'PERFECT START',
+  clean: 'GOOD START',
+  late: 'SLOW AWAY',
+  bogged: 'BOGGED DOWN',
 };
 
 export class RaceHud {
@@ -127,8 +136,8 @@ export class RaceHud {
    * camera can be anywhere on the apron when a race begins, and a countdown you
    * might be looking away from is not a countdown.
    */
-  setLights(reds: number, go: boolean): void {
-    const key = `${reds}:${go}`;
+  setLights(reds: number, go: boolean, launch: LaunchQuality | null = null): void {
+    const key = `${reds}:${go}:${launch ?? ''}`;
     if (key === this.lightsKey) return;
     this.lightsKey = key;
 
@@ -139,9 +148,13 @@ export class RaceHud {
     const lamps = [0, 1, 2]
       .map((i) => `<i class="${go ? 'go' : i < reds ? 'lit' : ''}"></i>`)
       .join('');
+    // Once the launch has been graded the word says how it went rather than
+    // "GO" — the whole point of timing the light is that you find out.
+    const word = launch ? LAUNCH_WORD[launch] : go ? 'GO' : 'READY';
+    const tone = launch ? `launch-${launch}` : go ? 'go' : '';
     this.lights.innerHTML = `
       <div class="lights-row">${lamps}</div>
-      <div class="lights-word ${go ? 'go' : ''}">${go ? 'GO' : 'READY'}</div>`;
+      <div class="lights-word ${tone}">${word}</div>`;
   }
 
   setNotes(upcoming: UpcomingCorner[]): void {

@@ -9,6 +9,7 @@
 import { Race } from '../game/race.js';
 import { Driver, type DriverOptions } from './driver.js';
 import type { Conditions } from './conditions.js';
+import type { VehicleTuning } from '../data/tuning.js';
 import { type Ghost, GhostRecorder } from './replay.js';
 import type { Stage } from './stage.js';
 import { TelemetryRecorder, type TelemetrySummary } from './telemetry.js';
@@ -35,6 +36,13 @@ export interface StageRunResult {
 
 export interface StageRunOptions {
   driver?: DriverOptions;
+  /**
+   * Tuning overrides, so a handling change can be checked against every stage
+   * before it is committed. `npm run stages -- --set=…` was documented as
+   * working and was not wired up at all, which made "the AI still gets round"
+   * a vacuous check — it was driving the committed tuning every time.
+   */
+  tuning?: Partial<VehicleTuning>;
   /** Race the stage under these conditions. Defaults to clear daylight. */
   conditions?: Conditions;
   /** Give up after this many simulated seconds. */
@@ -70,6 +78,7 @@ export interface ValidationResult {
 export async function validateStage(
   stage: Stage,
   conditions?: Conditions,
+  tuning?: Partial<VehicleTuning>,
 ): Promise<ValidationResult> {
   const budgets = [0.55, 0.75, 0.95];
   let best: number | null = null;
@@ -82,6 +91,7 @@ export async function validateStage(
       driver: { gripBudget },
       recordGhost: false,
       ...(conditions ? { conditions } : {}),
+      ...(tuning ? { tuning } : {}),
     });
     rescues = Math.max(rescues, result.rescues);
     if (result.finished && result.time !== null) {
@@ -126,6 +136,7 @@ export async function runStage(
     stage,
     ...(options.conditions ? { conditions: options.conditions } : {}),
     ...(options.damage ? { damage: true } : {}),
+    ...(options.tuning ? { tuning: options.tuning } : {}),
   });
   // The driver is told what it is driving in: a lap in the wet is planned in
   // the wet, or it brakes for every corner as though the road were dry.

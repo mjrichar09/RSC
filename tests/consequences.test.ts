@@ -146,11 +146,19 @@ describe('a terminal failure', () => {
 
   it('still brakes and still steers', async () => {
     const world = await boil();
-    const heading = world.vehicle.body.rotation().y;
+    // Yaw, not the quaternion's y component. Those are only proportional near
+    // zero, and the car turns most of a right angle here: read off the raw
+    // component this looked like 0.007 of *something* and failed a 0.02 bar,
+    // while the car was in fact rotating seventy degrees.
+    const yaw = () => {
+      const q = world.vehicle.body.rotation();
+      return Math.atan2(2 * (q.w * q.y), 1 - 2 * q.y * q.y);
+    };
+    const before = yaw();
     // Three seconds of brake from about 95 km/h, with the wheel on full lock.
     for (let i = 0; i < 360; i++) world.step({ ...NEUTRAL, brake: 1, steer: 1 });
     expect(Math.abs(world.state().speed)).toBeLessThan(3);
-    expect(Math.abs(world.vehicle.body.rotation().y - heading)).toBeGreaterThan(0.02);
+    expect(Math.abs(yaw() - before)).toBeGreaterThan(0.2);
   });
 });
 

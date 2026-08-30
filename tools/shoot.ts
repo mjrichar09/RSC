@@ -34,6 +34,9 @@ const grip = arg('grip', '0.6');
 /** `--loosen=15000` works the nose mounts loose, in N·s, then runs `--after` seconds. */
 const loosenArg = arg('loosen', '');
 const afterArg = arg('after', '');
+/** `--replay` opens the crash replay on the frame the seek ends at. */
+const replayArg = process.argv.includes('--replay');
+
 /** `--vision=0.6` scales the windscreen effect; `vis<N>:` does it per cell. */
 const visionArg = arg('vision', '');
 /** `--sign=2` centres the camera on that corner board. */
@@ -117,7 +120,7 @@ const cells = cellSpec.split(',').map((spec) => {
         withGhost ? '&ghost=1' : ''
       }${crashFor ? `&crash=${crashFor}` : ''}${hotFor ? `&brakes=${hotFor}` : ''}${zoomArg ? `&zoom=${zoomArg}` : ''}${looseFor ? `&loosen=${looseFor}` : ''}${afterFor ? `&after=${afterFor}` : ''}${
         wreckMatch ? `&wreck=${wreckMatch[1]}` : ''
-      }${signArg ? `&sign=${signArg}` : ''}${visionFor ? `&vision=${visionFor}` : ''}${carsArg ? `&cars=${carsArg}` : ''}${boilArg ? `&boil=${boilArg}` : ''}${knockArg ? `&knock=${knockArg}` : ''}${lightsArg ? `&lights=${lightsArg}` : ''}${awardArg ? `&award=${awardArg}` : ''}`;
+      }${signArg ? `&sign=${signArg}` : ''}${visionFor ? `&vision=${visionFor}` : ''}${carsArg ? `&cars=${carsArg}` : ''}${boilArg ? `&boil=${boilArg}` : ''}${knockArg ? `&knock=${knockArg}` : ''}${lightsArg ? `&lights=${lightsArg}` : ''}${awardArg ? `&award=${awardArg}` : ''}${replayArg ? '&replay=1' : ''}`;
   return {
     url,
     label: `${id}${useVariant ? ` ${useVariant}` : ''} @ ${seconds}s${withGhost ? ' + ghost' : ''}${

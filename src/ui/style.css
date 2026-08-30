@@ -1335,3 +1335,32 @@ html, body {
   vertical-align: -1px;
   box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.4);
 }
+
+/* The crash replay's only chrome. Big, brief, and centred high enough to leave
+   the car in the middle of the frame — the point of the replay is the car. */
+.replay-slug {
+  position: absolute;
+  top: 12%;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font: 700 clamp(22px, 4.4vw, 54px)/1 var(--display, ui-monospace, monospace);
+  letter-spacing: 0.18em;
+  color: #ffd9a0;
+  text-shadow: 0 2px 18px rgb(0 0 0 / 0.85);
+  pointer-events: none;
+  animation: replay-slug-in 0.35s ease-out;
+}
+
+@keyframes replay-slug-in {
+  from { opacity: 0; transform: translateY(-12px) scale(0.94); }
+  to { opacity: 1; transform: none; }
+}
+
+/* How the start went. Green for a launch you timed, amber for a late one, and
+   a flat grey-red for sitting on the limiter through the countdown — which is
+   the common mistake and has to look like one. */
+.lights-word.launch-perfect { color: #7ef0a2; }
+.lights-word.launch-clean { color: #bfe8a0; }
+.lights-word.launch-late { color: #e8c86a; }
+.lights-word.launch-bogged { color: #d67a63; }

@@ -48,6 +48,8 @@ export interface HostOptions {
   onLobby?: (players: PlayerInfo[]) => void;
   /** Called when a player finishes or retires. */
   onResult?: (player: PlayerId, time: number | null, retired: boolean) => void;
+  /** Everybody has a world; start the countdown. */
+  onGo?: () => void;
 }
 
 /** Seconds of silence before a guest's car stops being driven by them. */
@@ -139,6 +141,13 @@ export class RaceHost {
 
     switch (message.t) {
       case 'ready':
+        // Before the start this is lobby readiness. After it, it is a guest
+        // saying its world is built and it is on the grid.
+        if (this.started) {
+          this.waitingFor.delete(guest.id);
+          if (this.waitingFor.size === 0) this.releaseGrid();
+          break;
+        }
         guest.info.ready = message.ready;
         this.broadcastLobby();
         break;
@@ -205,13 +214,44 @@ export class RaceHost {
     );
   }
 
-  /** Tell everyone what is being raced and when it begins. */
+  /**
+   * Tell everyone what is being raced.
+   *
+   * The countdown does *not* start here. Building a world is asynchronous and
+   * takes a different amount of time on every machine, so each side running
+   * its own countdown from the moment it finished loading put the green up at
+   * a different instant on every screen. The host waits until everyone has a
+   * world and then sends one `go`; what is left is one-way latency, which is
+   * tens of milliseconds rather than seconds.
+   */
   start(setup: Omit<RaceSetup, 'players'>, world: SimWorld): void {
     this.setup = { ...setup, players: this.players.map((player) => ({ ...player })) };
     this.world = world;
     this.started = true;
+    this.waitingFor = new Set(this.guests.keys());
     this.broadcast({ t: 'start', setup: this.setup, at: 0 });
+    // A host racing alone has nobody to wait for.
+    if (this.waitingFor.size === 0) this.releaseGrid();
   }
+
+  /** Guests who have not yet said they have a world. */
+  private waitingFor = new Set<PlayerId>();
+
+  /**
+   * Everybody is on the grid: count down.
+   *
+   * Also the deadline: a guest that never reports in cannot hold the race up
+   * forever, so `main.ts` gives this a few seconds and then calls it anyway.
+   */
+  releaseGrid(): void {
+    if (this.gridReleased) return;
+    this.waitingFor.clear();
+    this.gridReleased = true;
+    this.broadcast({ t: 'go' });
+    this.options.onGo?.();
+  }
+
+  private gridReleased = false;
 
   /**
    * Advance one fixed step, using whatever each guest last sent.
@@ -326,6 +366,8 @@ export class RaceHost {
   /** Let everyone back into the lobby to pick again. */
   reopen(): void {
     this.started = false;
+    this.gridReleased = false;
+    this.waitingFor.clear();
     for (const player of this.players) player.ready = player.host;
     this.broadcastLobby();
   }

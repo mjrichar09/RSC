@@ -25,6 +25,8 @@ type Screen = 'choose' | 'host' | 'join';
 export interface LobbyStart {
   host?: RaceHost;
   guest?: RaceGuest;
+  /** Fires when the host says the whole grid is built and the lights can run. */
+  onGo?: (run: () => void) => void;
   setup: RaceSetup;
   /** How many cars the world needs. */
   cars: number;
@@ -64,6 +66,8 @@ export class MultiplayerPanel {
   private pick: { stageId: string; variantId: string } | null = null;
   /** Who has crossed the line in the current race, in the order they did. */
   private readonly finished = new Map<number, number>();
+  /** What to do when the grid is released. Set by whoever starts the race. */
+  private go: (() => void) | null = null;
 
   constructor(parent: HTMLElement) {
     this.root = document.createElement('div');
@@ -161,6 +165,7 @@ export class MultiplayerPanel {
         this.render();
       },
       onResult: (player, time, retired) => this.noteResult(player, time, retired),
+      onGo: () => this.go?.(),
     });
     this.players = this.host.players;
     this.screen = 'host';
@@ -240,7 +245,14 @@ export class MultiplayerPanel {
     };
     this.finished.clear();
     this.setOpen(false);
-    this.onRace?.({ host, setup, cars: host.playerCount });
+    this.onRace?.({
+      host,
+      setup,
+      cars: host.playerCount,
+      onGo: (run) => {
+        this.go = run;
+      },
+    });
   }
 
   /**
@@ -338,8 +350,12 @@ export class MultiplayerPanel {
             setup,
             cars: Math.max(setup.players.length, guest.car + 1),
             slots: guest.slots,
+            onGo: (run) => {
+              this.go = run;
+            },
           });
         },
+        onGo: () => this.go?.(),
         onClose: () => this.say('The host disconnected.'),
       });
       void connected

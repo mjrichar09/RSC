@@ -76,12 +76,19 @@ export class EngineVoice {
     // throttle is mostly fundamental and rumble. Holding the mix fixed and
     // only changing the level is what makes synthesised engines sound like a
     // tone control rather than an engine.
+    //
+    // Weighted down an octave from where it started. The fundamental is
+    // rpm/30, which is only 253 Hz at the limiter, but the harmonic stack sat
+    // most of its energy at 3x and 4.5x — 760 and 1140 Hz — and a square wave
+    // at 1140 Hz is a whine rather than an engine. The half-order rumble and
+    // the fundamental carry it now, the 4.5 is gone entirely, and the upper
+    // pair is quiet enough to be bark rather than tone.
     for (const [ratio, offLoad, onLoad, type] of [
-      [0.5, 0.62, 0.42, 'sawtooth'],
+      [0.25, 0.34, 0.30, 'sine'],
+      [0.5, 0.78, 0.66, 'sawtooth'],
       [1, 0.85, 1.0, 'sawtooth'],
-      [2, 0.12, 0.44, 'square'],
-      [3, 0.04, 0.22, 'sawtooth'],
-      [4.5, 0.02, 0.12, 'square'],
+      [2, 0.10, 0.30, 'square'],
+      [3, 0.03, 0.12, 'sawtooth'],
     ] as const) {
       const osc = ctx.createOscillator();
       osc.type = type;
@@ -97,7 +104,7 @@ export class EngineVoice {
     noise.loop = true;
     const band = ctx.createBiquadFilter();
     band.type = 'bandpass';
-    band.frequency.value = 900;
+    band.frequency.value = 620;
     band.Q.value = 0.7;
     this.induction = ctx.createGain();
     this.induction.gain.value = 0;
@@ -109,7 +116,7 @@ export class EngineVoice {
     // noise, which is a thing you hear before you see it in the repair bill.
     this.whistle = ctx.createOscillator();
     this.whistle.type = 'triangle';
-    this.whistle.frequency.value = 1200;
+    this.whistle.frequency.value = 700;
     this.whistleGain = ctx.createGain();
     this.whistleGain.gain.value = 0;
     // Straight to the output rather than through the engine's low-pass: a
@@ -150,7 +157,10 @@ export class EngineVoice {
     }
 
     // Opening the filter with load is what makes power audible.
-    const cutoff = 240 + load * 2900 + revs * 2400 + (1 - input.health) * 400;
+    // Pulled down with the harmonics: the filter used to open to 5.5 kHz,
+    // which let the top of the stack through at full volume at exactly the
+    // revs a player spends most of their time at.
+    const cutoff = 200 + load * 1700 + revs * 1300 + (1 - input.health) * 400;
     this.filter.frequency.setTargetAtTime(cutoff, now, smooth);
     this.induction.gain.setTargetAtTime(0.04 + load * 0.2 * revs, now, smooth);
 
@@ -184,7 +194,12 @@ export class EngineVoice {
     const rate = wanted > this.boost ? 1.8 : 6;
     this.boost += (wanted - this.boost) * Math.min(rate * dt, 1);
 
-    this.whistle.frequency.setTargetAtTime(1300 + this.boost * 3400 + revs * 900, now, 0.06);
+    // An octave down. This is the actual whine: a triangle sweeping to 5.6 kHz
+    // under boost, sitting on top of everything else and never filtered,
+    // because it is deliberately routed around the engine's low-pass. It tops
+    // out around 2.5 kHz now, which still reads as a turbo and no longer
+    // reads as a dentist.
+    this.whistle.frequency.setTargetAtTime(680 + this.boost * 1500 + revs * 420, now, 0.06);
     this.whistleGain.gain.setTargetAtTime(this.boost * this.boost * 0.05, now, 0.06);
 
     // Dump valve: a sharp lift with boost up. The chirp is the sound of a

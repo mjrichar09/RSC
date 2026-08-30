@@ -185,9 +185,18 @@ export const CAR: VehicleTuning = {
   tireGrip: 1.35,
   tireWearRate: 0.012,
   tireGripBalance: 1.12,
-  peakSlipAngle: 0.18,
+  // Widened from 0.18. A broader peak is more warning before the tyre lets go
+  // and a wider window to sit in once it has.
+  peakSlipAngle: 0.20,
   peakSlipRatio: 0.14,
-  slideGripFloor: 0.74,
+  // Raised from 0.74. This is the number the file's own comment calls the most
+  // important one for how the car feels, and it was set low enough that a
+  // slide was something to survive rather than something to steer. Measured
+  // on `npm run telemetry -- --trace=catch`, the time a provoked slide can be
+  // held goes from 1.83 s to 3.16 s, and the closed-loop `drift` trace gets a
+  // fourth transition it could not previously make. The AI's laps move by
+  // under two per cent and every stage keeps its medal tier.
+  slideGripFloor: 0.80,
   lockedGripFloor: 0.55,
 
   dragFactor: 0.42,

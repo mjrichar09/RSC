@@ -18,6 +18,11 @@ function axleSlip(s: VehicleState, i0: number): number {
   return (((a + b) / 2) * 180) / Math.PI;
 }
 
+/** Sideways enough to be a drift rather than a line. Degrees. */
+const DRIFT_FLOOR = 12;
+/** Past this the car is not drifting, it is spinning. Degrees. */
+const SPIN_ANGLE = 55;
+
 export interface TelemetrySample {
   t: number;
   x: number;
@@ -56,6 +61,25 @@ export interface TelemetrySummary {
   /** Seconds from 0 to 100 km/h, or null if never reached. */
   zeroToHundred: number | null;
   maxDriftDeg: number;
+  /**
+   * The longest unbroken stretch held sideways, seconds.
+   *
+   * Between `DRIFT_FLOOR` and `SPIN_ANGLE` degrees, above walking pace, with
+   * the car still going roughly where it is pointed. This is the number that
+   * says whether a slide is a *drift* or an accident: `maxDriftDeg` counts a
+   * spin as a triumph, and `timeSliding` counts a tyre being over its peak for
+   * a tenth of a second on the way into a corner.
+   */
+  longestDrift: number;
+  /** Peak drift angle reached during that stretch, degrees. */
+  heldDriftDeg: number;
+  /**
+   * How many separate stretches were held.
+   *
+   * Chaining is the thing: one long drift and two drifts with a transition
+   * between them are very different cars, and only this tells them apart.
+   */
+  driftRuns: number;
   /** Seconds spent with any tire past its grip peak. */
   timeSliding: number;
   /**
@@ -116,6 +140,9 @@ export class TelemetryRecorder {
         avgSpeedKph: 0,
         zeroToHundred: null,
         maxDriftDeg: 0,
+        longestDrift: 0,
+        heldDriftDeg: 0,
+        driftRuns: 0,
         timeSliding: 0,
         timeAirborne: 0,
         peakBrakeC: null,
@@ -130,6 +157,11 @@ export class TelemetryRecorder {
     let top = 0;
     let maxDrift = 0;
     let zeroToHundred: number | null = null;
+    let driftRun = 0;
+    let driftPeak = 0;
+    let longestDrift = 0;
+    let heldDrift = 0;
+    let driftRuns = 0;
 
     for (let i = 0; i < n; i++) {
       const s = this.samples[i]!;
@@ -144,6 +176,24 @@ export class TelemetryRecorder {
       if (kph > top) top = kph;
       if (zeroToHundred === null && kph >= 100) zeroToHundred = s.t;
       if (s.drift > maxDrift) maxDrift = s.drift;
+
+      // Held sideways, rather than merely sideways. A spin passes through every
+      // angle on its way round, so the upper bound is what separates a drift
+      // from losing it, and the run has to be unbroken to count.
+      const held = s.drift >= DRIFT_FLOOR && s.drift <= SPIN_ANGLE && Math.abs(s.speed) > 4;
+      if (held && prev) {
+        // A stretch counts once it has lasted long enough to have been meant.
+        if (driftRun <= 0.4 && driftRun + (s.t - prev.t) > 0.4) driftRuns++;
+        driftRun += s.t - prev.t;
+        driftPeak = Math.max(driftPeak, s.drift);
+        if (driftRun > longestDrift) {
+          longestDrift = driftRun;
+          heldDrift = driftPeak;
+        }
+      } else if (!held) {
+        driftRun = 0;
+        driftPeak = 0;
+      }
     }
 
     const last = this.samples[n - 1]!;
@@ -155,6 +205,9 @@ export class TelemetryRecorder {
       avgSpeedKph: last.t > 0 ? (distance / last.t) * 3.6 : 0,
       zeroToHundred,
       maxDriftDeg: maxDrift,
+      longestDrift,
+      heldDriftDeg: heldDrift,
+      driftRuns,
       timeSliding: sliding,
       timeAirborne: airborne,
       peakBrakeC: this.samples.some((s) => s.brakeC !== null)
@@ -198,6 +251,12 @@ export function formatSummary(name: string, s: TelemetrySummary): string {
     row('avg speed', `${s.avgSpeedKph.toFixed(1)} km/h`),
     row('0-100 km/h', s.zeroToHundred === null ? 'not reached' : `${s.zeroToHundred.toFixed(2)} s`),
     row('max drift', `${s.maxDriftDeg.toFixed(1)}°`),
+    row(
+      'held drift',
+      `${s.longestDrift.toFixed(2)} s at up to ${s.heldDriftDeg.toFixed(0)}°, ${s.driftRuns} run${
+        s.driftRuns === 1 ? '' : 's'
+      }`,
+    ),
     row('time sliding', `${s.timeSliding.toFixed(2)} s`),
     row('time airborne', `${s.timeAirborne.toFixed(2)} s`),
     ...(s.peakBrakeC === null

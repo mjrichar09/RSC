@@ -95,8 +95,17 @@ export type NetMessage =
   | { t: 'livery'; livery: string; number: number }
   /** Guest → host: ready or not. */
   | { t: 'ready'; ready: boolean }
-  /** Host → everyone: the race starts at this host clock time. */
+  /** Host → everyone: build a world for this setup, then say when you have. */
   | { t: 'start'; setup: RaceSetup; at: number }
+  /**
+   * Host → everyone: everybody has a world, start the countdown now.
+   *
+   * Separate from `start` because building a world is asynchronous and takes a
+   * different amount of time on every machine. Each side used to run its own
+   * countdown from the moment it happened to finish loading, so the green came
+   * up at a different instant on each screen and the grid was never level.
+   */
+  | { t: 'go' }
   /** Guest → host, at `INPUT_HZ`. */
   | { t: 'input'; seq: number; input: DriverInput }
   /** Host → everyone, at `SNAPSHOT_HZ`. */
