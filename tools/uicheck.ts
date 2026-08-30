@@ -100,6 +100,26 @@ await page.click('[data-action="multiplayer"]');
 await page.waitForSelector('.lobby.is-open');
 console.log('multiplayer opens the lobby');
 
+// The grid, with everyone's paint, number and tally on it. Only reachable with
+// two browsers and a handshake in real use, which is exactly why it is worth
+// checking here — a panel nobody ever looks at quietly stops working.
+await page.goto('http://localhost:5181/?vision=0&drama=0&screen=lobby');
+await page.waitForSelector('.lobby.is-open .lobby-players li:nth-child(4)', { timeout: 20_000 });
+const grid = await page.$$eval('.lobby-players li', (rows) =>
+  rows.map((row) => ({
+    text: row.textContent ?? '',
+    paint: (row.querySelector('.lobby-swatch') as HTMLElement | null)?.style.background ?? '',
+  })),
+);
+if (grid.length !== 4) throw new Error(`the grid shows ${grid.length} players, not 4`);
+if (new Set(grid.map((row) => row.paint)).size !== 4) {
+  throw new Error('two cars are wearing the same paint — nobody could tell them apart');
+}
+if (!grid.some((row) => row.text.includes('win'))) throw new Error('the win tally is missing');
+if (!(await page.$('[data-act="livery"]'))) throw new Error('no way to pick a paint');
+if (!(await page.$('[data-act="number"]'))) throw new Error('no way to pick a number');
+console.log(`lobby grid: ${grid.map((row) => row.text.trim().replace(/\s+/g, ' ')).join(' | ')}`);
+
 console.log('OK — career, arcade and multiplayer all open from the front door.');
 await browser.close();
 await server.close();

@@ -264,14 +264,14 @@ export class CarView {
       ['boot', box(h.x * 1.45, h.y * 0.12, h.z * 0.42), [0, h.y * 0.6, -h.z * 0.62], panelMat(), 'boot'],
       ['bumperFront', box(h.x * 1.72, h.y * 0.24, h.z * 0.12), [0, -h.y * 0.28, h.z * 0.99], trimMat(), 'panelFront'],
       ['bumperRear', box(h.x * 1.72, h.y * 0.24, h.z * 0.12), [0, -h.y * 0.28, -h.z * 0.99], trimMat(), 'panelRear'],
-      ['wingFL', box(h.x * 0.16, h.y * 0.5, h.z * 0.42), [-h.x * 0.98, h.y * 0.15, h.z * 0.6], panelMat(), 'wingFL'],
-      ['wingFR', box(h.x * 0.16, h.y * 0.5, h.z * 0.42), [h.x * 0.98, h.y * 0.15, h.z * 0.6], panelMat(), 'wingFR'],
-      ['doorLeft', box(h.x * 0.12, h.y * 0.62, h.z * 0.5), [-h.x * 1.02, h.y * 0.2, -0.08], panelMat(), 'doorL'],
-      ['doorRight', box(h.x * 0.12, h.y * 0.62, h.z * 0.5), [h.x * 1.02, h.y * 0.2, -0.08], panelMat(), 'doorR'],
-      ['quarterRL', box(h.x * 0.16, h.y * 0.5, h.z * 0.42), [-h.x * 0.98, h.y * 0.15, -h.z * 0.62], panelMat(), 'quarterRL'],
-      ['quarterRR', box(h.x * 0.16, h.y * 0.5, h.z * 0.42), [h.x * 0.98, h.y * 0.15, -h.z * 0.62], panelMat(), 'quarterRR'],
-      ['mirrorL', box(0.1, 0.1, 0.16), [-h.x * 1.12, h.y * 0.62, h.z * 0.3], trimMat(), 'mirrorL'],
-      ['mirrorR', box(0.1, 0.1, 0.16), [h.x * 1.12, h.y * 0.62, h.z * 0.3], trimMat(), 'mirrorR'],
+      ['wingFL', box(h.x * 0.16, h.y * 0.5, h.z * 0.42), [h.x * 0.98, h.y * 0.15, h.z * 0.6], panelMat(), 'wingFL'],
+      ['wingFR', box(h.x * 0.16, h.y * 0.5, h.z * 0.42), [-h.x * 0.98, h.y * 0.15, h.z * 0.6], panelMat(), 'wingFR'],
+      ['doorLeft', box(h.x * 0.12, h.y * 0.62, h.z * 0.5), [h.x * 1.02, h.y * 0.2, -0.08], panelMat(), 'doorL'],
+      ['doorRight', box(h.x * 0.12, h.y * 0.62, h.z * 0.5), [-h.x * 1.02, h.y * 0.2, -0.08], panelMat(), 'doorR'],
+      ['quarterRL', box(h.x * 0.16, h.y * 0.5, h.z * 0.42), [h.x * 0.98, h.y * 0.15, -h.z * 0.62], panelMat(), 'quarterRL'],
+      ['quarterRR', box(h.x * 0.16, h.y * 0.5, h.z * 0.42), [-h.x * 0.98, h.y * 0.15, -h.z * 0.62], panelMat(), 'quarterRR'],
+      ['mirrorL', box(0.1, 0.1, 0.16), [h.x * 1.12, h.y * 0.62, h.z * 0.3], trimMat(), 'mirrorL'],
+      ['mirrorR', box(0.1, 0.1, 0.16), [-h.x * 1.12, h.y * 0.62, h.z * 0.3], trimMat(), 'mirrorR'],
       ['exhaust', box(0.1, 0.1, h.z * 0.3), [h.x * 0.45, -h.y * 0.62, -h.z * 1.02], trimMat(), 'exhaust'],
       ['wing', box(h.x * 1.95, h.y * 0.16, h.z * 0.2), [0, h.y * 1.55, -h.z * 0.92], trimMat(), 'panelRear'],
     ];
@@ -351,7 +351,8 @@ export class CarView {
         discGeo,
         new THREE.MeshBasicMaterial({ color: DISC_COLD, side: THREE.DoubleSide }),
       );
-      disc.position.x = i % 2 === 0 ? -0.135 : 0.135;
+      // Outboard face. Wheel 0 is the front left, and the car's left is +X.
+      disc.position.x = i % 2 === 0 ? 0.135 : -0.135;
       wheel.add(disc);
       this.discs.push(disc);
       this.wheels.push(wheel);
@@ -645,7 +646,11 @@ export class CarView {
         if (wear > 0.01) {
           // 1 at the face that took the hit, 0 at the far side.
           const t = Math.min(Math.max((sign * local[axis]! / half[axis]! + 1) * 0.5, 0), 1);
-          const squeeze = wear * 0.34 * t ** 1.6;
+          // Not linear in wear. A panel at 40% is bent; a panel at 0% has had
+          // the structure behind it fold, and it should not look like a
+          // slightly worse version of bent. The exponent keeps ordinary racing
+          // damage where it was and lets a written-off car actually collapse.
+          const squeeze = wear ** 1.5 * 0.62 * t ** 1.6;
           move[axis]! -= sign * squeeze * half[axis]!;
           // Displaced metal goes sideways. Proportional to how far the vertex
           // already is from the mesh's own axis, so the panel splays rather
@@ -685,6 +690,17 @@ export class CarView {
           move[0]! += (hash3(x, y, z) - 0.5) * wobble;
           move[1]! += (hash3(y, z, x) - 0.5) * wobble;
           move[2]! += (hash3(z, x, y) - 0.5) * wobble;
+        }
+
+        // A panel with nothing left splits: the fold runs out of metal and the
+        // sheet tears along the crease rather than carrying on bending. Keyed
+        // off the same hashed noise so it is deterministic, and only in the
+        // last fifth of the wear, where the alternative is a panel that is
+        // merely very bent.
+        if (wear > 0.8) {
+          const tear = (wear - 0.8) * 5;
+          const rip = (hash3(local[0]! * 7.3, local[1]! * 5.1, local[2]! * 3.7) - 0.45) * tear * 0.34;
+          for (const b of across) move[b]! += Math.sign(local[b]! || 1) * Math.max(rip, 0);
         }
 
         // --- 3. creases ----------------------------------------------------

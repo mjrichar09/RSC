@@ -125,11 +125,13 @@ export const CAR: VehicleTuning = {
   halfExtents: { x: 0.85, y: 0.45, z: 1.95 },
   centerOfMass: { x: 0, y: -0.28, z: -0.05 },
 
+  // The car's right is -X: nose along +Z, up along +Y, right-handed. Mirrored
+  // here for a long time, which put every L/R label on the wrong corner.
   wheelPositions: [
-    { x: -0.78, y: -0.25, z: 1.32 }, // front left
-    { x: 0.78, y: -0.25, z: 1.32 }, // front right
-    { x: -0.78, y: -0.25, z: -1.32 }, // rear left
-    { x: 0.78, y: -0.25, z: -1.32 }, // rear right
+    { x: 0.78, y: -0.25, z: 1.32 }, // front left
+    { x: -0.78, y: -0.25, z: 1.32 }, // front right
+    { x: 0.78, y: -0.25, z: -1.32 }, // rear left
+    { x: -0.78, y: -0.25, z: -1.32 }, // rear right
   ],
   wheelRadius: 0.34,
 

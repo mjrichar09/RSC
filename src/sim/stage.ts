@@ -36,7 +36,16 @@ export interface MedalTimes {
   bronze: number;
 }
 
-export type PropKind = 'tree' | 'rock' | 'bale' | 'pole' | 'gatePost';
+export type PropKind =
+  | 'tree'
+  /** A young tree. Goes over when you hit it, and costs you very little. */
+  | 'sapling'
+  | 'rock'
+  | 'bale'
+  | 'pole'
+  /** A wall of a house. The most solid thing in the game. */
+  | 'building'
+  | 'gatePost';
 
 /** A corner warning board standing on the verge. */
 export interface CornerSign {
@@ -56,6 +65,15 @@ export interface StageProp {
   height: number;
   /** Rotation about Y, radians. Visual only. */
   yaw: number;
+  /**
+   * Mass in kilograms, when this prop can be knocked over.
+   *
+   * A sapling is a dynamic body: hitting one topples it and costs the car
+   * almost nothing, which is the whole difference between it and the tree
+   * beside it. Everything else is fixed, and hitting a fixed thing at speed is
+   * as expensive as the impact model says it is — no special case anywhere.
+   */
+  mass?: number;
 }
 
 /** What lines the verge in each biome, and how densely. */
@@ -161,11 +179,17 @@ function hashString(text: string): number {
   return h >>> 0;
 }
 
-const PROP_SHAPE: Record<PropKind, { radius: number; height: number }> = {
-  tree: { radius: 0.42, height: 5.5 },
+const PROP_SHAPE: Record<PropKind, { radius: number; height: number; mass?: number }> = {
+  // A mature trunk. Immovable, and hitting one is the most expensive mistake
+  // available at the side of a forest stage.
+  tree: { radius: 0.52, height: 7.5 },
+  // Sixty kilos of young wood. It goes over, and it barely marks the car.
+  sapling: { radius: 0.16, height: 3.0, mass: 60 },
   rock: { radius: 0.85, height: 1.3 },
   bale: { radius: 0.75, height: 1.5 },
   pole: { radius: 0.16, height: 2.2 },
+  // The corner of a house. Nothing in the game hits harder.
+  building: { radius: 3.2, height: 9 },
   // The scaffolding either side of a start, checkpoint or finish gate. Drawn by
   // the gate builder rather than with the hazards, so the renderer skips it.
   gatePost: { radius: 0.28, height: 3.4 },
@@ -675,12 +699,20 @@ export class Stage {
         scale(sample.forward, along),
       );
 
+      // Trees vary. A wood of identical cones reads as wallpaper, and more to
+      // the point a stand of trees where every one costs the same is a wall
+      // with a texture on it rather than something to read and judge.
+      const size = kind === 'tree' ? 0.8 + random() * 0.6 : 1;
+
       props.push({
         kind,
-        position: v3(base.x, base.y - VERGE_DROP, base.z),
-        radius: shape.radius,
-        height: shape.height,
+        // A building stands on the ground the road sits on, not down in the
+        // verge's drop — half of one sunk into the bank reads as a bunker.
+        position: v3(base.x, base.y - (kind === 'building' ? 0 : VERGE_DROP), base.z),
+        radius: shape.radius * size,
+        height: shape.height * size,
         yaw: random() * Math.PI * 2,
+        ...(shape.mass ? { mass: shape.mass } : {}),
       });
     }
     return props;
@@ -725,6 +757,17 @@ export class Stage {
   }
 
   /**
+   * How close the stage comes to itself in plan, ignoring height.
+   *
+   * `selfIntersections` skips a pair whose road heights differ by more than a
+   * few metres, because one passing over another is legitimate. This asks the
+   * looser question: how close do two pieces of road get while still being at
+   * heights where their embankments, walls and ground skirts are in each
+   * other? Reported rather than rejected — every healthy stage in the game
+   * sits between 30 and 45 m, so the number is a smell test.
+   */
+
+  /**
    * Places where the stage runs into itself.
    *
    * A corridor is ~27 m wide, so a centreline that doubles back within that
@@ -736,6 +779,26 @@ export class Stage {
    * Sections separated vertically by more than `clearance` are treated as a
    * legitimate over/under rather than a collision.
    */
+  closestApproach(headroom = 14): { gap: number; a: number; b: number } {
+    const samples = this.spline.samples;
+    let best = { gap: Infinity, a: 0, b: 0 };
+    for (let i = 0; i < samples.length; i++) {
+      for (let j = i + 1; j < samples.length; j++) {
+        if (samples[j]!.distance - samples[i]!.distance < 45) continue;
+        // A road far enough above another is an overpass and reads as one. The
+        // bank stands 2.4 m and the ground skirt hangs 4 m below the road, so
+        // below about fourteen metres the two corridors are in each other.
+        if (Math.abs(samples[i]!.position.y - samples[j]!.position.y) > headroom) continue;
+        const gap = Math.hypot(
+          samples[i]!.position.x - samples[j]!.position.x,
+          samples[i]!.position.z - samples[j]!.position.z,
+        );
+        if (gap < best.gap) best = { gap, a: samples[i]!.distance, b: samples[j]!.distance };
+      }
+    }
+    return best;
+  }
+
   selfIntersections(clearance = 5): { a: number; b: number; gap: number }[] {
     const samples = this.spline.samples;
     const hits: { a: number; b: number; gap: number }[] = [];

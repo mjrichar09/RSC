@@ -135,10 +135,10 @@ export const PARTS: PartDef[] = [
   },
   ...(
     [
-      ['wingFL', 'Front wing L', 'wingFL', -0.82, 1.3],
-      ['wingFR', 'Front wing R', 'wingFR', 0.82, 1.3],
-      ['quarterRL', 'Rear quarter L', 'quarterRL', -0.82, -1.3],
-      ['quarterRR', 'Rear quarter R', 'quarterRR', 0.82, -1.3],
+      ['wingFL', 'Front wing L', 'wingFL', 0.82, 1.3],
+      ['wingFR', 'Front wing R', 'wingFR', -0.82, 1.3],
+      ['quarterRL', 'Rear quarter L', 'quarterRL', 0.82, -1.3],
+      ['quarterRR', 'Rear quarter R', 'quarterRR', -0.82, -1.3],
     ] as const
   ).map(([id, label, component, x, z]): PartDef => ({
     id,
@@ -157,8 +157,8 @@ export const PARTS: PartDef[] = [
   })),
   ...(
     [
-      ['mirrorL', 'Mirror L', 'mirrorL', -0.95],
-      ['mirrorR', 'Mirror R', 'mirrorR', 0.95],
+      ['mirrorL', 'Mirror L', 'mirrorL', 0.95],
+      ['mirrorR', 'Mirror R', 'mirrorR', -0.95],
     ] as const
   ).map(([id, label, component, x]): PartDef => ({
     id,
@@ -218,7 +218,7 @@ export const PARTS: PartDef[] = [
   {
     id: 'doorLeft',
     label: 'Left door',
-    at: v3(-0.86, 0.05, -0.1),
+    at: v3(0.86, 0.05, -0.1),
     reach: 1.1,
     threshold: 12000,
     scale: 20000,
@@ -231,7 +231,7 @@ export const PARTS: PartDef[] = [
   {
     id: 'doorRight',
     label: 'Right door',
-    at: v3(0.86, 0.05, -0.1),
+    at: v3(-0.86, 0.05, -0.1),
     reach: 1.1,
     threshold: 12000,
     scale: 20000,
@@ -243,10 +243,10 @@ export const PARTS: PartDef[] = [
   },
   ...(
     [
-      ['wheelFL', 'hubFL', -0.78, 1.32],
-      ['wheelFR', 'hubFR', 0.78, 1.32],
-      ['wheelRL', 'hubRL', -0.78, -1.32],
-      ['wheelRR', 'hubRR', 0.78, -1.32],
+      ['wheelFL', 'hubFL', 0.78, 1.32],
+      ['wheelFR', 'hubFR', -0.78, 1.32],
+      ['wheelRL', 'hubRL', 0.78, -1.32],
+      ['wheelRR', 'hubRR', -0.78, -1.32],
     ] as const
   ).map(([id, hub, x, z]): PartDef => ({
     id,

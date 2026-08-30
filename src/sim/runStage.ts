@@ -73,7 +73,7 @@ export async function validateStage(
 ): Promise<ValidationResult> {
   const budgets = [0.55, 0.75, 0.95];
   let best: number | null = null;
-  let offRoad = 0;
+  let offRoad = 1;
   let rescues = 0;
   let finished = 0;
 
@@ -83,13 +83,25 @@ export async function validateStage(
       recordGhost: false,
       ...(conditions ? { conditions } : {}),
     });
-    offRoad = Math.max(offRoad, result.offRoadFraction);
     rescues = Math.max(rescues, result.rescues);
     if (result.finished && result.time !== null) {
       finished++;
-      if (best === null || result.time < best) best = result.time;
+      if (best === null || result.time < best) {
+        best = result.time;
+        // The off-road figure comes from the run that set the best time, not
+        // the worst of the three. The question a stage has to answer is "can it
+        // be driven cleanly", and taking the *max* while taking the best time
+        // asks something else — that even the most over-committed style stays
+        // on the road, which is not true of any stage in the game including the
+        // ones that pass. It made the verdict a coin toss: a change with no
+        // behavioural content at all, reordering two symmetric wheel mounts,
+        // flipped Pine Loop's night-rain variant from 24% to 59% by nudging the
+        // last bits of a chaotic run.
+        offRoad = result.offRoadFraction;
+      }
     }
   }
+  if (best === null) offRoad = 1;
 
   // Two of three is the bar: one failure at the ragged end of the range is the
   // AI making a mistake, three is the stage being at fault.

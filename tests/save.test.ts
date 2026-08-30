@@ -206,7 +206,11 @@ describe('carried dents', () => {
     });
     expect(profile.carDents).toHaveLength(1);
     expect(profile.carDents[0]!.depth).toBe(1);
-    expect(profile.carDents[0]!.reach).toBe(2);
+    // Clamped to the widest fold the damage model can produce. A structural
+    // impact spreads the crumple across the car rather than pressing a deeper
+    // hole in one place, so the cap is 3.4 m rather than the 2 m it was when
+    // every dent was local.
+    expect(profile.carDents[0]!.reach).toBe(3.4);
   });
 });
 

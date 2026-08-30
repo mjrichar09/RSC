@@ -41,6 +41,9 @@ interface Guest {
 
 export interface HostOptions {
   name?: string;
+  /** Paint and number this player picked in the lobby. */
+  livery?: string;
+  number?: number;
   /** Called when the lobby changes, so the UI can redraw. */
   onLobby?: (players: PlayerInfo[]) => void;
   /** Called when a player finishes or retires. */
@@ -68,6 +71,9 @@ export class RaceHost {
       host: true,
       car: 0,
       ready: true,
+      livery: options.livery ?? 'works',
+      number: options.number ?? 1,
+      wins: 0,
     });
   }
 
@@ -115,6 +121,9 @@ export class RaceHost {
         host: false,
         car: this.players.length,
         ready: false,
+        livery: message.livery,
+        number: message.number,
+        wins: 0,
       };
       this.players.push(info);
       this.guests.set(id, { id, link, info, input: { ...NEUTRAL_INPUT }, seq: -1, silent: 0 });
@@ -132,6 +141,15 @@ export class RaceHost {
       case 'ready':
         guest.info.ready = message.ready;
         this.broadcastLobby();
+        break;
+      case 'livery':
+        // Repainting is a lobby thing. Mid-race it would change a car people
+        // are using to tell each other apart, in the middle of using it.
+        if (!this.started) {
+          guest.info.livery = message.livery;
+          guest.info.number = message.number;
+          this.broadcastLobby();
+        }
         break;
       case 'input':
         // Out-of-order arrivals are dropped rather than applied backwards: an
@@ -267,8 +285,57 @@ export class RaceHost {
     this.options.onResult?.(player, time, retired);
   }
 
+  /**
+   * What the lobby is about to race.
+   *
+   * Carried with the player list because the host picks the stage *after*
+   * everyone has joined — which is the order that makes sense when the point
+   * is racing your friends rather than a stage — and a guest that cannot see
+   * the choice is agreeing to something it has not been told.
+   */
+  private pending = { stageId: '', variantId: 'day-clear' };
+
+  /** The host's own paint, chosen in the lobby like everyone else's. */
+  repaint(livery: string, number: number): void {
+    const me = this.players[0];
+    if (!me || this.started) return;
+    me.livery = livery;
+    me.number = number;
+    this.broadcastLobby();
+  }
+
+  /** The host picks, and everyone sees it immediately. */
+  setStage(stageId: string, variantId: string): void {
+    this.pending = { stageId, variantId };
+    this.broadcastLobby();
+  }
+
+  /**
+   * Credit a win and tell everyone.
+   *
+   * The tally belongs to the lobby, not to a profile: it is the reason to run
+   * another race with the same people, and it means nothing outside the room.
+   */
+  creditWin(player: PlayerId): void {
+    const winner = this.players.find((p) => p.id === player);
+    if (!winner) return;
+    winner.wins++;
+    this.broadcastLobby();
+  }
+
+  /** Let everyone back into the lobby to pick again. */
+  reopen(): void {
+    this.started = false;
+    for (const player of this.players) player.ready = player.host;
+    this.broadcastLobby();
+  }
+
   private broadcastLobby(): void {
-    this.broadcast({ t: 'lobby', players: this.players.map((player) => ({ ...player })) });
+    this.broadcast({
+      t: 'lobby',
+      players: this.players.map((player) => ({ ...player })),
+      ...this.pending,
+    });
     this.options.onLobby?.(this.players);
   }
 

@@ -193,7 +193,7 @@ function migrate(stored: unknown): Profile {
     .map((dent) => ({
       at: { x: dent.at.x, y: dent.at.y, z: dent.at.z },
       depth: clamp01(dent.depth),
-      reach: Math.min(Math.max(dent.reach, 0.1), 2),
+      reach: Math.min(Math.max(dent.reach, 0.1), 3.4),
     }));
 
   return out;

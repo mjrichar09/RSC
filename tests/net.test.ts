@@ -121,7 +121,7 @@ describe('the lobby', () => {
 
     const seen: NetMessage[] = [];
     wire.b.onMessage((m) => seen.push(m));
-    wire.b.send({ t: 'hello', version: PROTOCOL_VERSION + 1, name: 'Stranger' });
+    wire.b.send({ t: 'hello', version: PROTOCOL_VERSION + 1, name: 'Stranger', livery: 'works', number: 3 });
     wire.flush();
 
     expect(host.playerCount).toBe(1);
@@ -154,6 +154,72 @@ describe('the lobby', () => {
     guest.leave();
     wire.flush();
     expect(host.playerCount).toBe(1);
+  });
+});
+
+describe('the lobby between races', () => {
+  it('carries everyone\'s paint and number to everyone', async () => {
+    const wire = new LoopbackWire();
+    const host = new RaceHost({ name: 'Host', livery: 'martini', number: 7 });
+    host.accept(wire.a);
+    const guest = new RaceGuest(wire.b, { name: 'Guest', livery: 'ember', number: 42 });
+    wire.flush();
+
+    // A multiplayer car is a fresh one, so paint is the only thing that makes
+    // it yours — and it has to reach the other screens or nobody can tell four
+    // cars apart in a cloud of gravel.
+    expect(guest.players.map((p) => [p.livery, p.number])).toEqual([
+      ['martini', 7],
+      ['ember', 42],
+    ]);
+
+    guest.repaint('forest-green', 9);
+    wire.flush();
+    expect(host.players[1]!.livery).toBe('forest-green');
+    expect(host.players[1]!.number).toBe(9);
+  });
+
+  it('tells a guest what the host has picked to race', async () => {
+    const wire = new LoopbackWire();
+    const host = new RaceHost();
+    host.accept(wire.a);
+    let seen: { stageId: string; variantId: string } | null = null;
+    new RaceGuest(wire.b, { onLobby: (_, pick) => (seen = pick) });
+    wire.flush();
+
+    // The host picks *after* everyone has joined, because the point of a lobby
+    // is racing your friends rather than racing a stage. A guest that cannot
+    // see the choice is agreeing to something nobody told it.
+    host.setStage('quarry-run', 'night');
+    wire.flush();
+    expect(seen).toEqual({ stageId: 'quarry-run', variantId: 'night' });
+  });
+
+  it('keeps a tally of wins that belongs to the room', async () => {
+    const wire = new LoopbackWire();
+    const host = new RaceHost();
+    host.accept(wire.a);
+    const guest = new RaceGuest(wire.b);
+    wire.flush();
+
+    host.creditWin(1);
+    wire.flush();
+    expect(guest.players.find((p) => p.id === 1)?.wins).toBe(1);
+    expect(guest.players.find((p) => p.id === 0)?.wins).toBe(0);
+
+    // And a reopened lobby keeps it: the tally is the reason to race again.
+    host.reopen();
+    wire.flush();
+    expect(guest.players.find((p) => p.id === 1)?.wins).toBe(1);
+  });
+
+  it('refuses a repaint once the race has started', async () => {
+    const { host, guest, wire } = await pair();
+    guest.repaint('ember', 11);
+    wire.flush();
+    // `pair` has already called host.start, so this is mid-race: changing the
+    // colour people are using to tell each other apart, while they are using it.
+    expect(host.players[1]!.livery).not.toBe('ember');
   });
 });
 

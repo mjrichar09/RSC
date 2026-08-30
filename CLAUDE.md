@@ -100,6 +100,20 @@ Each of these cost real time and is easy to repeat:
   same block also has to pose the car (`carView.update`) before reading a
   dragging part's world position, or sparks come off where the bumper sat
   before it started hanging.
+- **Getting left and right the wrong way round, consistently.** The car's right
+  is **-X**: nose along +Z, up along +Y, right-handed. Every table in the game
+  had it mirrored — wheel mounts, damage components, detachable parts and
+  meshes — so nothing looked wrong until the damage panel reported a folded
+  left wing after a hit on the right. `tests/handedness.test.ts` drives the car,
+  sees which way it actually goes, and checks all four tables against that. A
+  mirror applied to three of them is worse than a mirror applied to none.
+- **A stage passing over itself.** `selfIntersections` skips pairs at different
+  heights, so a section running 12 m above another and 1 m across from it was
+  never reported — and the ground mesh, which took the *nearest* road's height,
+  then stepped twelve metres inside one 22 m cell. That cliff is where strange
+  shadows around a doubled-back stage come from. The ground takes the *lowest*
+  nearby road now, and `npm run stages` prints how close each stage comes to
+  itself: every healthy one is 32–45 m.
 - **Scaling a mesh down to say "damaged".** A panel at half size reads as a
   smaller panel; a wrecked car built that way is a small tidy car. Damage is
   vertices moving, and the metal has to go somewhere — collapse along one axis,
@@ -116,6 +130,10 @@ Each of these cost real time and is easy to repeat:
 `src/net/` is the protocol, the host, the guest and the transports; `src/sim/`
 knows nothing about any of it. Two things there are easy to get wrong twice:
 
+- **`npm run netcheck` drives both directions.** It used to drive only the host
+  and check the guest saw it, which left "the joiner's car does not move on my
+  screen" untestable — guest inputs travelling *up* the wire and being applied
+  by the host is a different path from snapshots coming down it.
 - **A guest's own car is index 0 in its own world**, and the host's numbering is
   a swap away (`RaceGuest.swap`). Everything above the simulation assumes the
   local car is the first one; the permutation lives at the wire and in

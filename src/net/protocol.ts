@@ -41,6 +41,18 @@ export interface PlayerInfo {
   /** Index into `SimWorld.cars`. Assigned by the host and never reused. */
   car: number;
   ready: boolean;
+  /**
+   * Paint and number, chosen in the lobby.
+   *
+   * A multiplayer car is a fresh one — nobody brings their career's wreck to
+   * somebody else's race — so the only thing that makes it *yours* is what it
+   * looks like. Everyone's choice reaches everyone, and rival cars are painted
+   * from this rather than from a fixed rotation of three colours.
+   */
+  livery: string;
+  number: number;
+  /** Races won in this lobby. Reset only by leaving it. */
+  wins: number;
 }
 
 /** Everything a guest needs to build the same world the host is running. */
@@ -74,11 +86,13 @@ export interface CarSnapshot {
 
 export type NetMessage =
   /** Guest → host, once, on connecting. */
-  | { t: 'hello'; version: number; name: string }
+  | { t: 'hello'; version: number; name: string; livery: string; number: number }
   /** Host → guest, in reply: who you are and what we are racing. */
   | { t: 'welcome'; you: PlayerId; setup: RaceSetup }
   /** Host → everyone, whenever the lobby changes. */
-  | { t: 'lobby'; players: PlayerInfo[] }
+  | { t: 'lobby'; players: PlayerInfo[]; stageId: string; variantId: string }
+  /** Guest → host: repaint me. Allowed in the lobby, ignored during a race. */
+  | { t: 'livery'; livery: string; number: number }
   /** Guest → host: ready or not. */
   | { t: 'ready'; ready: boolean }
   /** Host → everyone: the race starts at this host clock time. */

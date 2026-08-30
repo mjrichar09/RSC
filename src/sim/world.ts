@@ -18,7 +18,7 @@ import { Ambient } from './ambient.js';
 import { DEER_MASS, Wildlife } from './wildlife.js';
 import { Markers } from './markers.js';
 import { type Quat, type Vec3, add, lerpVec, rotate, rotateInverse, slerp, v3 } from './math.js';
-import { type Stage } from './stage.js';
+import { type Stage, type StageProp } from './stage.js';
 import { type SurfaceId, surface } from './surfaces.js';
 import { Vehicle, type VehicleState } from './vehicle.js';
 
@@ -178,6 +178,13 @@ export class SimWorld {
    */
   readonly loose: LooseBody[] = [];
   /**
+   * Props that can be knocked over, and the bodies carrying them.
+   *
+   * Exposed so the renderer can pose them; it never writes to them, the same
+   * way it never writes anything else in here.
+   */
+  readonly movableProps: { prop: StageProp; body: RAPIER.RigidBody }[] = [];
+  /**
    * Animals at the roadside, and the weather's own mischief.
    *
    * Both are gated on the damage model being present, which means they are on
@@ -292,17 +299,23 @@ export class SimWorld {
       // Hazards are static cylinders standing on the verge. They are what give
       // the damage model something to actually hit.
       for (const prop of this.stage.props) {
-        const body = this.world.createRigidBody(
-          RAPIER.RigidBodyDesc.fixed().setTranslation(
-            prop.position.x,
-            prop.position.y + prop.height / 2,
-            prop.position.z,
-          ),
-        );
-        this.world.createCollider(
-          RAPIER.ColliderDesc.cylinder(prop.height / 2, prop.radius).setFriction(0.7),
-          body,
-        );
+        // A prop with a mass is one you can knock over — a sapling. It is a
+        // real dynamic body rather than a special case in the damage model:
+        // the reason it costs the car almost nothing is that it weighs almost
+        // nothing, which is also the reason it goes over. Damped hard so one
+        // that has been hit settles where it fell instead of rolling into the
+        // road three corners later, and asleep until something touches it.
+        const movable = prop.mass !== undefined;
+        const desc = (
+          movable
+            ? RAPIER.RigidBodyDesc.dynamic().setLinearDamping(0.9).setAngularDamping(1.4).setCanSleep(true)
+            : RAPIER.RigidBodyDesc.fixed()
+        ).setTranslation(prop.position.x, prop.position.y + prop.height / 2, prop.position.z);
+        const body = this.world.createRigidBody(desc);
+        let collider = RAPIER.ColliderDesc.cylinder(prop.height / 2, prop.radius).setFriction(0.7);
+        if (movable) collider = collider.setMass(prop.mass!);
+        this.world.createCollider(collider, body);
+        if (movable) this.movableProps.push({ prop, body });
       }
     }
 

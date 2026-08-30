@@ -56,11 +56,21 @@ export interface ComponentDef {
   caged: boolean;
 }
 
+/**
+ * Where each corner is, in the car's own frame.
+ *
+ * The car's right-hand side is **-X**: the nose is +Z, up is +Y, and in a
+ * right-handed frame that puts the driver's right at negative X. Every table
+ * here had it the other way round, consistently, so nothing looked wrong until
+ * the damage panel reported a folded left wing after a hit on the right.
+ * `tests/handedness.test.ts` settles it by driving the car rather than by
+ * reasoning about it, which is what got it wrong.
+ */
 const WHEEL_AT = {
-  FL: v3(-0.78, -0.25, 1.32),
-  FR: v3(0.78, -0.25, 1.32),
-  RL: v3(-0.78, -0.25, -1.32),
-  RR: v3(0.78, -0.25, -1.32),
+  FL: v3(0.78, -0.25, 1.32),
+  FR: v3(-0.78, -0.25, 1.32),
+  RL: v3(0.78, -0.25, -1.32),
+  RR: v3(-0.78, -0.25, -1.32),
 } as const;
 
 const corner = (
@@ -113,8 +123,8 @@ export const COMPONENTS: ComponentDef[] = [
   // Body panels: cheap, fragile, and the first thing you notice.
   { id: 'panelFront', label: 'Front panel', at: v3(0, 0, 1.9), reach: 1.5, threshold: 4200, scale: 20000, repairCost: 520, caged: false },
   { id: 'panelRear', label: 'Rear panel', at: v3(0, 0, -1.9), reach: 1.5, threshold: 4200, scale: 20000, repairCost: 480, caged: false },
-  { id: 'panelLeft', label: 'Left flank', at: v3(-0.84, 0, 0), reach: 1.25, threshold: 4200, scale: 20000, repairCost: 420, caged: false },
-  { id: 'panelRight', label: 'Right flank', at: v3(0.84, 0, 0), reach: 1.25, threshold: 4200, scale: 20000, repairCost: 420, caged: false },
+  { id: 'panelLeft', label: 'Left flank', at: v3(0.84, 0, 0), reach: 1.25, threshold: 4200, scale: 20000, repairCost: 420, caged: false },
+  { id: 'panelRight', label: 'Right flank', at: v3(-0.84, 0, 0), reach: 1.25, threshold: 4200, scale: 20000, repairCost: 420, caged: false },
   { id: 'panelRoof', label: 'Roof', at: v3(0, 0.46, 0), reach: 1.6, threshold: 5000, scale: 21000, repairCost: 560, caged: false },
   { id: 'panelFloor', label: 'Floor', at: v3(0, -0.46, 0), reach: 1.6, threshold: 9000, scale: 28000, repairCost: 700, caged: false },
 
@@ -123,14 +133,14 @@ export const COMPONENTS: ComponentDef[] = [
   // than a mirror and takes more to shift; a mirror goes if you brush anything.
   { id: 'bonnet', label: 'Bonnet', at: v3(0, 0.3, 1.25), reach: 1.15, threshold: 4000, scale: 15000, repairCost: 380, caged: false },
   { id: 'boot', label: 'Boot lid', at: v3(0, 0.28, -1.35), reach: 1.1, threshold: 4000, scale: 15000, repairCost: 340, caged: false },
-  { id: 'wingFL', label: 'Front wing L', at: v3(-0.82, 0.05, 1.3), reach: 1.0, threshold: 3600, scale: 14000, repairCost: 300, caged: false },
-  { id: 'wingFR', label: 'Front wing R', at: v3(0.82, 0.05, 1.3), reach: 1.0, threshold: 3600, scale: 14000, repairCost: 300, caged: false },
-  { id: 'quarterRL', label: 'Rear quarter L', at: v3(-0.82, 0.05, -1.3), reach: 1.0, threshold: 3600, scale: 14000, repairCost: 300, caged: false },
-  { id: 'quarterRR', label: 'Rear quarter R', at: v3(0.82, 0.05, -1.3), reach: 1.0, threshold: 3600, scale: 14000, repairCost: 300, caged: false },
-  { id: 'doorL', label: 'Left door', at: v3(-0.86, 0.08, -0.05), reach: 1.0, threshold: 4400, scale: 16000, repairCost: 460, caged: false },
-  { id: 'doorR', label: 'Right door', at: v3(0.86, 0.08, -0.05), reach: 1.0, threshold: 4400, scale: 16000, repairCost: 460, caged: false },
-  { id: 'mirrorL', label: 'Mirror L', at: v3(-0.95, 0.4, 0.5), reach: 0.7, threshold: 1800, scale: 6000, repairCost: 90, caged: false },
-  { id: 'mirrorR', label: 'Mirror R', at: v3(0.95, 0.4, 0.5), reach: 0.7, threshold: 1800, scale: 6000, repairCost: 90, caged: false },
+  { id: 'wingFL', label: 'Front wing L', at: v3(0.82, 0.05, 1.3), reach: 1.0, threshold: 3600, scale: 14000, repairCost: 300, caged: false },
+  { id: 'wingFR', label: 'Front wing R', at: v3(-0.82, 0.05, 1.3), reach: 1.0, threshold: 3600, scale: 14000, repairCost: 300, caged: false },
+  { id: 'quarterRL', label: 'Rear quarter L', at: v3(0.82, 0.05, -1.3), reach: 1.0, threshold: 3600, scale: 14000, repairCost: 300, caged: false },
+  { id: 'quarterRR', label: 'Rear quarter R', at: v3(-0.82, 0.05, -1.3), reach: 1.0, threshold: 3600, scale: 14000, repairCost: 300, caged: false },
+  { id: 'doorL', label: 'Left door', at: v3(0.86, 0.08, -0.05), reach: 1.0, threshold: 4400, scale: 16000, repairCost: 460, caged: false },
+  { id: 'doorR', label: 'Right door', at: v3(-0.86, 0.08, -0.05), reach: 1.0, threshold: 4400, scale: 16000, repairCost: 460, caged: false },
+  { id: 'mirrorL', label: 'Mirror L', at: v3(0.95, 0.4, 0.5), reach: 0.7, threshold: 1800, scale: 6000, repairCost: 90, caged: false },
+  { id: 'mirrorR', label: 'Mirror R', at: v3(-0.95, 0.4, 0.5), reach: 0.7, threshold: 1800, scale: 6000, repairCost: 90, caged: false },
   { id: 'windscreen', label: 'Windscreen', at: v3(0, 0.5, 0.55), reach: 1.0, threshold: 5200, scale: 18000, repairCost: 520, caged: false },
   { id: 'exhaust', label: 'Exhaust', at: v3(0.35, -0.42, -1.7), reach: 0.9, threshold: 5000, scale: 15000, repairCost: 240, caged: false },
   // Cheap, fragile, and on a wet night the most important part on the car.
@@ -182,6 +192,14 @@ export interface Dent {
 
 /** How many dents a car remembers. Beyond this the shallowest is merged away. */
 const MAX_DENTS = 10;
+
+/**
+ * Where a hit stops being a dent and starts being a structural failure, N·s.
+ *
+ * Roughly an 85 km/h flat impact. Below it the car absorbs the blow where it
+ * lands; above it the shell folds and the whole car is in the accident.
+ */
+const STRUCTURAL = 30_000;
 
 export interface DamageEvent {
   component: ComponentId;
@@ -427,17 +445,29 @@ export class DamageModel {
   applyImpact(localPoint: Vec3, impulse: number): void {
     this.peakImpulse = Math.max(this.peakImpulse, impulse);
     this.dent(localPoint, impulse);
+
+    // Past `STRUCTURAL` the hit stops being local. Measured before this
+    // existed, a 95 km/h wall strike left the car at 88% condition with all
+    // four hubs untouched: the damage all landed inside a metre and a half of
+    // the nose and the back half of the car did not know it had happened. A
+    // real one folds the shell, so the reach grows with the excess until the
+    // far corners are inside it, and everything it reaches takes a share of
+    // the energy on top of its own local crush. That is what puts the hubs
+    // through their threshold and the wheels on the road behind you.
+    const excess = Math.max(impulse - STRUCTURAL, 0) / STRUCTURAL;
+
     for (const def of COMPONENTS) {
+      const reach = def.reach * (1 + excess * 2.5);
       const distance = length(sub(def.at, localPoint));
-      if (distance > def.reach) continue;
+      if (distance > reach) continue;
 
       // Linear falloff to the edge of the component's reach.
-      const proximity = 1 - distance / def.reach;
+      const proximity = 1 - distance / reach;
       const over = impulse - def.threshold;
       if (over <= 0) continue;
 
       const mitigation = def.caged ? 1 - this.rollcage : 1;
-      const amount = clamp((over / def.scale) * proximity * mitigation, 0, 1);
+      const amount = clamp((over / def.scale + excess * 0.9) * proximity * mitigation, 0, 1);
       if (amount < 0.005) continue;
 
       const before = this.get(def.id);
@@ -462,13 +492,17 @@ export class DamageModel {
   private dent(at: Vec3, impulse: number): void {
     const depth = clamp((impulse - 1200) / 26_000, 0, 1);
     if (depth <= 0.01) return;
-    const reach = 0.5 + depth * 0.9;
+    // A structural hit spreads the fold across the car rather than pressing a
+    // deeper hole in one place — depth is already capped at 1, so without this
+    // a 60 km/h impact and a 140 km/h one leave the same mark.
+    const spread = 1 + Math.max(impulse - STRUCTURAL, 0) / STRUCTURAL;
+    const reach = (0.5 + depth * 0.9) * spread;
 
     for (const existing of this.dents) {
       if (length(sub(existing.at, at)) > 0.45) continue;
       // Deepen, and let the fold spread, but never past the width of the car.
       existing.depth = clamp(existing.depth + depth * 0.7, 0, 1);
-      existing.reach = Math.min(Math.max(existing.reach, reach) + depth * 0.15, 1.7);
+      existing.reach = Math.min(Math.max(existing.reach, reach) + depth * 0.15, 3.2);
       this.dentVersion++;
       return;
     }

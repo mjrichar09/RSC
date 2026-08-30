@@ -7,6 +7,7 @@
  */
 
 import { STAGES, stageById } from './data/stages/index.js';
+import { liveryById } from './data/liveries.js';
 import { TEST_PATCHES } from './data/testGround.js';
 import { Career, type RaceTarget } from './game/career.js';
 import { rollcageMitigation } from './game/garage.js';
@@ -265,11 +266,26 @@ const params = new URLSearchParams(location.search);
    */
   const RIVAL_PAINT = [0xd8563a, 0x4d86d6, 0x5fbf7a];
 
+  /**
+   * Paint for the other cars.
+   *
+   * In a lobby everyone picks their own, and that choice is the only thing
+   * that makes a multiplayer car theirs — the car itself is fresh for
+   * everybody. Falls back to the fixed hues for the AI and for anyone who has
+   * not chosen.
+   */
+  let rivalLiveries: { livery: string; number: number }[] = [];
+
   const buildRivalViews = (cars: number) => {
     for (const view of rivalViews) scene.remove(view.group);
     rivalViews = [];
     for (let i = 1; i < cars; i++) {
-      rivalViews.push(new CarView(scene, { body: RIVAL_PAINT[(i - 1) % RIVAL_PAINT.length]! }));
+      const chosen = rivalLiveries[i - 1];
+      rivalViews.push(
+        chosen
+          ? new CarView(scene, { livery: liveryById(chosen.livery), number: chosen.number })
+          : new CarView(scene, { body: RIVAL_PAINT[(i - 1) % RIVAL_PAINT.length]! }),
+      );
     }
     tagLayer.innerHTML = '';
   };
@@ -434,7 +450,21 @@ const params = new URLSearchParams(location.search);
   multiplayer.onRace = (start) => {
     menu.setOpen(false);
     garage.setOpen(false);
-    sessionHealth = { ...career.profile.carHealth };
+    // A fresh car, the way arcade gets one. Nobody brings their career's wreck
+    // to somebody else's race, and nothing that happens in one comes back to
+    // the career afterwards — which is also what makes it safe to write off
+    // the car completely in a lobby.
+    mode = 'arcade';
+    sessionHealth = {};
+    // Paint and number come from the lobby, so the local car is the one the
+    // player picked rather than the one their profile happens to wear.
+    const me = start.setup.players.find((player) => player.car === (start.guest?.car ?? 0));
+    if (me) carView.setLivery(liveryById(me.livery), me.number);
+    // Everyone else, in the grid order this copy of the world uses.
+    const mine = start.guest?.car ?? 0;
+    rivalLiveries = start.setup.players
+      .filter((player) => player.car !== mine)
+      .map((player) => ({ livery: player.livery, number: player.number }));
     loadStage(start.setup.stageId, start.setup.variantId, {
       cars: start.cars,
       ...(start.slots ? { slots: start.slots } : {}),
@@ -485,11 +515,13 @@ const params = new URLSearchParams(location.search);
 
   const menu = new StartMenu(hudRoot, career);
   menu.onCareer = () => {
+    rivalLiveries = [];
     mode = 'career';
     sessionHealth = { ...career.profile.carHealth };
     garage.setOpen(true);
   };
   menu.onArcade = (pick) => {
+    rivalLiveries = [];
     // A fixed car, every time: arcade never inherits the career's wreck and
     // never hands one back to it.
     mode = 'arcade';
@@ -770,6 +802,10 @@ const params = new URLSearchParams(location.search);
     // and it is the only way they stay readable through a zone change.
     for (const board of stageView?.signBoards ?? []) board.rotation.y = camera.yaw;
     if (world.markers && stageView) stageView.markers.sync(world.markers);
+    // Saplings that have been knocked over: real bodies, so their instances
+    // have to follow them or they go over in the physics and stay standing on
+    // screen, which is the worst of both.
+    stageView?.props.sync(world.movableProps);
     // The crowd gets out of the way. Driven from the car's drawn position, so
     // people react to where it looks like it is rather than to a fixed step.
     stageView?.crowd.update(dt, transform.position);
@@ -1338,6 +1374,12 @@ const params = new URLSearchParams(location.search);
     const screen = params.get('screen');
     if (screen === 'garage') garage.setOpen(true);
     else if (screen === 'arcade') menu.setOpen(true, 'arcade');
+    else if (screen === 'lobby') {
+      // Straight into a hosted lobby, so the harness can photograph the grid,
+      // the paint picker and the tally without two browsers and a handshake.
+      multiplayer.setOpen(true);
+      multiplayer.demo();
+    }
     else if (params.has('stage')) garage.setOpen(false);
     else menu.setOpen(true);
   }
@@ -1447,6 +1489,14 @@ const params = new URLSearchParams(location.search);
 
       if (wasRunning && (race.phase === 'finished' || race.phase === 'retired')) {
         void settleRun(race.phase === 'retired');
+        // A multiplayer race ends back in the lobby rather than in the garage.
+        // The shape of an evening is race, look at the tally, pick a different
+        // stage, race again — and being dropped into the garage after one
+        // stage ends it instead. Given a few seconds so the finish is on
+        // screen before the panel covers it.
+        if (session && multiplayer.inLobby) {
+          window.setTimeout(() => multiplayer.returnToLobby(), 4000);
+        }
       }
 
       raceHud.update(race);

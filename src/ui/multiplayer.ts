@@ -13,6 +13,7 @@
  */
 
 import { STAGES } from '../data/stages/index.js';
+import { DEFAULT_LIVERY, LIVERIES, liveryById } from '../data/liveries.js';
 import { RaceHost } from '../net/host.js';
 import { RaceGuest } from '../net/guest.js';
 import { acceptInvite, createInvite, type Invite } from '../net/webrtc.js';
@@ -50,6 +51,19 @@ export class MultiplayerPanel {
   private players: PlayerInfo[] = [];
   /** What the other players see over this car. */
   private name = 'Driver';
+  /**
+   * Paint and number.
+   *
+   * A multiplayer car is a fresh one — nobody brings their career's wreck to
+   * somebody else's race — so this is the only thing that makes it yours, and
+   * the only way to tell four cars apart in a cloud of gravel.
+   */
+  private livery = DEFAULT_LIVERY.id;
+  private number = 1;
+  /** What the host has picked, as a guest sees it. */
+  private pick: { stageId: string; variantId: string } | null = null;
+  /** Who has crossed the line in the current race, in the order they did. */
+  private readonly finished = new Map<number, number>();
 
   constructor(parent: HTMLElement) {
     this.root = document.createElement('div');
@@ -83,6 +97,8 @@ export class MultiplayerPanel {
     this.reply = '';
     this.status = '';
     this.players = [];
+    this.pick = null;
+    this.finished.clear();
     this.screen = 'choose';
     this.render();
   }
@@ -91,8 +107,41 @@ export class MultiplayerPanel {
     return STAGES[this.stageIndex] ?? STAGES[0]!;
   }
 
+  /** The stage a guest is being asked to race, by name. */
+  private get pickedName(): string {
+    if (!this.pick) return 'whatever the host picks';
+    const def = STAGES.find((stage) => stage.id === this.pick!.stageId);
+    if (!def) return 'whatever the host picks';
+    const variant = stageVariants(def).find((v) => v.id === this.pick!.variantId);
+    return `${def.name}${variant ? ` · ${variant.name}` : ''}`;
+  }
+
   private get variants(): StageVariant[] {
     return stageVariants(this.stage);
+  }
+
+  /**
+   * Tell the room what is about to be raced.
+   *
+   * The host picks after everybody has joined, because the point of a lobby is
+   * racing your friends rather than racing a stage. A guest that cannot see
+   * the choice is agreeing to something nobody has told it, so the pick goes
+   * out with the player list every time it changes.
+   */
+  private announcePick(): void {
+    const variant = this.variants[this.variantIndex] ?? this.variants[0]!;
+    this.pick = { stageId: this.stage.id, variantId: variant.id };
+    this.host?.setStage(this.stage.id, variant.id);
+  }
+
+  /** Paint and number, live: everyone sees a repaint straight away. */
+  private repaint(): void {
+    if (this.host) {
+      this.host.repaint(this.livery, this.number);
+      this.players = this.host.players;
+    }
+    this.guest?.repaint(this.livery, this.number);
+    this.render();
   }
 
   private say(text: string): void {
@@ -105,14 +154,18 @@ export class MultiplayerPanel {
   private startHosting(): void {
     this.host = new RaceHost({
       name: this.name,
+      livery: this.livery,
+      number: this.number,
       onLobby: (players) => {
         this.players = players;
         this.render();
       },
+      onResult: (player, time, retired) => this.noteResult(player, time, retired),
     });
     this.players = this.host.players;
     this.screen = 'host';
     this.status = '';
+    this.announcePick();
     this.render();
   }
 
@@ -185,8 +238,64 @@ export class MultiplayerPanel {
       seed: Math.floor(Date.now() % 100000),
       players: host.players.map((player) => ({ ...player })),
     };
+    this.finished.clear();
     this.setOpen(false);
     this.onRace?.({ host, setup, cars: host.playerCount });
+  }
+
+  /**
+   * Somebody finished.
+   *
+   * The host is the only one who hears from everybody, so it is the only one
+   * that can decide a race. First across the line takes it — a retirement is
+   * not a time — and the tally belongs to the lobby rather than to a profile:
+   * it is the reason to run another one with the same people, and it means
+   * nothing outside the room.
+   */
+  private noteResult(player: number, time: number | null, retired: boolean): void {
+    if (!this.host || retired || time === null) return;
+    if (this.finished.has(player)) return;
+    this.finished.set(player, time);
+    if (this.finished.size === 1) this.host.creditWin(player);
+    this.players = this.host.players;
+  }
+
+  /**
+   * Back to the lobby, to pick again.
+   *
+   * Called when a multiplayer race is over. The whole shape of a session is
+   * race, look at the tally, pick a different stage, race again — going back
+   * to the garage instead would end the evening after one stage.
+   */
+  returnToLobby(): void {
+    this.finished.clear();
+    this.host?.reopen();
+    if (this.host) this.players = this.host.players;
+    this.setOpen(true);
+    this.say(this.host ? 'Pick another stage and go again.' : 'Waiting for the host to pick again.');
+  }
+
+  /**
+   * Open a hosted lobby with a full grid, for the screenshot harness.
+   *
+   * The lobby is otherwise only reachable with two browsers and a handshake,
+   * which means nobody ever looks at it — and a panel nobody looks at is a
+   * panel that quietly stops fitting on the screen.
+   */
+  demo(): void {
+    this.startHosting();
+    this.players = [
+      ...this.host!.players,
+      { id: 1, name: 'Kaisa', host: false, car: 1, ready: true, livery: 'martini', number: 14, wins: 2 },
+      { id: 2, name: 'Rune', host: false, car: 2, ready: false, livery: 'forest-green', number: 8, wins: 1 },
+      { id: 3, name: 'Ottó', host: false, car: 3, ready: true, livery: 'ember', number: 33, wins: 0 },
+    ];
+    this.render();
+  }
+
+  /** Whether there is a lobby to go back to at all. */
+  get inLobby(): boolean {
+    return this.host !== null || this.guest !== null;
   }
 
   // ---- Joining ------------------------------------------------------------
@@ -214,8 +323,11 @@ export class MultiplayerPanel {
       this.say(`Send your reply code back to the host. (found ${addresses})`);
       this.guest = new RaceGuest(await link, {
         name: this.name,
-        onLobby: (players) => {
+        livery: this.livery,
+        number: this.number,
+        onLobby: (players, pick) => {
           this.players = players;
+          this.pick = pick;
           this.render();
         },
         onStart: (setup) => {
@@ -301,6 +413,8 @@ export class MultiplayerPanel {
           <h3>The race</h3>
           <label class="lobby-field">Stage <select data-act="stage">${stages}</select></label>
           <label class="lobby-field">Conditions <select data-act="variant">${variants}</select></label>
+          <h3>Your car</h3>
+          ${this.liveryPicker()}
           <h3>Grid</h3>
           ${this.playerList()}
           <button class="wide" data-act="start" ${this.host && this.host.playerCount > 1 ? '' : 'disabled'}>
@@ -341,6 +455,10 @@ export class MultiplayerPanel {
           <button data-act="copy">Copy reply code</button>
         </div>
         <div>
+          <h3>Your car</h3>
+          ${this.liveryPicker()}
+          <h3>Racing</h3>
+          <p class="lobby-hint">${this.pickedName}</p>
           <h3>Grid</h3>
           ${this.playerList()}
           <button class="wide" data-act="ready">I'm ready</button>
@@ -351,13 +469,31 @@ export class MultiplayerPanel {
   private playerList(): string {
     if (this.players.length === 0) return '<p class="lobby-hint">Nobody here yet.</p>';
     return `<ul class="lobby-players">${this.players
-      .map(
-        (player) =>
-          `<li><b>P${player.car + 1}</b> ${player.name}${player.host ? ' (host)' : ''}<span>${
-            player.ready ? 'ready' : 'waiting'
-          }</span></li>`,
-      )
+      .map((player) => {
+        const paint = liveryById(player.livery);
+        const swatch =
+          `<i class="lobby-swatch" style="background:#${paint.body.toString(16).padStart(6, '0')}"></i>`;
+        // Wins first, because after the first race it is the only number in
+        // the room anybody cares about.
+        const tally = player.wins > 0 ? `${player.wins} win${player.wins > 1 ? 's' : ''}` : '';
+        return `<li>${swatch}<b>#${player.number}</b> ${player.name}${
+          player.host ? ' (host)' : ''
+        }<span>${tally || (player.ready ? 'ready' : 'waiting')}</span></li>`;
+      })
       .join('')}</ul>`;
+  }
+
+  /** Paint and number, offered wherever a player is waiting to race. */
+  private liveryPicker(): string {
+    const options = LIVERIES.map(
+      (paint) =>
+        `<option value="${paint.id}"${paint.id === this.livery ? ' selected' : ''}>${paint.name}</option>`,
+    ).join('');
+    return `
+      <label class="lobby-field">Paint <select data-act="livery">${options}</select></label>
+      <label class="lobby-field">Number
+        <input data-act="number" type="number" min="1" max="99" value="${this.number}">
+      </label>`;
   }
 
   private bind(): void {
@@ -395,10 +531,21 @@ export class MultiplayerPanel {
     pick('stage')?.addEventListener('change', (event) => {
       this.stageIndex = Number((event.target as HTMLSelectElement).value);
       this.variantIndex = 0;
+      this.announcePick();
       this.render();
     });
     pick('variant')?.addEventListener('change', (event) => {
       this.variantIndex = Number((event.target as HTMLSelectElement).value);
+      this.announcePick();
+    });
+    pick('livery')?.addEventListener('change', (event) => {
+      this.livery = (event.target as HTMLSelectElement).value;
+      this.repaint();
+    });
+    pick('number')?.addEventListener('change', (event) => {
+      const value = Number((event.target as HTMLInputElement).value);
+      this.number = Math.min(Math.max(Math.round(value) || 1, 1), 99);
+      this.repaint();
     });
   }
 }

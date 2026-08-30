@@ -323,7 +323,12 @@ describe('career', () => {
 
   it('can fix just enough to get the car to the start line', async () => {
     const damage = career.buildDamage();
-    for (let i = 0; i < 5; i++) damage.applyImpact(impactPointFromForce(HEAD_ON), 46_000);
+    // Hard enough to stop the car, not hard enough to write it off. Five hits
+    // at 46 kN·s now destroy literally everything — a structural impact folds
+    // the whole shell rather than just what it landed on — and then "just
+    // enough to start" and "the whole car" are the same bill, which is a true
+    // statement about a total loss and not what this option is for.
+    for (let i = 0; i < 3; i++) damage.applyImpact(impactPointFromForce(HEAD_ON), 26_000);
     await career.settle(FREE_T, { medal: null, time: null, retired: true, damage });
     expect(career.carIsDriveable).toBe(false);
 

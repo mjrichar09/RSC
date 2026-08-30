@@ -51,7 +51,7 @@ const pineLoop: StageDef = {
   biome: 'forest',
   verge: 'grass',
   bank: 'dirt',
-  hazards: { kinds: ['tree', 'rock'], spacing: 15 },
+  hazards: { kinds: ['tree', 'sapling', 'rock'], spacing: 15 },
   entryFee: 0,
   // The free stage. Modest money, but it is always available and always pays,
   // so no amount of bad luck can strand a player without a way back.
@@ -156,7 +156,7 @@ const northPass: StageDef = {
   biome: 'winter',
   verge: 'snow',
   bank: 'snow',
-  hazards: { kinds: ['pole', 'tree', 'rock'], spacing: 17 },
+  hazards: { kinds: ['pole', 'tree', 'sapling', 'rock'], spacing: 17 },
   entryFee: 500,
   requiresMedals: 2,
   payouts: { author: 8600, gold: 5400, silver: 3000, bronze: 1700, finish: 1000 },
@@ -215,7 +215,7 @@ const millstream: StageDef = {
   biome: 'forest',
   verge: 'grass',
   bank: 'dirt',
-  hazards: { kinds: ['tree', 'rock'], spacing: 14 },
+  hazards: { kinds: ['tree', 'sapling', 'rock'], spacing: 14 },
   entryFee: 300,
   requiresMedals: 5,
   payouts: { author: 6400, gold: 3900, silver: 2200, bronze: 1250, finish: 720 },
@@ -275,7 +275,10 @@ const vieuxVillage: StageDef = {
   // corridor one flat grey with no edge to the road at all.
   verge: 'tarmac',
   bank: 'gravel',
-  hazards: { kinds: ['bale', 'pole'], spacing: 11 },
+  // Buildings twice over, so most of what lines this street is a wall. That
+  // is the character of a town stage: there is no run-off, and getting a
+  // corner wrong costs the most expensive impact in the game.
+  hazards: { kinds: ['building', 'building', 'bale', 'pole'], spacing: 11 },
   entryFee: 420,
   requiresMedals: 7,
   payouts: { author: 7600, gold: 4600, silver: 2600, bronze: 1450, finish: 850 },
@@ -340,12 +343,12 @@ const grandTraverse: StageDef = {
   biome: 'alpine',
   verge: 'grass',
   bank: 'dirt',
-  hazards: { kinds: ['rock', 'tree', 'pole'], spacing: 18 },
+  hazards: { kinds: ['rock', 'tree', 'sapling', 'pole'], spacing: 18 },
   entryFee: 700,
   requiresMedals: 9,
   payouts: { author: 14200, gold: 8800, silver: 4900, bronze: 2750, finish: 1600 },
   checkpoints: 6,
-  medals: { author: 80, gold: 87, silver: 110, bronze: 143 },
+  medals: { author: 77, gold: 84, silver: 106, bronze: 139 },
   controlPoints: [
     // Valley tarmac: fast, wide, and the only place on the stage to breathe.
     cp(0, 0, 0, 7.8, 'tarmac'),
@@ -376,29 +379,35 @@ const grandTraverse: StageDef = {
     // is any use to you. The change is on the straight for the same reason the
     // gravel's is — the corner at the top of the climb is eighty metres later,
     // which is enough warning to have slowed down for it.
+    //
+    // Routed west, into empty ground, and that is not a style choice. The snow
+    // loop used to be concentric with the gravel loop at almost the same radius
+    // and twelve metres higher: `npm run stages` reports the closest a stage
+    // comes to itself, and this one came within **one metre** of its own road at
+    // 464 m against 1451 m. One corridor's embankment and wall then hang in the
+    // air directly over the other, which is what the strange shadows and
+    // occlusion around this stage were.
     cp(10, -22, 46.5, 7.0, 'snow'),
     cp(4, 4, 47, 7.4, 'snow'),
-    cp(14, 60, 48, 7.8, 'snow'),
-    cp(52, 108, 48, 7.2, 'snow'),
-    cp(104, 140, 47, 6.2, 'snow'),
-    cp(168, 150, 46, 5.8, 'snow'),
-    cp(232, 138, 44, 6.2, 'snow'),
-    cp(288, 106, 42, 6.8, 'snow'),
-    cp(324, 58, 40, 7.2, 'snow'),
+    cp(-24, 46, 48, 7.8, 'snow'),
+    cp(-64, 82, 48, 7.2, 'snow'),
+    cp(-96, 128, 47, 6.6, 'snow'),
+    cp(-104, 182, 46, 6.2, 'snow'),
+    cp(-80, 230, 44, 6.6, 'snow'),
+    cp(-30, 258, 42, 7.0, 'snow'),
+    cp(28, 258, 39, 7.4, 'snow'),
     // The long descent off the back, and the only place the stage is fast
     // twice: a straight after twenty corners is a straight you will use.
-    cp(372, 34, 38, 7.4, 'snow'),
-    cp(396, -14, 36, 7.0, 'snow'),
-    cp(400, -70, 33, 6.4, 'snow'),
-    cp(390, -124, 29, 6.0, 'snow'),
-    cp(366, -172, 25, 6.4, 'snow'),
-    cp(324, -206, 21, 7.0, 'snow'),
-    cp(268, -222, 18, 7.4, 'snow'),
-    cp(208, -224, 15, 7.0, 'snow'),
-    // Straight run-off past the line: a car that crosses it sideways has
-    // somewhere to go, and a car that rolls back a few centimetres does not
-    // fall out of the world.
-    cp(148, -224, 13, 7.4, 'snow'),
+    cp(88, 242, 36, 7.0, 'snow'),
+    cp(132, 206, 32, 6.4, 'snow'),
+    cp(152, 156, 28, 6.0, 'snow'),
+    cp(154, 100, 24, 6.4, 'snow'),
+    cp(150, 44, 20, 7.0, 'snow'),
+    cp(140, -8, 16, 7.4, 'snow'),
+    cp(160, -58, 13, 7.0, 'snow'),
+    // Straight run-off past the line, into the middle of the valley the gravel
+    // loop encircles — the one piece of open ground left on the stage.
+    cp(168, -108, 10, 7.4, 'snow'),
   ],
   variants: [
     variant('dusk', 'dusk', 'clear', 1.08, 1.5, 10),

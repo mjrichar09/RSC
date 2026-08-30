@@ -158,7 +158,27 @@ async function main(): Promise<void> {
     if (seen < 3) fail('the guest never saw the host move — no snapshots got through');
     // Some lag is the interpolation delay doing its job; a lot of it is a bug.
     if (Math.abs(seen - drove) > 4) fail(`the guest is ${(drove - seen).toFixed(1)} m out of date`);
-    console.log('OK — two browsers, one race.');
+
+    // And now the other way. This half was missing, which is how "the joiner's
+    // car does not move on the host's screen" could be true without any test
+    // noticing: the guest's inputs go *up* the wire and are applied by the host,
+    // which is a different path from snapshots coming down it.
+    const hostBefore = (await status(host)).carsAt as Ground[];
+    const guestBefore = (await status(guest)).carsAt as Ground[];
+    await guest.keyboard.down('w');
+    await guest.waitForTimeout(8000);
+    await guest.keyboard.up('w');
+    await host.waitForTimeout(500);
+
+    const hostAfter = (await status(host)).carsAt as Ground[];
+    const guestAfter = (await status(guest)).carsAt as Ground[];
+    // The guest is car 0 in its own world and car 1 in the host's.
+    const guestDrove = gap(guestAfter[0]!, guestBefore[0]!);
+    const hostSaw = gap(hostAfter[1]!, hostBefore[1]!);
+    console.log(`guest drove ${guestDrove.toFixed(1)} m; the host saw ${hostSaw.toFixed(1)} m of it`);
+
+    if (hostSaw < 3) fail('the host never saw the guest move — the guest inputs never arrived');
+    console.log('OK — two browsers, one race, both directions.');
   } finally {
     await browser.close();
     await server.close();

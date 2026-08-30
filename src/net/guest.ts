@@ -90,8 +90,11 @@ interface Sample {
 
 export interface GuestOptions {
   name?: string;
-  /** The lobby changed. */
-  onLobby?: (players: PlayerInfo[]) => void;
+  /** Paint and number picked in the lobby. */
+  livery?: string;
+  number?: number;
+  /** The lobby changed, including what the host has picked to race. */
+  onLobby?: (players: PlayerInfo[], pick: { stageId: string; variantId: string }) => void;
   /** The host has started a race; build a world for this setup and `attach` it. */
   onStart?: (setup: RaceSetup) => void;
   /** Somebody finished or retired. */
@@ -156,7 +159,13 @@ export class RaceGuest {
       this.open = false;
       this.options.onClose?.();
     });
-    link.send({ t: 'hello', version: PROTOCOL_VERSION, name: options.name ?? 'Guest' });
+    link.send({
+      t: 'hello',
+      version: PROTOCOL_VERSION,
+      name: options.name ?? 'Guest',
+      livery: options.livery ?? 'works',
+      number: options.number ?? 2,
+    });
   }
 
   get connected(): boolean {
@@ -210,6 +219,11 @@ export class RaceGuest {
     this.link.send({ t: 'result', player: this.you, time, retired });
   }
 
+  /** Repaint. Only the lobby honours it; the host ignores it mid-race. */
+  repaint(livery: string, number: number): void {
+    this.link.send({ t: 'livery', livery, number });
+  }
+
   leave(): void {
     if (!this.open) return;
     this.link.send({ t: 'bye' });
@@ -244,7 +258,10 @@ export class RaceGuest {
           const mine = message.players.find((p) => p.id === this.you);
           if (mine) this.car = mine.car;
         }
-        this.options.onLobby?.(message.players);
+        this.options.onLobby?.(message.players, {
+          stageId: message.stageId,
+          variantId: message.variantId,
+        });
         break;
       case 'start':
         this.setup = message.setup;

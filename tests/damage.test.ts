@@ -18,7 +18,11 @@ import { SURFACES } from '../src/sim/surfaces.js';
 /** A head-on impact pushes the car backwards, so the force direction is -z. */
 const HEAD_ON = v3(0, 0, -1);
 const REAR_ON = v3(0, 0, 1);
-const LEFT_ON = v3(1, 0, 0);
+/**
+ * A hit that shoves the car toward +X came from -X, and -X is the car's right:
+ * nose along +Z, up along +Y, right-handed. Named for the side it landed on.
+ */
+const RIGHT_ON = v3(1, 0, 0);
 
 describe('impactPointFromForce', () => {
   it('puts a head-on impact on the nose', () => {
@@ -31,8 +35,8 @@ describe('impactPointFromForce', () => {
     expect(impactPointFromForce(REAR_ON).z).toBeLessThan(-1.5);
   });
 
-  it('puts a hit from the left on the left flank', () => {
-    const p = impactPointFromForce(LEFT_ON);
+  it('puts a hit from the right on the right flank', () => {
+    const p = impactPointFromForce(RIGHT_ON);
     expect(p.x).toBeLessThan(-0.5);
   });
 
@@ -78,9 +82,9 @@ describe('impacts', () => {
 
   it('damages one corner in a side hit, not both', () => {
     const d = new DamageModel();
-    d.applyImpact(impactPointFromForce(LEFT_ON), 22_000);
-    expect(d.get('panelLeft')).toBeLessThan(1);
-    expect(d.get('panelRight')).toBe(1);
+    d.applyImpact(impactPointFromForce(RIGHT_ON), 22_000);
+    expect(d.get('panelRight')).toBeLessThan(1);
+    expect(d.get('panelLeft')).toBe(1);
   });
 
   it('scales with impact severity', () => {

@@ -47,6 +47,11 @@ for (const def of defs) {
   console.log(`  avg speed       ${result.summary.avgSpeedKph.toFixed(1)} km/h`);
   console.log(`  off road        ${(result.offRoadFraction * 100).toFixed(1)}%`);
   console.log(`  rescues         ${result.rescues}`);
+  const near = stage.closestApproach();
+  console.log(
+    `  closest to self ${near.gap.toFixed(0)} m  (${near.a.toFixed(0)}m <-> ${near.b.toFixed(0)}m)` +
+      (near.gap < 26 ? '  ⚠ the two corridors are stacked' : ''),
+  );
   if (overlaps.length > 0) {
     console.log(`  ⚠ corridor overlaps itself at:`);
     for (const o of overlaps) {

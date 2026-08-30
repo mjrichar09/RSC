@@ -36,6 +36,8 @@ export interface StageView {
   signBoards: THREE.Mesh[];
   /** The marker poles, which have to be re-synced whenever one goes over. */
   markers: MarkerView;
+  /** The hazards, whose knock-over-able ones follow their physics bodies. */
+  props: PropsView;
   /** The crowd, which gets out of the way. */
   crowd: CrowdView;
   /** The lamps over the start line. */
@@ -91,7 +93,8 @@ export function buildStageView(stage: Stage, markers: Markers): StageView {
   group.add(crowd.group);
   const markerView = buildEdgeMarkers(markers);
   group.add(markerView.group);
-  group.add(buildProps(stage));
+  const props = buildProps(stage);
+  group.add(props.group);
   const signs = buildSigns(stage);
   group.add(signs.group);
 
@@ -101,6 +104,7 @@ export function buildStageView(stage: Stage, markers: Markers): StageView {
     markers: markerView,
     crowd,
     startLights,
+    props,
     dispose: () => {
       geometry.dispose();
       (road.material as THREE.Material).dispose();
@@ -654,6 +658,14 @@ const TERRAIN_COLOUR: Record<string, [number, number]> = {
 };
 
 /**
+ * How far around a terrain vertex to look for a lower piece of road.
+ *
+ * Wide enough to cover the gap between two stacked corridors, narrow enough
+ * that a stage which merely climbs is not dragged down to its own valley.
+ */
+const UNDER_RADIUS = 70;
+
+/**
  * Distant ground beyond the corridor.
  *
  * Without it the world stops at the embankment walls and the isometric camera
@@ -704,8 +716,23 @@ function buildTerrain(stage: Stage): THREE.Group {
     // Follow the road's local height rather than a single global minimum, so
     // the ground sits just below the corridor everywhere instead of dropping
     // into a canyon wherever the stage climbs.
+    //
+    // The *lowest* road nearby, not the nearest one. Where a stage passes over
+    // itself — Grand Traverse's snow section runs 12 m above its gravel section
+    // and 8 m across from it — the nearest sample flips from one to the other
+    // across a knife edge, and the ground took a twelve-metre step inside a
+    // single 22 m cell. That is a cliff in the middle of the landscape, and it
+    // is where the strange shadows and occlusion around a doubled-back stage
+    // were coming from. Taking the minimum puts the ground under everything,
+    // which is what ground does.
     const nearest = stage.spline.locate({ x, y: 0, z });
-    const roadHeight = nearest.sample.position.y;
+    let roadHeight = nearest.sample.position.y;
+    for (const sample of stage.spline.samples) {
+      const dx = sample.position.x - x;
+      const dz = sample.position.z - z;
+      if (dx * dx + dz * dz > UNDER_RADIUS * UNDER_RADIUS) continue;
+      if (sample.position.y < roadHeight) roadHeight = sample.position.y;
+    }
     const distance = Math.abs(nearest.lateral);
     const clearance = Math.min(Math.max((distance - 30) / 110, 0), 1);
 
@@ -735,9 +762,62 @@ function buildTerrain(stage: Stage): THREE.Group {
  * hazard has to be unmistakable, because hitting one is expensive and the
  * player needs to have seen it coming.
  */
-function buildProps(stage: Stage): THREE.Group {
-  const group = new THREE.Group();
-  if (stage.props.length === 0) return group;
+/**
+ * The size each kind's geometry is authored at.
+ *
+ * Props carry their own radius and height so the simulation can vary them —
+ * a wood of identically sized trunks reads as wallpaper — and the instance
+ * scale is that size over this one.
+ */
+const PROP_BASE: Record<PropKind, { radius: number; height: number }> = {
+  tree: { radius: 0.52, height: 7.5 },
+  sapling: { radius: 0.16, height: 3.0 },
+  rock: { radius: 0.85, height: 1.3 },
+  bale: { radius: 0.75, height: 1.5 },
+  pole: { radius: 0.16, height: 2.2 },
+  building: { radius: 3.2, height: 9 },
+  gatePost: { radius: 0.28, height: 3.4 },
+};
+
+/**
+ * The instanced hazards, plus the handful of them that move.
+ *
+ * A sapling is a dynamic body in the simulation, so its instance has to be
+ * re-posed from that body — otherwise it goes over in the physics and stays
+ * standing on screen, which is the worst of both.
+ */
+export class PropsView {
+  readonly group = new THREE.Group();
+  /** Instance slot for each movable prop, in stage order. */
+  private movable: { mesh: THREE.InstancedMesh; index: number; scale: THREE.Vector3 }[] = [];
+  private readonly matrix = new THREE.Matrix4();
+  private readonly position = new THREE.Vector3();
+  private readonly quaternion = new THREE.Quaternion();
+
+  claim(mesh: THREE.InstancedMesh, index: number, scale: THREE.Vector3): void {
+    this.movable.push({ mesh, index, scale: scale.clone() });
+  }
+
+  /** Pose the knocked-over ones from the bodies carrying them. */
+  sync(props: readonly { body: { translation(): { x: number; y: number; z: number }; rotation(): { x: number; y: number; z: number; w: number } } }[]): void {
+    for (let i = 0; i < this.movable.length && i < props.length; i++) {
+      const slot = this.movable[i]!;
+      const body = props[i]!.body;
+      const t = body.translation();
+      const r = body.rotation();
+      this.position.set(t.x, t.y, t.z);
+      this.quaternion.set(r.x, r.y, r.z, r.w);
+      this.matrix.compose(this.position, this.quaternion, slot.scale);
+      slot.mesh.setMatrixAt(slot.index, this.matrix);
+      slot.mesh.instanceMatrix.needsUpdate = true;
+    }
+  }
+}
+
+function buildProps(stage: Stage): PropsView {
+  const view = new PropsView();
+  const group = view.group;
+  if (stage.props.length === 0) return view;
 
   const byKind = new Map<PropKind, typeof stage.props>();
   for (const prop of stage.props) {
@@ -752,6 +832,9 @@ function buildProps(stage: Stage): THREE.Group {
   const build: Record<PropKind, () => { geometry: THREE.BufferGeometry; color: number }> = {
     // Trunk plus canopy merged into one silhouette by stacking two cylinders.
     tree: () => ({ geometry: new THREE.ConeGeometry(1.5, 5.5, 6), color: 0x33512f }),
+    // Thin and bright: it has to read as the one you are allowed to hit.
+    sapling: () => ({ geometry: new THREE.ConeGeometry(0.5, 3, 5), color: 0x5f8a44 }),
+    building: () => ({ geometry: new THREE.BoxGeometry(6.4, 9, 6.4), color: 0xcbbda4 }),
     rock: () => ({ geometry: new THREE.DodecahedronGeometry(0.95, 0), color: 0x6a6a68 }),
     bale: () => ({ geometry: new THREE.CylinderGeometry(0.75, 0.75, 1.5, 8), color: 0xb59a55 }),
     pole: () => ({ geometry: new THREE.BoxGeometry(0.22, 2.2, 0.22), color: 0xdcd6c6 }),
@@ -773,20 +856,25 @@ function buildProps(stage: Stage): THREE.Group {
     const q = new THREE.Quaternion();
     const pos = new THREE.Vector3();
     const scl = new THREE.Vector3(1, 1, 1);
+    // The base shape each kind is drawn at, so a prop that carries its own size
+    // is drawn at that size rather than at the geometry's.
+    const base = PROP_BASE[kind];
 
     props.forEach((prop, i) => {
+      scl.set(prop.radius / base.radius, prop.height / base.height, prop.radius / base.radius);
       pos.set(prop.position.x, prop.position.y + prop.height / 2, prop.position.z);
       q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), prop.yaw);
       // Rocks look wrong perfectly upright; a little tilt reads as natural.
       if (kind === 'rock') q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), prop.yaw * 0.3));
       m.compose(pos, q, scl);
       mesh.setMatrixAt(i, m);
+      if (prop.mass !== undefined) view.claim(mesh, i, scl);
     });
     mesh.instanceMatrix.needsUpdate = true;
     group.add(mesh);
   }
 
-  return group;
+  return view;
 }
 
 /**
