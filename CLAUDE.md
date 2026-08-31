@@ -1,17 +1,117 @@
 # RSC — working notes
 
-A top-down/isometric rally racer. Read `README.md` first for what the game is;
-this file is about how to work on it without falling into the holes I already
-fell into.
+A top-down/isometric rally racer. `README.md` says what the game is and why it
+is built the way it is. **This file is the operating manual**: the rules that
+cannot be broken, where everything lives, how to check a change cheaply, and the
+holes already fallen into.
 
-## The one structural rule
+It is loaded into every session, so it earns its length or it gets cut.
 
-**`src/sim/` must never import three.js.** The whole simulation runs in Node,
-which is what makes `npm test`, `npm run telemetry`, `npm run sweep`,
-`npm run stages`, `npm run perf` and the stage generator possible. Rendering
-reads simulation state; it never writes it.
+## Non-negotiables
 
-`src/render/` may import from `sim/`. Never the reverse.
+1. **`src/sim/` must never import three.js.** The whole simulation runs in Node,
+   which is what makes `npm test`, `telemetry`, `sweep`, `stages`, `perf` and the
+   stage generator possible. `src/render/` may import from `sim/`; never the
+   reverse. Rendering reads simulation state and never writes it.
+2. **No `Math.random` in `sim/` or `game/`** — not even as a `?? Math.random`
+   default. Headless runs must be reproducible; randomness comes from a seeded
+   stream, and the fallback has to be seeded too.
+3. **No `process.env` anywhere under `src/`.** Undefined in the browser, and it
+   throws where you will not see it.
+4. **Every magic number for the car lives in `src/data/tuning.ts`.** Nothing else
+   carries one.
+5. **Anything drawn at the size of a thing you can hit belongs in `sim/`.** If
+   the player can see it and the simulation does not know about it, the car will
+   drive through it.
+6. **`npm test` is the gate for every change.** After touching stage data,
+   vehicle physics or anything that moves a gate, `npm run stages` as well — it
+   is the only thing that reports a stage that stopped being completable.
+
+## Architecture map
+
+### Layers
+
+```
+data/   numbers and stage definitions        (imports types from sim/)
+  │
+  ▼
+sim/    physics, vehicle, tires, stage, scenery, AI, telemetry   ← no three.js
+  │                                                                no DOM
+  ├──────────────┬───────────────┬──────────────┐                  no randomness
+  ▼              ▼               ▼              ▼
+game/         net/            render/        audio/
+race rules    the wire        three.js       synthesis
+career        host/guest      reads sim      reads sim
+economy       protocol        never writes
+  │              │               │              │
+  └──────────────┴───────┬───────┴──────────────┘
+                         ▼
+                       ui/        DOM overlay: HUD, garage, menus, lobby, maps
+                         ▼
+                     main.ts      the only place any of it is wired together
+
+tools/   Node harnesses. Import sim/, game/, data/ — never render/ or ui/.
+         The three that need pixels (shoot, uicheck, netcheck) drive a real
+         browser through Playwright instead of importing anything from it.
+```
+
+Two edges the diagram cannot draw: `game/` reaches sideways into `net/` for the
+multiplayer session, and `data/` and `sim/` import each other — `data/` takes
+types from `sim/`, `sim/` takes numbers from `data/tuning.ts`.
+
+One upward import exists and is deliberate: `sim/runStage.ts` uses
+`game/race.js`, because it is a harness that drives a whole stage rather than a
+part of the simulation. Nothing else in `sim/` may reach up.
+
+### One frame
+
+```
+ui/controls (keyboard, gamepad)
+      ↓ DriverInput
+SimWorld.step()  ×N     fixed 120 Hz, accumulator, capped at 0.1 s of catch-up
+      ↓ VehicleState
+Race.update()           clock, gate planes, splits, medals
+      ↓
+render/* + ui/*         interpolate between the last two steps; read only
+```
+
+The sim clock and the wall clock are different things. `dt` is the world's;
+`wallDt` is the one a person experiences. Countdowns and animations use
+`wallDt` — see the trap below.
+
+### Where to change what
+
+| Question | File |
+|---|---|
+| How the car behaves | `sim/vehicle.ts`, `sim/tires.ts`, numbers in `data/tuning.ts` |
+| What breaks in a crash, and the bill | `sim/damage.ts`, `sim/debris.ts` |
+| The shape of a stage | `data/stages/`, `sim/spline.ts`, `sim/terrain.ts` |
+| The corridor cross-section | `sim/corridor.ts` — road, verge, bank, wall, all of it |
+| Trees, boulders, houses: where they stand and what is solid | `sim/scenery.ts` |
+| Hazards on the verge, gates, corner signs | `sim/stage.ts` |
+| Colliders, contacts, the fixed loop | `sim/world.ts` |
+| The AI's line and pace | `sim/driver.ts` |
+| Timing, checkpoints, medals | `game/race.ts` |
+| Money, upgrades, saved progress | `game/economy.ts`, `game/garage.ts`, `game/save.ts` |
+| What anything looks like | `render/stageMesh.ts`, `render/carView.ts`, `render/fx.ts` |
+| Lighting and weather look | `render/scene.ts`, `render/grade.ts` |
+| HUD, garage, menus, lobby | `src/ui/` |
+| Maps and elevation | `ui/stageMap.ts` |
+| Multiplayer | `src/net/` (wire), `game/multiplayer.ts` (session) |
+
+Every source file opens with a comment saying what it is for and, where it
+matters, what was tried first and why it failed. Read that block before the
+code; it is usually the answer.
+
+### Two entry points
+
+- **Browser:** `src/main.ts`. Query parameters drive the visual harness —
+  `?stage=&t=` boots straight into a stage at a given time, `?free` opens the
+  proving ground, `?drama=0` disables the crash cinematic. `tools/shoot.ts`
+  documents the full set it uses.
+- **Node:** `tools/*.ts`, all of which build a `SimWorld` directly. They never
+  call `frame()`, so anything that only lives inside the frame loop is invisible
+  to them — put per-frame effects in a function both paths call.
 
 ## Verify with numbers before pictures
 
@@ -31,11 +131,13 @@ npm run crash -- --deer=60,90,120             # what a deer strike costs
 npm run perf       # simulation cost per step
 npm run shoot      # ONE composite grid PNG, only for visual questions
 npm run netcheck   # two browsers, one race — the only test of the real transport
+npm run uicheck    # career, arcade and multiplayer all open from the menu
 ```
 
 `shoot` always emits a single labelled grid rather than a burst of images, and
 prints the game's own status JSON beside each frame. Reach for it when the
-question is genuinely "does this look right", not before.
+question is genuinely "does this look right", not before. It needs `shots/` to
+exist and will not create it.
 
 `telemetry`, `sweep` and `stages` all take `--set=key=value,...` to try tuning
 values without editing and reverting a file. `stages` only gained it after the
@@ -56,13 +158,87 @@ with the `K` key, or by setting `settings.drama` to 0 — at 0 it is genuinely
 inert, not merely quiet. The harness steps the world directly and never sees
 it; `uicheck` passes `drama=0` anyway.
 
+## Working cheaply
+
+Context is the scarce resource, and so is wall-clock time on a machine that runs
+a physics engine per test. These are the habits that pay:
+
+- **Reproduce the report before designing the fix.** Told the car drove through
+  trees, I spent several rounds reasoning from the corridor geometry about
+  whether it even could — one `shoot` frame settled it, and the answer was not
+  the one the reasoning was heading for. Cheap evidence first, then theory.
+- **Answer from text, not from images.** A `shoot` composite is by far the most
+  expensive thing here — one image is worth thousands of tokens and a minute of
+  Chromium. `telemetry`, `sweep`, `stages` and `perf` answer most questions for
+  the price of forty lines. When an image *is* the answer, take one grid with
+  every case in it rather than four images.
+- **Read the block, not the file.** `grep -n` for the symbol, then read the
+  forty lines around it. The 1 700-line `main.ts` and 1 200-line `stageMesh.ts`
+  are almost never worth reading whole; their per-function comments are.
+- **Grep for the shape of the thing.** Deriving the import graph with one
+  `grep -rho "from '[^']*'"` beats opening seven directories, and it found the
+  one upward import in `sim/` that a guess would have missed.
+- **Bisect by toggling a constant, not by reasoning.** When Grand Traverse went
+  red, setting `SOLID_MARGIN = -999` for one run proved in ninety seconds that
+  the new colliders were *not* the cause — three rounds of plausible theory
+  would have been slower and wrong.
+- **Test the rule, not the game.** `tests/gates.test.ts` feeds `Race` positions
+  directly instead of driving the physics: the question was whether the rule was
+  right, and a full sim run only makes it slower to find out that it was not.
+  Reserve the expensive integration path for things only it can catch.
+- **Measure before and after, on the same machine, twice.** `perf` numbers move
+  40% under load — one run showed 166 µs/step and the next 124 for identical
+  code. A single measurement is not evidence.
+- **Put long runs in the background** and keep working; `npm test` is ~100 s and
+  `npm run stages` several minutes.
+- **Apply mechanical multi-hunk edits with one patch script** in the scratchpad,
+  written with `assert old in s` for every hunk. It fails loudly on a stale
+  assumption instead of silently matching nothing, which a fuzzy edit will do.
+  Watch the indentation in the pattern: a hunk that silently matches nothing
+  because it was written with eight spaces and the file has six is the failure
+  mode this style exists to prevent. Long scripts go in a file rather than down
+  a heredoc — Git Bash mangles the terminator on scripts with many quoted
+  blocks, and the resulting error points at the wrong line.
+- **Throwaway scripts go in the scratchpad, and get deleted.** A `.tmpcheck/` in
+  the repo is fine while it is being used and must not survive the change.
+- **Never copy `node_modules` into a comparison worktree.** `git worktree add`
+  then a `cp -r` of the dependency tree filled the disk and made an unrelated
+  write fail. Symlink it, or run the harness from the main tree against the
+  worktree's sources.
+
 ## Things that have already gone wrong here
 
-Each of these cost real time and is easy to repeat:
+Each of these cost real time and is easy to repeat. Grouped so the list stays
+scannable as it grows; it is append-only.
+
+### Simulation, determinism and units
 
 - **`process.env` anywhere under `src/`.** It is undefined in the browser and
   throws. One debug line inside a Rapier contact callback silently killed every
   impact in the game while the headless tests stayed green.
+- **Reaching for `Math.random` in `sim/` or `game/`.** Headless runs must be
+  reproducible; stochastic behaviour draws from an injected stream — and the
+  *default* has to be a seeded stream too. `random ?? Math.random` looks
+  harmless and quietly made every run with a damage model non-reproducible;
+  nothing failed until a test compared two identical runs.
+- **Trusting a metric without checking what it counts.** `timeAirborne` counted
+  any moment with no wheel down, so a beached car read as a 45-second jump.
+- **Measuring a stop at the standstill.** The slip-ratio denominator clamps at
+  1 m/s, so every wheel reads locked at walking pace whatever it was doing at
+  speed. Sample mid-stop; a slip ratio taken at the end told me the car was
+  locking when it was not, and I nearly retuned the tyre model on it.
+- **Using the physics `dt` for something a person experiences as a duration.**
+  The frame delta is capped at 0.1 s so a stall cannot hand the accumulator a
+  second to catch up on in one go. The start countdown ran on that capped
+  clock, so on a machine managing a few frames a second a four-second countdown
+  took most of a minute. `wallDt` is the real one; `dt` is only for the world.
+- **Reading a raw quaternion component as if it were an angle.** They are only
+  proportional near zero. A test asserting the car still steers under braking
+  read `body.rotation().y` and saw 0.007 against a 0.02 bar while the car was
+  rotating seventy degrees.
+
+### Geometry, handedness and gates
+
 - **A vector named `right` that was the left.** `cross(up, forward)` in a
   right-handed Y-up world with the nose along +Z points to the car's *left*.
   Named `right` on the spline sample it read as obviously correct in a dozen
@@ -71,6 +247,58 @@ Each of these cost real time and is easy to repeat:
   because every tool shared the convention. Settle handedness by driving the
   car and projecting the result through the real camera — never by reasoning
   about it, which got it wrong three times in a row here.
+- **Getting left and right the wrong way round, consistently.** The car's right
+  is **-X**: nose along +Z, up along +Y, right-handed. Every table in the game
+  had it mirrored — wheel mounts, damage components, detachable parts and
+  meshes — so nothing looked wrong until the damage panel reported a folded
+  left wing after a hit on the right. `tests/handedness.test.ts` drives the car,
+  sees which way it actually goes, and checks all four tables against that. A
+  mirror applied to three of them is worse than a mirror applied to none.
+- **A lateral offset taken from the nearest spline *sample*.** It is right on a
+  straight and wrong through a hairpin, where the nearest sample is across the
+  apex from the car. Used to decide whether a checkpoint had been driven
+  through, it reported the AI's own clean lap as twelve metres off the
+  centreline and marked every gate on Grand Traverse missed. Test a gate as a
+  plane with a width, from the gate's own position, forward and left.
+- **A trigger tested only along a plane's normal.** The plane is infinite. A car
+  four hundred metres away but momentarily level with a gate's plane counted as
+  crossing it, and three of four stages in one screenshot were telling the
+  driver they had missed a checkpoint still half a stage ahead. Check the
+  distance to the gate, not to its plane.
+- **A stage passing over itself.** `selfIntersections` skips pairs at different
+  heights, so a section running 12 m above another and 1 m across from it was
+  never reported — and the ground mesh, which took the *nearest* road's height,
+  then stepped twelve metres inside one 22 m cell. That cliff is where strange
+  shadows around a doubled-back stage come from. The ground takes the *lowest*
+  nearby road now, and `npm run stages` prints how close each stage comes to
+  itself: every healthy one is 32–45 m.
+- **Scattering scenery near a stage that loops back on itself.** Scenery reaches
+  a hundred metres out and Pine Loop passes within thirty-two of itself, so a
+  pine placed off one leg stands in the middle of another. Harmless while it was
+  only drawn; given a collider it was a tree in the road, and it cost the AI ten
+  seconds in that stage's first sector. Solidity asks the road — `spline.locate`
+  — never the scatter that placed it.
+- **Measuring a yawed box by its longest side.** A stone wall is three metres
+  long and half a metre thick; which of those faces the road decides whether it
+  is a wall beside a street or a barrier across it. Project the box's own axes
+  onto the road's `left`. Getting this wrong once rejected every wall on the
+  town stage, and once built them all lying across the road, so a village
+  rendered as a flight of steps.
+- **Moving a checkpoint.** Hazards are kept clear of every gate, so a gate that
+  moves reshuffles every prop downstream of it. Nudging gates onto straighter
+  road was a real improvement and cost Grand Traverse's reference lap fifteen
+  seconds against medals calibrated on the old one. It was reverted. Anything
+  that changes gate positions has to be checked with `npm run stages` against
+  the times already in `src/data/stages/`.
+
+### Rendering
+
+- **Anything the player can see that the simulation does not know about.** The
+  trees, boulders and houses beside every road were placed in the renderer and
+  existed nowhere else, so the car drove through all of them. The comment above
+  that code said so plainly and was treated as a design note rather than a bug
+  for as long as it stood. If it is drawn at the size of a thing you can hit,
+  put it in `sim/` — placement, seed and all — and let the renderer read it.
 - **A fixed camera that ends up in front of the car.** Camera yaw was authored
   by eye, and 60–98% of every stage was driven *toward* the viewer, which
   mirrors left and right on screen. Zone yaw is derived from the road now, and
@@ -91,29 +319,16 @@ Each of these cost real time and is easy to repeat:
   says nothing about what happens then — here it was crust blooming in the
   middle of a clean windscreen wherever the noise dipped. Offset the whole band
   instead: `smoothstep(e - w, e + w, x)` with `e` carrying the noise.
-- **Setting SVG `fill` with `setAttribute`.** A stylesheet rule outranks a
-  presentation attribute, so the damage panel's zones stayed green however
-  wrecked the car was. Use `style.fill`.
-- **Trusting a metric without checking what it counts.** `timeAirborne` counted
-  any moment with no wheel down, so a beached car read as a 45-second jump.
-- **Reaching for `Math.random` in `sim/` or `game/`.** Headless runs must be
-  reproducible; stochastic behaviour draws from an injected stream — and the
-  *default* has to be a seeded stream too. `random ?? Math.random` looks
-  harmless and quietly made every run with a damage model non-reproducible;
-  nothing failed until a test compared two identical runs.
-- **Measuring a stop at the standstill.** The slip-ratio denominator clamps at
-  1 m/s, so every wheel reads locked at walking pace whatever it was doing at
-  speed. Sample mid-stop; a slip ratio taken at the end told me the car was
-  locking when it was not, and I nearly retuned the tyre model on it.
-- **Using the physics `dt` for something a person experiences as a duration.**
-  The frame delta is capped at 0.1 s so a stall cannot hand the accumulator a
-  second to catch up on in one go. The start countdown ran on that capped
-  clock, so on a machine managing a few frames a second a four-second countdown
-  took most of a minute. `wallDt` is the real one; `dt` is only for the world.
-- **Reading a raw quaternion component as if it were an angle.** They are only
-  proportional near zero. A test asserting the car still steers under braking
-  read `body.rotation().y` and saw 0.007 against a 0.02 bar while the car was
-  rotating seventy degrees.
+- **Scaling a mesh down to say "damaged".** A panel at half size reads as a
+  smaller panel; a wrecked car built that way is a small tidy car. Damage is
+  vertices moving, and the metal has to go somewhere — collapse along one axis,
+  fatten across the others, and snap the displacement onto planes so the fold
+  facets. `shoot --cells=garage:5000,garage:12000,garage:22000,garage:45000` is
+  the ladder to judge it against.
+- **A vertical face lit only by a hemisphere light.** It comes out navy whatever
+  colour it is painted, so a street of cream houses rendered as dark slabs. A
+  small emissive floor on the material — a tenth of its own colour — keeps a
+  shape's colour in its own shadow without reading as a light source.
 - **Effects written only inside the frame loop.** `shoot` and the `?stage=&t=`
   harness step the world directly and never call `frame()`, so anything that
   only lives there produces nothing in any screenshot and looks broken when it
@@ -121,35 +336,25 @@ Each of these cost real time and is easy to repeat:
   same block also has to pose the car (`carView.update`) before reading a
   dragging part's world position, or sparks come off where the bumper sat
   before it started hanging.
-- **Getting left and right the wrong way round, consistently.** The car's right
-  is **-X**: nose along +Z, up along +Y, right-handed. Every table in the game
-  had it mirrored — wheel mounts, damage components, detachable parts and
-  meshes — so nothing looked wrong until the damage panel reported a folded
-  left wing after a hit on the right. `tests/handedness.test.ts` drives the car,
-  sees which way it actually goes, and checks all four tables against that. A
-  mirror applied to three of them is worse than a mirror applied to none.
-- **A stage passing over itself.** `selfIntersections` skips pairs at different
-  heights, so a section running 12 m above another and 1 m across from it was
-  never reported — and the ground mesh, which took the *nearest* road's height,
-  then stepped twelve metres inside one 22 m cell. That cliff is where strange
-  shadows around a doubled-back stage come from. The ground takes the *lowest*
-  nearby road now, and `npm run stages` prints how close each stage comes to
-  itself: every healthy one is 32–45 m.
-- **Scaling a mesh down to say "damaged".** A panel at half size reads as a
-  smaller panel; a wrecked car built that way is a small tidy car. Damage is
-  vertices moving, and the metal has to go somewhere — collapse along one axis,
-  fatten across the others, and snap the displacement onto planes so the fold
-  facets. `shoot --cells=garage:5000,garage:12000,garage:22000,garage:45000` is
-  the ladder to judge it against.
 - **three.js needing an explicit call after you change a shadow camera's
   frustum** (`light.shadow.camera.updateProjectionMatrix()`), and needing the
   key light on the opposite azimuth from the camera or the car sits on its own
   shadow.
 
+### DOM and UI
+
+- **Setting SVG `fill` with `setAttribute`.** A stylesheet rule outranks a
+  presentation attribute, so the damage panel's zones stayed green however
+  wrecked the car was. Use `style.fill`.
+- **A cache key that does not carry everything on screen.** The HUD's split
+  strip was rebuilt only when the split *count* changed, so a run stayed looking
+  clean after driving round the outside of a checkpoint. If the markup depends
+  on two things, the key has both.
+
 ## Multiplayer
 
 `src/net/` is the protocol, the host, the guest and the transports; `src/sim/`
-knows nothing about any of it. Two things there are easy to get wrong twice:
+knows nothing about any of it. Three things there are easy to get wrong twice:
 
 - **`npm run netcheck` drives both directions.** It used to drive only the host
   and check the guest saw it, which left "the joiner's car does not move on my
@@ -223,6 +428,20 @@ generated from that. Two constraints are not obvious and are enforced in code:
 
 After changing stage data or vehicle physics, re-run `npm run stages`: it is the
 only thing that will tell you a stage stopped being completable.
+
+Grand Traverse is the fragile one, and its night-snow variant is the canary.
+`validateStage` drives each variant three times at rising commitment and wants
+two finishes; on that stage the over-committed run is genuinely off the road a
+quarter of the time, so it sits one perturbation away from failing. A change
+with no behavioural content — a prop a metre to the left — can flip it. When it
+goes red, measure whether the cause is the change or the chaos before fixing
+anything.
+
+Every collider is a broadphase entry and they are not free. The roadside wood is
+solid out to `SOLID_MARGIN` past the corridor wall for exactly that reason:
+measured, colliding everything within forty-six metres more than doubled the
+cost of a stage step to hold trees no car can reach. `npm run perf` is the check
+before widening it.
 
 ## Committing
 
