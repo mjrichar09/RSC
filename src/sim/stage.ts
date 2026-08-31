@@ -240,10 +240,23 @@ export interface Checkpoint {
   /** Arc length along the stage, metres. */
   distance: number;
   position: Vec3;
-  /** Half-width of the gate, for rendering markers. */
+  /** Half-width of the gate: the posts stand at ±this across it. */
   width: number;
   /** Unit vector across the gate, pointing to the driver's left. */
   left: Vec3;
+  /**
+   * Unit vector through the gate, pointing down the stage.
+   *
+   * With `position` and `left` this is the gate as a plane, which is what the
+   * race rules test against. Testing instead against arc length and the
+   * spline's own lateral looked equivalent and was not: that lateral comes from
+   * the nearest *sample*, and through a tight corner the nearest sample is
+   * across the apex from the car — it reported a car in the middle of the road
+   * as twelve metres off it, and marked gates missed that were driven straight
+   * through. A gate is three vectors, and it should be measured as three
+   * vectors.
+   */
+  forward: Vec3;
 }
 
 /** Key under which a variant's record and ghost are stored. */
@@ -461,12 +474,24 @@ export class Stage {
     return this.def.bank;
   }
 
+  /**
+   * Checkpoints, spaced evenly along the stage.
+   *
+   * Evenly, and nowhere cleverer. Moving each gate onto the straightest road
+   * within forty metres was tried — a gate mid-corner is one the racing line
+   * goes round the outside of — and it works, but a gate that moves takes the
+   * hazard layout with it: props are kept clear of every gate, so shifting one
+   * reshuffles every tree and rock downstream of it. On Grand Traverse that put
+   * something new in the AI's path and cost its reference lap fifteen seconds
+   * against medals calibrated on the old one. Not a trade worth making for a
+   * problem the gate rule does not have.
+   */
   private buildCheckpoints(count: number): Checkpoint[] {
     const out: Checkpoint[] = [];
     for (let i = 1; i <= count; i++) {
       const distance = (this.length * i) / (count + 1);
       const s = this.spline.at(distance);
-      out.push({ distance, position: s.position, width: s.width, left: s.left });
+      out.push({ distance, position: s.position, width: s.width, left: s.left, forward: s.forward });
     }
     return out;
   }

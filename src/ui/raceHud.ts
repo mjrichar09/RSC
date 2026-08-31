@@ -47,6 +47,7 @@ export class RaceHud {
   private readonly pace: HTMLElement;
   private readonly best: HTMLElement;
   private readonly notes: HTMLElement;
+  private readonly missedBanner: HTMLElement;
   /** The order of the field in a network race. Empty when racing alone. */
   private readonly standings: HTMLElement;
   /** The start countdown, over the middle of the screen. */
@@ -55,7 +56,8 @@ export class RaceHud {
   private standingsKey = '';
   /** What the notes currently say, so the DOM is only touched when it changes. */
   private notesKey = '';
-  private lastSplitCount = -1;
+  private stripKey = '';
+  private missedKey = '';
   private lastPhase = '';
   private ghostTime: number | null = null;
   private ledger: SettleResult | null = null;
@@ -78,6 +80,7 @@ export class RaceHud {
       </div>
       <div class="race-lights" id="race-lights"></div>
       <div class="race-standings" id="race-standings"></div>
+      <div class="race-missed" id="race-missed"></div>
       <div class="race-notes" id="race-notes"></div>
       <div class="race-panel" id="race-panel"></div>`;
     parent.appendChild(this.root);
@@ -93,6 +96,7 @@ export class RaceHud {
     this.pace = this.root.querySelector('#race-pace')!;
     this.best = this.root.querySelector('#race-best')!;
     this.notes = this.root.querySelector('#race-notes')!;
+    this.missedBanner = this.root.querySelector('#race-missed')!;
   }
 
   /**
@@ -211,7 +215,7 @@ export class RaceHud {
   /** Per-checkpoint deltas against the ghost, aligned with the split list. */
   setSplitDeltas(deltas: (number | null)[]): void {
     this.splitDeltas = deltas;
-    this.lastSplitCount = -1;
+    this.stripKey = '';
   }
 
   /**
@@ -228,7 +232,7 @@ export class RaceHud {
     const suffix = variantName && variantName !== 'Day' ? ` · ${variantName.toUpperCase()}` : '';
     this.stageName.textContent =
       `${stage.def.name.toUpperCase()}${suffix} · ${(stage.length / 1000).toFixed(2)} km`;
-    this.lastSplitCount = -1;
+    this.stripKey = '';
     this.lastPhase = '';
     this.panel.className = 'race-panel';
     this.panel.innerHTML = '';
@@ -282,10 +286,15 @@ export class RaceHud {
     this.clock.classList.toggle('staged', race.phase === 'staging');
     this.progressFill.style.width = `${(race.progress * 100).toFixed(1)}%`;
 
-    if (race.splits.length !== this.lastSplitCount) {
-      this.lastSplitCount = race.splits.length;
+    // Missed gates change the strip without changing the split count, so the
+    // key has to carry both or a run stays looking clean after driving round
+    // the outside of a checkpoint.
+    const stripKey = `${race.splits.length}:${race.missed.join(',')}`;
+    if (stripKey !== this.stripKey) {
+      this.stripKey = stripKey;
       const total = race.stage.checkpoints.length;
       this.checkpoints.innerHTML = Array.from({ length: total }, (_, i) => {
+        if (race.missed.includes(i)) return `<span class="missed">CP${i + 1}</span>`;
         const split = race.splits[i];
         if (!split) return `<span>CP${i + 1}</span>`;
         const d = this.splitDeltas[i];
@@ -296,6 +305,19 @@ export class RaceHud {
         const tone = d === null || d === undefined ? '' : d < 0 ? 'ahead' : 'behind';
         return `<span class="done ${tone}">${label}</span>`;
       }).join('');
+    }
+
+    // A missed gate is only recoverable if you know you missed it, and the one
+    // place a driver is definitely looking is the middle of the screen. Naming
+    // the gate matters as much as the warning: "CP2 MISSED" is something to act
+    // on, and "checkpoint missed" is something to be baffled by.
+    const missed = race.missed.length > 0 && race.phase === 'running'
+      ? `CP${race.missed[0]! + 1} MISSED · GO BACK`
+      : '';
+    if (missed !== this.missedKey) {
+      this.missedKey = missed;
+      this.missedBanner.textContent = missed;
+      this.missedBanner.classList.toggle('show', missed !== '');
     }
 
     if (race.phase !== this.lastPhase) {

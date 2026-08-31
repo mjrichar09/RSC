@@ -383,6 +383,35 @@ html, body {
 
 .race-cps span.ahead { color: #4fd6a0; background: rgba(79, 214, 160, 0.16); }
 .race-cps span.behind { color: var(--hot); background: rgba(232, 85, 47, 0.16); }
+.race-cps span.missed {
+  color: var(--hot);
+  background: rgba(232, 85, 47, 0.28);
+  box-shadow: inset 0 0 0 1px var(--hot);
+}
+
+/* A missed gate, said in the middle of the screen.
+   The only recoverable mistake in the game that is invisible from the driver's
+   seat: you are past it, still moving, and nothing about the road says so. */
+.race-missed {
+  position: absolute;
+  top: 34%;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: var(--hot);
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.85);
+  opacity: 0;
+  transition: opacity 140ms ease;
+  pointer-events: none;
+}
+.race-missed.show { opacity: 1; animation: missed-pulse 1s ease-in-out infinite; }
+@keyframes missed-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
 
 .finish-record {
   font-size: 12px;
