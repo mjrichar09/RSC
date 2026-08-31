@@ -325,7 +325,7 @@ export class CarView {
 
     this.group.add(this.chassis);
 
-    const tireGeo = new THREE.CylinderGeometry(CAR.wheelRadius, CAR.wheelRadius, 0.26, 12);
+    const tireGeo = new THREE.CylinderGeometry(CAR.wheelRadius, CAR.wheelRadius, 0.26, 20);
     tireGeo.rotateZ(Math.PI / 2); // cylinder axis along local X, i.e. the axle
     const tireMat = flat(PALETTE.tire, 0.9, isGhost);
     const hubGeo = new THREE.BoxGeometry(0.28, CAR.wheelRadius * 0.9, CAR.wheelRadius * 0.9);
@@ -335,7 +335,7 @@ export class CarView {
     // tyre was invisible from an isometric camera — the tyre is in front of it.
     // MeshBasic because a hot disc emits its own light, and has to read at
     // night, which is when it matters most.
-    const discGeo = new THREE.RingGeometry(CAR.wheelRadius * 0.42, CAR.wheelRadius * 0.76, 16);
+    const discGeo = new THREE.RingGeometry(CAR.wheelRadius * 0.42, CAR.wheelRadius * 0.76, 24);
     discGeo.rotateY(Math.PI / 2);
 
     for (let i = 0; i < 4; i++) {

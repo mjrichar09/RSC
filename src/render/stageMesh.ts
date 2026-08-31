@@ -11,7 +11,9 @@
  */
 
 import * as THREE from 'three';
-import { CORRIDOR, type PropKind, type Stage } from '../sim/stage.js';
+import { type PropKind, type Stage } from '../sim/stage.js';
+import { CORRIDOR } from '../sim/corridor.js';
+import { DRESSING, type SceneryItem, type SceneryKind } from '../sim/scenery.js';
 import type { Markers } from '../sim/markers.js';
 import type { Vec3 } from '../sim/math.js';
 import { SURFACES } from '../sim/surfaces.js';
@@ -114,179 +116,238 @@ export function buildStageView(stage: Stage, markers: Markers): StageView {
 
 
 /**
- * What grows beside the road, by biome.
+ * Drawing what the stage says is beside the road.
  *
- * Every stage was the same place in a different colour: identical conifers at
- * identical spacing, and the only thing telling a Welsh moor from a Finnish
- * forest was the tint of the ground. This is the dressing that makes them read
- * as different countries — density first, then silhouette, then colour, in that
- * order of how much they matter at an isometric distance.
+ * Placement is no longer decided here — `sim/scenery.ts` owns it, because the
+ * things beside the road are things the car can hit and the simulation has to
+ * know where they are. This file is the other half: what each kind looks like.
  *
- * All of it is scenery in the strict sense: it lives outside the corridor
- * walls, nothing collides with it, and nothing in `sim/` knows it exists. The
- * things you can hit are the stage's hazards, and they are data.
+ * Two rules shape the geometry. It is instanced, so a tree can afford to be a
+ * hundred triangles rather than a cone — three thousand of them is a third of a
+ * million, which is a rounding error to any GPU made this decade, and the
+ * difference between a wood and a field of traffic cones. And it is read at an
+ * isometric distance, so what matters is the silhouette and the one colour
+ * break inside it: a pine is a dark spire on a pale trunk, and that trunk is
+ * most of what says "tree" from forty metres up.
  */
-interface Scatter {
-  kind: 'conifer' | 'broadleaf' | 'deadTree' | 'bush' | 'boulder' | 'tuft' | 'snowFir' | 'building' | 'wall';
-  /**
-   * Which band it grows in.
-   *
-   * `verge` is the strip immediately beside the road, and it is the only band
-   * that is on screen the whole time — the camera shows about thirty metres
-   * across and the embankment starts ten from the centreline. `near` is the
-   * embankment itself, seen at the edges of the frame and through every corner
-   * that opens out. `far` is everything past the wall: the wide shots, and the
-   * sense that the road goes somewhere.
-   */
-  band: 'verge' | 'near' | 'far';
-  /** Roughly how many per 100 m of road, per side. */
-  density: number;
-  /** Size multiplier range. */
-  size: [number, number];
-  color: number;
-  /** Second colour, mixed in per instance so a wood is not one flat green. */
-  colorB?: number;
-  /**
-   * Extra metres to hold the `far` band back from the corridor.
-   *
-   * Trees can crowd the road; a nine-metre building cannot. Without this the
-   * town's houses stood on the embankment and filled the frame, and the street
-   * they were meant to line was invisible underneath them.
-   */
-  push?: number;
+
+/** Merge geometries into one, keeping position and normal only. */
+function mergeParts(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  const flat = parts.map((g) => (g.index ? g.toNonIndexed() : g));
+  let vertices = 0;
+  for (const g of flat) vertices += g.getAttribute('position').count;
+
+  const position = new Float32Array(vertices * 3);
+  const normal = new Float32Array(vertices * 3);
+  let at = 0;
+  for (const g of flat) {
+    const p = g.getAttribute('position') as THREE.BufferAttribute;
+    const n = g.getAttribute('normal') as THREE.BufferAttribute;
+    position.set(p.array as Float32Array, at * 3);
+    normal.set(n.array as Float32Array, at * 3);
+    at += p.count;
+  }
+
+  const merged = new THREE.BufferGeometry();
+  merged.setAttribute('position', new THREE.BufferAttribute(position, 3));
+  merged.setAttribute('normal', new THREE.BufferAttribute(normal, 3));
+  for (let i = 0; i < flat.length; i++) if (flat[i] !== parts[i]) flat[i]!.dispose();
+  return merged;
 }
 
-const DRESSING: Record<string, Scatter[]> = {
-  // Deep northern forest: trees to the edge of the road and nothing to see past
-  // them. The density is the character — this stage should feel like a corridor.
-  forest: [
-    { kind: 'conifer', band: 'far', density: 26, size: [0.8, 1.7], color: 0x2b4a2c, colorB: 0x1f3a22 },
-    { kind: 'broadleaf', band: 'far', density: 6, size: [0.7, 1.2], color: 0x466b32, colorB: 0x5b7a34 },
-    { kind: 'deadTree', band: 'far', density: 2, size: [0.7, 1.1], color: 0x6b5b45 },
-    { kind: 'bush', band: 'near', density: 30, size: [0.4, 0.8], color: 0x3c5a2e, colorB: 0x2f4a26 },
-    { kind: 'tuft', band: 'near', density: 22, size: [0.5, 1.0], color: 0x50703a },
-    { kind: 'tuft', band: 'verge', density: 46, size: [0.3, 0.6], color: 0x4a6b34, colorB: 0x3a5a2c },
-    { kind: 'bush', band: 'verge', density: 10, size: [0.25, 0.45], color: 0x35512b },
-  ],
-  // Worked stone: almost nothing grows, and what does is scrub clinging to
-  // spoil heaps. Open, bright and hard-edged.
-  quarry: [
-    { kind: 'boulder', band: 'far', density: 16, size: [0.7, 2.4], color: 0x7a7268, colorB: 0x8d8272 },
-    { kind: 'deadTree', band: 'far', density: 2, size: [0.6, 1.0], color: 0x6f6150 },
-    { kind: 'boulder', band: 'near', density: 14, size: [0.3, 0.8], color: 0x847b6f, colorB: 0x6d6459 },
-    { kind: 'tuft', band: 'near', density: 10, size: [0.4, 0.8], color: 0x8a8256 },
-    { kind: 'boulder', band: 'verge', density: 26, size: [0.16, 0.4], color: 0x8d8478, colorB: 0x736a5e },
-    { kind: 'tuft', band: 'verge', density: 12, size: [0.25, 0.5], color: 0x8a8256 },
-  ],
-  // Snow-laden firs thinning into open white, and drifts against the banks.
-  winter: [
-    { kind: 'snowFir', band: 'far', density: 16, size: [0.9, 1.8], color: 0x27402f, colorB: 0x1e3327 },
-    { kind: 'deadTree', band: 'far', density: 3, size: [0.8, 1.3], color: 0x5d5347 },
-    { kind: 'boulder', band: 'near', density: 16, size: [0.4, 1.0], color: 0xe6edf2, colorB: 0xcfd9e2 },
-    { kind: 'bush', band: 'near', density: 5, size: [0.4, 0.7], color: 0x38503c },
-    { kind: 'boulder', band: 'verge', density: 30, size: [0.2, 0.5], color: 0xeff4f8, colorB: 0xd8e2ea },
-    { kind: 'tuft', band: 'verge', density: 8, size: [0.2, 0.45], color: 0x7d8a76 },
-  ],
-  // Open moorland: no trees at all, and that absence is the whole look. Heather
-  // and gorse in clumps, with stone breaking through.
-  moor: [
-    { kind: 'boulder', band: 'far', density: 8, size: [0.5, 1.8], color: 0x6f6c66 },
-    { kind: 'bush', band: 'far', density: 14, size: [0.5, 1.1], color: 0x5a4a63, colorB: 0x6b5a2f },
-    { kind: 'bush', band: 'near', density: 30, size: [0.35, 0.75], color: 0x6a4f6b, colorB: 0x7a6634 },
-    { kind: 'tuft', band: 'near', density: 26, size: [0.5, 1.0], color: 0x7a7340, colorB: 0x8d8449 },
-    { kind: 'bush', band: 'verge', density: 34, size: [0.22, 0.5], color: 0x74566f, colorB: 0x84713a },
-    { kind: 'tuft', band: 'verge', density: 30, size: [0.28, 0.55], color: 0x8a8149 },
-  ],
-  // A town stage is walls, not vegetation. Buildings crowd the far band right
-  // up to the corridor so the road reads as a street with no run-off, and the
-  // verge carries low stone walls rather than anything soft to land in.
-  town: [
-    { kind: 'building', band: 'far', density: 10, size: [0.55, 1.1], color: 0xe8dcc2, colorB: 0xcdb89a, push: 26 },
-    { kind: 'wall', band: 'verge', density: 22, size: [0.9, 1.4], color: 0xc8bca8, colorB: 0xa89b89 },
-    { kind: 'tuft', band: 'verge', density: 8, size: [0.2, 0.45], color: 0x5f6b3c },
-    { kind: 'broadleaf', band: 'far', density: 4, size: [0.6, 1.0], color: 0x4a6b3a, push: 8 },
-  ],
-  // High alpine: firs at the bottom, rock and nothing at the top. The stage
-  // crosses three surfaces, so its dressing has to cover the whole range.
-  alpine: [
-    { kind: 'snowFir', band: 'far', density: 14, size: [0.8, 1.7], color: 0x2a4433, colorB: 0x1f3628 },
-    { kind: 'boulder', band: 'far', density: 12, size: [0.8, 2.6], color: 0x8f8a82, colorB: 0x746f68 },
-    { kind: 'boulder', band: 'near', density: 18, size: [0.35, 0.9], color: 0xa8a49c, colorB: 0x827d75 },
-    { kind: 'tuft', band: 'near', density: 14, size: [0.4, 0.9], color: 0x6d7a4c },
-    { kind: 'boulder', band: 'verge', density: 24, size: [0.18, 0.45], color: 0xb2ada4, colorB: 0x8d887f },
-    { kind: 'tuft', band: 'verge', density: 14, size: [0.25, 0.5], color: 0x74804f },
-  ],
-  // Wind-bent pines and dune grass, thinning toward the water.
-  coast: [
-    { kind: 'conifer', band: 'far', density: 9, size: [0.6, 1.1], color: 0x3d5a3c, colorB: 0x4a6440 },
-    { kind: 'boulder', band: 'far', density: 7, size: [0.6, 1.8], color: 0x8a8378 },
-    { kind: 'tuft', band: 'near', density: 34, size: [0.6, 1.2], color: 0xa8a06a, colorB: 0x8f9a5c },
-    { kind: 'bush', band: 'near', density: 8, size: [0.4, 0.8], color: 0x53663c },
-    { kind: 'tuft', band: 'verge', density: 52, size: [0.3, 0.7], color: 0xb3ab72, colorB: 0x97a05f },
-  ],
-};
+/** A cone tier of a conifer: radius, base height, tip height. */
+function tier(radius: number, from: number, to: number, segments = 9): THREE.BufferGeometry {
+  const cone = new THREE.ConeGeometry(radius, to - from, segments);
+  cone.translate(0, from + (to - from) / 2, 0);
+  return cone;
+}
 
-/** How far out from the road scenery is scattered, metres. */
-const SCENERY_REACH = 105;
-/** Total instances allowed per stage, whatever the recipe asks for. */
-const SCENERY_BUDGET = 3200;
+function trunk(radiusTop: number, radiusBottom: number, height: number): THREE.BufferGeometry {
+  const c = new THREE.CylinderGeometry(radiusTop, radiusBottom, height, 8);
+  c.translate(0, height / 2, 0);
+  return c;
+}
 
-function scatterGeometry(kind: Scatter['kind']): THREE.BufferGeometry {
+/**
+ * Push every vertex out along its own direction by a seeded amount.
+ *
+ * A dodecahedron is a rock the way a cube is a house — the right size and
+ * obviously manufactured. Displacing it breaks the regularity that gives it
+ * away, and it costs nothing because it happens once at build time.
+ */
+function roughen(geometry: THREE.BufferGeometry, amount: number, seed = 1): THREE.BufferGeometry {
+  const position = geometry.getAttribute('position') as THREE.BufferAttribute;
+  const v = new THREE.Vector3();
+  for (let i = 0; i < position.count; i++) {
+    v.fromBufferAttribute(position, i);
+    const n = Math.sin((i + seed) * 12.9898) * 43758.5453;
+    const jitter = 1 + ((n - Math.floor(n)) - 0.5) * 2 * amount;
+    v.multiplyScalar(jitter);
+    position.setXYZ(i, v.x, v.y, v.z);
+  }
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+/**
+ * What a kind is drawn as.
+ *
+ * `main` takes the recipe's colour, tinted per instance. `extra` is the second
+ * material inside the same silhouette — a trunk, a roof, a cap of snow — drawn
+ * at the same transform with a fixed colour. Two instanced meshes per recipe
+ * rather than one, which is seven extra draw calls for the whole stage and the
+ * entire difference between a tree and a green triangle.
+ */
+interface SceneryParts {
+  main: THREE.BufferGeometry;
+  extra?: { geometry: THREE.BufferGeometry; color: number };
+  /** Whether the silhouette is tall enough to be worth a shadow. */
+  casts: boolean;
+}
+
+const BARK = 0x4a3a2a;
+
+function sceneryParts(kind: SceneryKind): SceneryParts {
   switch (kind) {
+    // A spire in three tiers on a bare lower trunk. The gap between the ground
+    // and the lowest branches is what makes a stand of them read as a wood you
+    // could see through rather than a hedge.
     case 'conifer':
-      return new THREE.ConeGeometry(1.6, 7.5, 6);
+      return {
+        main: mergeParts([tier(1.7, 1.9, 4.4), tier(1.32, 3.6, 6.0), tier(0.9, 5.4, 7.5)]),
+        extra: { geometry: trunk(0.2, 0.34, 2.6), color: BARK },
+        casts: true,
+      };
+    // Wider, heavier, four tiers: the shape snow sits on.
     case 'snowFir':
-      return new THREE.ConeGeometry(1.8, 7, 6);
-    case 'broadleaf':
-      return new THREE.IcosahedronGeometry(2.4, 0);
-    case 'deadTree':
-      return new THREE.CylinderGeometry(0.16, 0.3, 5.5, 5);
-    case 'bush':
-      return new THREE.IcosahedronGeometry(1.1, 0);
-    case 'boulder':
-      return new THREE.DodecahedronGeometry(1.1, 0);
-    case 'tuft':
-      return new THREE.ConeGeometry(0.55, 1.1, 4);
-    // Buildings and walls are the only scenery that stands on the ground rather
-    // than being sunk into it, so their geometry is translated up by half its
-    // height: a box centred on the origin buries half a house.
-    case 'building': {
-      const box = new THREE.BoxGeometry(6, 9, 6);
-      box.translate(0, 4.5, 0);
-      return box;
+      return {
+        main: mergeParts([
+          tier(1.9, 1.4, 3.4, 10),
+          tier(1.6, 2.8, 4.8, 10),
+          tier(1.25, 4.3, 5.9, 10),
+          tier(0.85, 5.5, 7.0, 10),
+        ]),
+        extra: { geometry: trunk(0.22, 0.38, 2.0), color: BARK },
+        casts: true,
+      };
+    // Two overlapping lobes rather than one ball: a single sphere reads as a
+    // lollipop, and the second lobe is what makes it a crown.
+    case 'broadleaf': {
+      const big = new THREE.IcosahedronGeometry(1.9, 1);
+      big.scale(1, 0.82, 1);
+      big.translate(0, 4.0, 0);
+      const small = new THREE.IcosahedronGeometry(1.25, 1);
+      small.translate(0.9, 3.1, -0.5);
+      return {
+        main: mergeParts([roughen(big, 0.09, 3), roughen(small, 0.11, 17)]),
+        extra: { geometry: trunk(0.18, 0.3, 3.0), color: BARK },
+        casts: true,
+      };
     }
+    // Trunk and three bare limbs. All silhouette, which is the whole point of
+    // it: two per hundred metres, and each one reads at any distance.
+    case 'deadTree': {
+      const parts: THREE.BufferGeometry[] = [trunk(0.12, 0.32, 5.5)];
+      for (let i = 0; i < 3; i++) {
+        const limb = new THREE.CylinderGeometry(0.05, 0.11, 1.9, 5);
+        limb.translate(0, 0.95, 0);
+        limb.rotateZ(0.85 - i * 0.18);
+        limb.rotateY((i * Math.PI * 2) / 3);
+        limb.translate(0, 3.1 + i * 0.55, 0);
+        parts.push(limb);
+      }
+      return { main: mergeParts(parts), casts: true };
+    }
+    // Three lobes at different heights. Heather grows in clumps, not in balls.
+    case 'bush': {
+      const parts: THREE.BufferGeometry[] = [];
+      const lobes: [number, number, number, number][] = [
+        [1.05, 0, 0.55, 0],
+        [0.72, 0.85, 0.4, 0.5],
+        [0.6, -0.7, 0.35, -0.4],
+      ];
+      for (let i = 0; i < lobes.length; i++) {
+        const [r, x, y, z] = lobes[i]!;
+        const lobe = new THREE.IcosahedronGeometry(r, 1);
+        lobe.scale(1, 0.72, 1);
+        lobe.translate(x, y, z);
+        parts.push(roughen(lobe, 0.14, i * 31 + 7));
+      }
+      return { main: mergeParts(parts), casts: false };
+    }
+    // A rock, once the regularity is knocked off it.
+    case 'boulder': {
+      const stone = new THREE.DodecahedronGeometry(1.1, 1);
+      stone.scale(1, 0.78, 1.08);
+      return { main: roughen(stone, 0.17, 5), casts: false };
+    }
+    // Blades, not a cone. Four thin wedges leaning different ways read as grass
+    // at the distance the camera actually sits at; one cone reads as a hat.
+    case 'tuft': {
+      const parts: THREE.BufferGeometry[] = [];
+      for (let i = 0; i < 4; i++) {
+        const blade = new THREE.ConeGeometry(0.2, 1.15, 3);
+        blade.translate(0, 0.55, 0);
+        blade.rotateZ((i % 2 ? 1 : -1) * (0.18 + i * 0.06));
+        blade.rotateY((i * Math.PI) / 4 + 0.3);
+        blade.translate((i - 1.5) * 0.16, 0, (i % 3) * 0.12 - 0.12);
+        parts.push(blade);
+      }
+      return { main: mergeParts(parts), casts: false };
+    }
+    // Walls, then a pitched roof in a second colour. A flat-topped box is a
+    // shipping container; the pitch is what makes a street of them a village.
+    case 'building': {
+      const walls = new THREE.BoxGeometry(6, 6.4, 6);
+      walls.translate(0, 3.2, 0);
+      const plinth = new THREE.BoxGeometry(6.4, 0.5, 6.4);
+      plinth.translate(0, 0.25, 0);
+      const roof = new THREE.CylinderGeometry(0, 4.7, 2.9, 4);
+      roof.rotateY(Math.PI / 4);
+      roof.scale(1, 1, 0.92);
+      roof.translate(0, 8.0, 0);
+      const eaves = new THREE.BoxGeometry(6.7, 0.35, 6.7);
+      eaves.translate(0, 6.5, 0);
+      return {
+        main: mergeParts([walls, plinth]),
+        extra: { geometry: mergeParts([roof, eaves]), color: 0x6b4436 },
+        casts: true,
+      };
+    }
+    // Coursed stone with a capstone proud of it, which is what catches the
+    // light and tells you it is a wall and not a kerb.
+    //
+    // Its length runs along local +Z, which is the axis yaw puts down the road.
+    // Built across X instead — as it was — every wall on a town stage lay at
+    // right angles to the street, and a village came out looking like a flight
+    // of steps beside the road rather than a wall along it.
     case 'wall': {
-      const box = new THREE.BoxGeometry(3.4, 1.4, 0.6);
-      box.translate(0, 0.7, 0);
-      return box;
+      const body = new THREE.BoxGeometry(0.55, 1.15, 3.4);
+      body.translate(0, 0.575, 0);
+      const cap = new THREE.BoxGeometry(0.72, 0.22, 3.5);
+      cap.translate(0, 1.26, 0);
+      return { main: mergeParts([body, cap]), casts: false };
     }
   }
 }
 
 /**
- * Scatter the biome's vegetation along the road, outside the corridor.
+ * Build the biome's dressing from the list the stage already scattered.
  *
- * Placed along the centreline rather than across the bounding box: a stage is a
- * ribbon through a landscape, and scattering over its bounding box puts nine
- * tenths of the instances where the camera never looks.
+ * One instanced mesh per recipe, plus one for its second material where it has
+ * one. Nothing here decides *where* anything goes: that is the simulation's,
+ * and it has to be, or the trees on screen are not the trees the car hits.
  */
 function buildScenery(stage: Stage): THREE.Group {
   const group = new THREE.Group();
   const recipes = DRESSING[stage.def.biome] ?? DRESSING.forest!;
 
-  // Seeded from the stage id: the same wood every time it loads, in the browser
-  // and in the screenshot harness.
-  let seed = 0;
-  for (let i = 0; i < stage.def.id.length; i++) seed = (seed * 31 + stage.def.id.charCodeAt(i)) >>> 0;
-  const random = () => {
-    seed = (seed * 1664525 + 1013904223) >>> 0;
-    return seed / 4294967296;
-  };
-
-  const step = 12;
-  const samples = Math.max(Math.floor(stage.length / step), 1);
-  const total = recipes.reduce((sum, r) => sum + r.density, 0) * 2 * (stage.length / 100);
-  const budget = Math.min(1, SCENERY_BUDGET / Math.max(total, 1));
+  const byRecipe = new Map<number, SceneryItem[]>();
+  for (const item of stage.scenery) {
+    const list = byRecipe.get(item.recipe);
+    if (list) list.push(item);
+    else byRecipe.set(item.recipe, [item]);
+  }
 
   const matrix = new THREE.Matrix4();
   const quaternion = new THREE.Quaternion();
@@ -295,106 +356,92 @@ function buildScenery(stage: Stage): THREE.Group {
   const up = new THREE.Vector3(0, 1, 0);
   const tint = new THREE.Color();
 
-  for (const recipe of recipes) {
-    const perSample = (recipe.density / 100) * step * 2 * budget;
-    const count = Math.max(Math.ceil(perSample * samples), 1);
-    const geometry = scatterGeometry(recipe.kind);
+  for (const [index, items] of byRecipe) {
+    const recipe = recipes[index];
+    if (!recipe || items.length === 0) continue;
+
+    const parts = sceneryParts(recipe.kind);
     const mesh = new THREE.InstancedMesh(
-      geometry,
-      new THREE.MeshStandardMaterial({ roughness: 0.9, flatShading: true }),
-      count,
+      parts.main,
+      new THREE.MeshStandardMaterial({
+        roughness: 0.9,
+        flatShading: true,
+        // A floor under the shadowed faces. Scenery is mostly vertical sides,
+        // and a vertical side lit only by a blue hemisphere is a navy slab
+        // whatever colour it is painted — which is what a village of cream
+        // houses actually looked like. Small enough that it never reads as a
+        // light source, and it keeps a shape's own colour in its own shadow.
+        emissive: recipe.color,
+        emissiveIntensity: 0.12,
+      }),
+      items.length,
     );
-    // Only the tall things cast: the shadow camera rides with the car and a
+    // Only the tall things cast: the shadow camera rides with the car, and a
     // thousand shadow-casting tufts is a bill for something nobody can see.
-    mesh.castShadow =
-      recipe.kind === 'conifer' ||
-      recipe.kind === 'snowFir' ||
-      recipe.kind === 'broadleaf' ||
-      recipe.kind === 'building';
+    mesh.castShadow = parts.casts;
     mesh.receiveShadow = false;
+
+    const extra = parts.extra
+      ? new THREE.InstancedMesh(
+          parts.extra.geometry,
+          new THREE.MeshStandardMaterial({
+            color: parts.extra.color,
+            roughness: 0.92,
+            flatShading: true,
+            emissive: parts.extra.color,
+            emissiveIntensity: 0.12,
+          }),
+          items.length,
+        )
+      : null;
+    if (extra) {
+      extra.castShadow = false;
+      extra.receiveShadow = false;
+    }
 
     const a = new THREE.Color(recipe.color);
     const b = new THREE.Color(recipe.colorB ?? recipe.color);
 
-    let n = 0;
-    for (let i = 0; i < samples && n < count; i++) {
-      const d = i * step + random() * step;
-      const sample = stage.spline.at(Math.min(d, stage.length - 1));
-      // The embankment, from the outer edge of the verge to just short of the
-      // wall; and everything past the wall.
-      const vergeFrom = sample.width + 0.35;
-      const vergeTo = sample.width + CORRIDOR.vergeWidth - 0.4;
-      const bankFrom = sample.width + CORRIDOR.vergeWidth + 0.6;
-      const bankTo = sample.width + CORRIDOR.vergeWidth + CORRIDOR.bankWidth - 0.5;
-      const beyond = sample.width + CORRIDOR.vergeWidth + CORRIDOR.bankWidth + 2 + (recipe.push ?? 0);
+    const tilt = new THREE.Quaternion();
+    const across = new THREE.Vector3(1, 0, 0);
 
-      for (let k = 0; k < perSample && n < count; k++) {
-        if (perSample < 1 && random() > perSample) continue;
-        const side = random() < 0.5 ? -1 : 1;
-        const onCorridor = recipe.band !== 'far';
-        // Far scenery is weighted toward the road: what is close is what is seen.
-        const out =
-          recipe.band === 'verge'
-            ? vergeFrom + (vergeTo - vergeFrom) * random()
-            : recipe.band === 'near'
-              ? bankFrom + (bankTo - bankFrom) * random()
-              : beyond + (SCENERY_REACH - beyond) * random() ** 2;
-        const along = (random() - 0.5) * step;
-
-        position.set(
-          sample.position.x + sample.left.x * out * side + sample.forward.x * along,
-          // On the embankment rather than at road level, or a bush on a bank
-          // hovers a metre above its own hillside.
-          sample.position.y + (onCorridor ? CORRIDOR.heightAt(sample.width, out) : 0),
-          sample.position.z + sample.left.z * out * side + sample.forward.z * along,
-        );
-
-        const size = recipe.size[0] + random() * (recipe.size[1] - recipe.size[0]);
-        // Sunk slightly so nothing hovers over ground that undulates under it.
-        // Buildings and walls stand on it instead: their geometry already has
-        // its base at the origin, and a sunk house loses its ground floor.
-        const standing = recipe.kind === 'building' || recipe.kind === 'wall';
-        position.y -= standing ? 0.15 : 0.6 * size;
-        scale.set(size, size * (0.85 + random() * 0.4), size);
-        // A wall follows the road. Given a random yaw like everything else it
-        // read as scattered planks rather than as the edge of a street.
-        quaternion.setFromAxisAngle(
-          up,
-          recipe.kind === 'wall'
-            ? Math.atan2(sample.forward.x, sample.forward.z) + (random() - 0.5) * 0.12
-            : random() * Math.PI * 2,
-        );
-        matrix.compose(position, quaternion, scale);
-        mesh.setMatrixAt(n, matrix);
-
-        tint.copy(a).lerp(b, random());
-        mesh.setColorAt(n, tint);
-        n++;
-      }
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]!;
+      position.set(item.position.x, item.position.y, item.position.z);
+      scale.set(item.size, item.size * item.stretch, item.size);
+      quaternion.setFromAxisAngle(up, item.yaw);
+      if (item.pitch !== 0) quaternion.multiply(tilt.setFromAxisAngle(across, item.pitch));
+      matrix.compose(position, quaternion, scale);
+      mesh.setMatrixAt(i, matrix);
+      extra?.setMatrixAt(i, matrix);
+      mesh.setColorAt(i, tint.copy(a).lerp(b, item.mix));
     }
 
-    mesh.count = n;
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     group.add(mesh);
+    if (extra) {
+      extra.instanceMatrix.needsUpdate = true;
+      group.add(extra);
+    }
 
     // A cap of snow on the firs, which is most of what says "winter" from a
     // distance — the tree under it is the same tree.
     if (recipe.kind === 'snowFir') {
       const caps = new THREE.InstancedMesh(
-        new THREE.ConeGeometry(1.5, 3.4, 6),
+        mergeParts([tier(1.75, 1.3, 3.3, 10), tier(1.15, 4.2, 5.8, 10), tier(0.8, 5.4, 7.1, 10)]),
         new THREE.MeshStandardMaterial({ color: 0xeef3f7, roughness: 0.8, flatShading: true }),
-        Math.max(n, 1),
+        items.length,
       );
       caps.castShadow = false;
-      for (let i = 0; i < n; i++) {
-        mesh.getMatrixAt(i, matrix);
-        matrix.decompose(position, quaternion, scale);
-        position.y += 2.0 * scale.y;
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i]!;
+        position.set(item.position.x, item.position.y + 0.12 * item.size, item.position.z);
+        scale.set(item.size * 0.97, item.size * item.stretch, item.size * 0.97);
+        quaternion.setFromAxisAngle(up, item.yaw);
         matrix.compose(position, quaternion, scale);
         caps.setMatrixAt(i, matrix);
       }
-      caps.count = n;
       caps.instanceMatrix.needsUpdate = true;
       group.add(caps);
     }
@@ -789,13 +836,32 @@ const PROP_BASE: Record<PropKind, { radius: number; height: number }> = {
 export class PropsView {
   readonly group = new THREE.Group();
   /** Instance slot for each movable prop, in stage order. */
-  private movable: { mesh: THREE.InstancedMesh; index: number; scale: THREE.Vector3 }[] = [];
+  private movable: {
+    meshes: THREE.InstancedMesh[];
+    index: number;
+    scale: THREE.Vector3;
+    /**
+     * Half the prop's height.
+     *
+     * The physics body is centred on the shape and the geometry stands on its
+     * own origin, so the two are half a sapling apart. Rotated by the body,
+     * which is the whole point: a sapling lying flat has its base at one end of
+     * itself, not underneath its middle.
+     */
+    lift: number;
+  }[] = [];
+  private readonly offset = new THREE.Vector3();
   private readonly matrix = new THREE.Matrix4();
   private readonly position = new THREE.Vector3();
   private readonly quaternion = new THREE.Quaternion();
 
-  claim(mesh: THREE.InstancedMesh, index: number, scale: THREE.Vector3): void {
-    this.movable.push({ mesh, index, scale: scale.clone() });
+  /**
+   * A prop can be drawn from more than one mesh — a trunk under a canopy — and
+   * all of them have to move together when it goes over. A sapling whose leaves
+   * fall and whose trunk stays standing is worse than one that does neither.
+   */
+  claim(meshes: THREE.InstancedMesh[], index: number, scale: THREE.Vector3, lift: number): void {
+    this.movable.push({ meshes, index, scale: scale.clone(), lift });
   }
 
   /** Pose the knocked-over ones from the bodies carrying them. */
@@ -805,14 +871,116 @@ export class PropsView {
       const body = props[i]!.body;
       const t = body.translation();
       const r = body.rotation();
-      this.position.set(t.x, t.y, t.z);
       this.quaternion.set(r.x, r.y, r.z, r.w);
+      this.offset.set(0, -slot.lift, 0).applyQuaternion(this.quaternion);
+      this.position.set(t.x + this.offset.x, t.y + this.offset.y, t.z + this.offset.z);
       this.matrix.compose(this.position, this.quaternion, slot.scale);
-      slot.mesh.setMatrixAt(slot.index, this.matrix);
-      slot.mesh.instanceMatrix.needsUpdate = true;
+      for (const mesh of slot.meshes) {
+        mesh.setMatrixAt(slot.index, this.matrix);
+        mesh.instanceMatrix.needsUpdate = true;
+      }
     }
   }
 }
+
+/**
+ * What a hazard looks like.
+ *
+ * Authored base-at-origin and at the size `PROP_BASE` names, so the instance
+ * scale is the prop's own size over that one — a wood of identically sized
+ * trunks reads as wallpaper, and the simulation varies them for exactly that
+ * reason.
+ *
+ * These are the things the game charges you for hitting, so they get the detail
+ * before anything else does. A house that is a grey box and a tree that is a
+ * green triangle are the same object at a glance, and the player is meant to be
+ * reading the difference between them at ninety kilometres an hour.
+ */
+function propParts(kind: PropKind): SceneryParts {
+  switch (kind) {
+    // A mature trunk carrying three tiers. The trunk is the point: it is what
+    // the collider is, and a canopy sitting on nothing reads as a bush.
+    case 'tree':
+      return {
+        main: mergeParts([tier(1.55, 2.2, 4.6), tier(1.2, 3.8, 6.1), tier(0.8, 5.4, 7.5)]),
+        extra: { geometry: trunk(0.2, 0.32, 2.8), color: BARK },
+        casts: true,
+      };
+    // Thin and bright: it has to read as the one you are allowed to hit.
+    case 'sapling':
+      return {
+        main: mergeParts([tier(0.5, 0.9, 2.1, 7), tier(0.34, 1.8, 3.0, 7)]),
+        extra: { geometry: trunk(0.05, 0.08, 1.1), color: 0x6b5a3a },
+        casts: false,
+      };
+    // A house, with a roof on it. The corner of one of these is the hardest
+    // thing in the game to hit, and it should not look like a shipping crate.
+    case 'building': {
+      const walls = new THREE.BoxGeometry(6.4, 6.2, 6.4);
+      walls.translate(0, 3.1, 0);
+      const plinth = new THREE.BoxGeometry(6.8, 0.55, 6.8);
+      plinth.translate(0, 0.275, 0);
+      const roof = new THREE.CylinderGeometry(0, 5.0, 3.1, 4);
+      roof.rotateY(Math.PI / 4);
+      roof.translate(0, 7.6, 0);
+      const eaves = new THREE.BoxGeometry(7.1, 0.4, 7.1);
+      eaves.translate(0, 6.3, 0);
+      return {
+        main: mergeParts([walls, plinth]),
+        extra: { geometry: mergeParts([roof, eaves]), color: 0x6b4436 },
+        casts: true,
+      };
+    }
+    // Stone, once the regularity is knocked off it.
+    case 'rock': {
+      const stone = new THREE.DodecahedronGeometry(0.95, 1);
+      stone.scale(1, 0.72, 1.05);
+      stone.translate(0, 0.62, 0);
+      return { main: roughen(stone, 0.19, 11), casts: true };
+    }
+    // Round bale: a drum with the twine showing, and flat ends the light picks
+    // out so it reads as lying on its side rather than as a barrel.
+    case 'bale': {
+      const drum = new THREE.CylinderGeometry(0.75, 0.75, 1.5, 14);
+      drum.translate(0, 0.75, 0);
+      const bands: THREE.BufferGeometry[] = [];
+      for (let i = 0; i < 3; i++) {
+        const band = new THREE.TorusGeometry(0.76, 0.05, 5, 14);
+        band.rotateX(Math.PI / 2);
+        band.translate(0, 0.35 + i * 0.4, 0);
+        bands.push(band);
+      }
+      return {
+        main: drum,
+        extra: { geometry: mergeParts(bands), color: 0x6f5c30 },
+        casts: true,
+      };
+    }
+    // A marker post with a reflective band near the top — the same thing that
+    // makes the road's own edge markers readable at a distance.
+    case 'pole': {
+      const post = new THREE.CylinderGeometry(0.09, 0.11, 2.2, 6);
+      post.translate(0, 1.1, 0);
+      const band = new THREE.CylinderGeometry(0.12, 0.12, 0.3, 6);
+      band.translate(0, 1.85, 0);
+      return { main: post, extra: { geometry: band, color: 0xe8552f }, casts: false };
+    }
+    // Never built: gate posts are drawn by `buildGates`, banner and all.
+    case 'gatePost':
+      return { main: new THREE.BoxGeometry(0.4, 3.4, 0.4), casts: false };
+  }
+}
+
+/** Base colour of each hazard. */
+const PROP_COLOUR: Record<PropKind, number> = {
+  tree: 0x33512f,
+  sapling: 0x6f9c4e,
+  building: 0xcbbda4,
+  rock: 0x6a6a68,
+  bale: 0xb59a55,
+  pole: 0xdcd6c6,
+  gatePost: 0xf2c14e,
+};
 
 function buildProps(stage: Stage): PropsView {
   const view = new PropsView();
@@ -829,31 +997,48 @@ function buildProps(stage: Stage): PropsView {
     byKind.set(prop.kind, list);
   }
 
-  const build: Record<PropKind, () => { geometry: THREE.BufferGeometry; color: number }> = {
-    // Trunk plus canopy merged into one silhouette by stacking two cylinders.
-    tree: () => ({ geometry: new THREE.ConeGeometry(1.5, 5.5, 6), color: 0x33512f }),
-    // Thin and bright: it has to read as the one you are allowed to hit.
-    sapling: () => ({ geometry: new THREE.ConeGeometry(0.5, 3, 5), color: 0x5f8a44 }),
-    building: () => ({ geometry: new THREE.BoxGeometry(6.4, 9, 6.4), color: 0xcbbda4 }),
-    rock: () => ({ geometry: new THREE.DodecahedronGeometry(0.95, 0), color: 0x6a6a68 }),
-    bale: () => ({ geometry: new THREE.CylinderGeometry(0.75, 0.75, 1.5, 8), color: 0xb59a55 }),
-    pole: () => ({ geometry: new THREE.BoxGeometry(0.22, 2.2, 0.22), color: 0xdcd6c6 }),
-    // Never built: gate posts are drawn by `buildGates`.
-    gatePost: () => ({ geometry: new THREE.BoxGeometry(0.4, 3.4, 0.4), color: 0xf2c14e }),
-  };
-
   for (const [kind, props] of byKind) {
-    const { geometry, color } = build[kind]();
+    const parts = propParts(kind);
+    const colour = PROP_COLOUR[kind];
     const mesh = new THREE.InstancedMesh(
-      geometry,
-      new THREE.MeshStandardMaterial({ color, roughness: 0.85, flatShading: true }),
+      parts.main,
+      new THREE.MeshStandardMaterial({
+        color: colour,
+        roughness: 0.85,
+        flatShading: true,
+        // The same floor the scenery gets: a hazard whose shaded side goes navy
+        // is a hazard whose shape you cannot read until you are in it.
+        emissive: colour,
+        emissiveIntensity: 0.12,
+      }),
       props.length,
     );
-    mesh.castShadow = true;
+    mesh.castShadow = parts.casts;
     mesh.receiveShadow = true;
+
+    const extra = parts.extra
+      ? new THREE.InstancedMesh(
+          parts.extra.geometry,
+          new THREE.MeshStandardMaterial({
+            color: parts.extra.color,
+            roughness: 0.9,
+            flatShading: true,
+            emissive: parts.extra.color,
+            emissiveIntensity: 0.12,
+          }),
+          props.length,
+        )
+      : null;
+    if (extra) {
+      extra.castShadow = false;
+      extra.receiveShadow = true;
+    }
 
     const m = new THREE.Matrix4();
     const q = new THREE.Quaternion();
+    const tilt = new THREE.Quaternion();
+    const up = new THREE.Vector3(0, 1, 0);
+    const across = new THREE.Vector3(1, 0, 0);
     const pos = new THREE.Vector3();
     const scl = new THREE.Vector3(1, 1, 1);
     // The base shape each kind is drawn at, so a prop that carries its own size
@@ -862,16 +1047,25 @@ function buildProps(stage: Stage): PropsView {
 
     props.forEach((prop, i) => {
       scl.set(prop.radius / base.radius, prop.height / base.height, prop.radius / base.radius);
-      pos.set(prop.position.x, prop.position.y + prop.height / 2, prop.position.z);
-      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), prop.yaw);
+      // Geometry stands on its own origin, so the prop's position is where its
+      // base goes rather than where its middle does.
+      pos.set(prop.position.x, prop.position.y, prop.position.z);
+      q.setFromAxisAngle(up, prop.yaw);
       // Rocks look wrong perfectly upright; a little tilt reads as natural.
-      if (kind === 'rock') q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), prop.yaw * 0.3));
+      if (kind === 'rock') q.multiply(tilt.setFromAxisAngle(across, prop.yaw * 0.3));
       m.compose(pos, q, scl);
       mesh.setMatrixAt(i, m);
-      if (prop.mass !== undefined) view.claim(mesh, i, scl);
+      extra?.setMatrixAt(i, m);
+      if (prop.mass !== undefined) {
+        view.claim(extra ? [mesh, extra] : [mesh], i, scl, prop.height / 2);
+      }
     });
     mesh.instanceMatrix.needsUpdate = true;
     group.add(mesh);
+    if (extra) {
+      extra.instanceMatrix.needsUpdate = true;
+      group.add(extra);
+    }
   }
 
   return view;

@@ -317,6 +317,38 @@ export class SimWorld {
         this.world.createCollider(collider, body);
         if (movable) this.movableProps.push({ prop, body });
       }
+
+      // The wood itself. Trees, boulders, houses and stone walls are placed by
+      // the stage rather than the renderer precisely so they can be here: a
+      // fully drawn pine the car passes through is the game visibly lying about
+      // its own world. Only what is solid and within reach gets a body — see
+      // `scenery.ts` — so the backdrop past the wall still costs nothing.
+      // All of them hang off the one static ground body rather than getting a
+      // body each. Measured, a body per tree cost 1.8 µs a step — seven hundred
+      // trees took the stage from 71 µs to 154, more than doubling it for
+      // scenery that never moves. As colliders on a body that already exists
+      // they are broadphase entries and nothing else, and the same seven
+      // hundred cost about a tenth of that.
+      for (const item of this.stage.scenery) {
+        const solid = item.solid;
+        if (!solid) continue;
+        const shape =
+          solid.shape === 'box'
+            ? RAPIER.ColliderDesc.cuboid(solid.radius, solid.halfHeight, solid.halfDepth)
+            : RAPIER.ColliderDesc.cylinder(solid.halfHeight, solid.radius);
+        this.world.createCollider(
+          shape
+            .setFriction(0.7)
+            .setTranslation(solid.center.x, solid.center.y, solid.center.z)
+            .setRotation({
+              x: 0,
+              y: Math.sin(solid.yaw / 2),
+              z: 0,
+              w: Math.cos(solid.yaw / 2),
+            }),
+          ground,
+        );
+      }
     }
 
     const spawn =
