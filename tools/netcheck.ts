@@ -93,27 +93,32 @@ async function main(): Promise<void> {
     await openLobby(host);
     await openLobby(guest);
 
-    // Host: make an invite.
+    // Host: make an invite. The code lives inside a folded-away `details` now,
+    // because the path a player takes is a share sheet rather than a
+    // select-and-copy — so it is read from the DOM rather than clicked on.
     await host.click('[data-act="host"]');
     await host.click('[data-act="invite"]');
-    await host.waitForSelector('[data-act="code"]', WAIT);
-    const invite = await host.inputValue('[data-act="code"]');
-    console.log(`invite code: ${invite.length} characters`);
+    await host.waitForSelector('[data-act="code"]', { ...WAIT, state: 'attached' });
+    const link = await host.$eval('[data-act="code"]', (el) => (el as HTMLTextAreaElement).value);
+    console.log(`invite link: ${link.length} characters`);
 
-    // Guest: take it, and hand back a reply.
-    await guest.click('[data-act="join"]');
-    await guest.fill('[data-act="invite-in"]', invite);
-    await guest.click('[data-act="use-invite"]');
+    // Guest: open the link. This is the whole of the joiner's side now — no
+    // screen to find, no code to paste — so it is what the check should drive.
+    await guest.goto(link);
+    await guest.waitForFunction(() => window.RSC?.ready === true, WAIT);
     try {
-      await guest.waitForSelector('[data-act="code"]', WAIT);
+      await guest.waitForSelector('[data-act="code"]', { ...WAIT, state: 'attached' });
     } catch (error) {
       console.error('guest lobby says:', await guest.innerText('.lobby-inner'));
       throw error;
     }
-    const reply = await guest.inputValue('[data-act="code"]');
+    const reply = await guest.$eval('[data-act="code"]', (el) => (el as HTMLTextAreaElement).value);
     console.log(`reply code:  ${reply.length} characters`);
 
-    // Host: accept it, and wait for the guest to appear on the grid.
+    // Host: take it. The one-tap path reads the clipboard, which a headless
+    // browser will not grant, so this drives the by-hand fallback — which is
+    // the path that has to keep working when a browser refuses the easy one.
+    await host.click('.lobby-raw summary >> nth=1');
     await host.fill('[data-act="reply"]', reply);
     await host.click('[data-act="accept"]');
     await host.waitForSelector('.lobby-players li:nth-child(2)', WAIT);

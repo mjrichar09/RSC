@@ -7,7 +7,7 @@ name: Pages
 
 on:
   push:
-    branches: ['claude/rally-racing-game-design-tw3gvi']
+    branches: ['main']
   workflow_dispatch:
 
 permissions:

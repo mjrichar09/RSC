@@ -380,6 +380,12 @@ a duration — the start countdown runs on frame time, so on a page managing one
 frame a second it takes minutes of wall clock, and the host presses the throttle
 against the handbrake.
 
+The exchange itself is a link, not a code: `?join=<code>` opens the game with
+the invite already applied, so the joiner's whole side is tap the link, tap
+send. The raw code stays behind a `details` for the browsers that refuse a
+share sheet or a clipboard read — `netcheck` drives the link on the guest and
+the by-hand fallback on the host, so both paths are covered.
+
 The invite codes are a compact encoding of the five things that matter in an
 SDP — ICE username, ICE password, DTLS fingerprint, setup role, candidates —
 and the rest of the SDP is rebuilt on the far side from a fixed template. That

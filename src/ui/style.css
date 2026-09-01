@@ -384,6 +384,59 @@ html, body {
 .finish-hint { margin-top: 16px; font-size: 11px; color: var(--dim); letter-spacing: 0.1em; }
 .finish-hint b { color: var(--ink); }
 
+/*
+ * What to do when the race is over.
+ *
+ * The panel used to name two keys, which is nothing at all on a phone. These
+ * are real targets, thumb-sized, and the key each one answers to is printed on
+ * it so a keyboard player learns the shortcut rather than losing it.
+ */
+.finish-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 20px;
+  /* The panel itself is inert so it never eats a click meant for the road. */
+  pointer-events: auto;
+}
+.finish-btn {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1 1 0;
+  min-height: 44px;
+  padding: 11px 18px;
+  border: 0;
+  border-radius: 5px;
+  font: 700 var(--step-1)/1 var(--font-ui);
+  letter-spacing: var(--track-ui);
+  color: #0c0f14;
+  background: var(--accent);
+  cursor: pointer;
+  transition: filter 120ms ease, transform 60ms ease;
+}
+.finish-btn.ghost {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+.finish-btn:hover { filter: brightness(1.12); }
+.finish-btn:active { transform: scale(0.97); }
+.finish-btn i {
+  display: block;
+  margin-top: 4px;
+  font-style: normal;
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  opacity: 0.62;
+}
+/* Nothing to learn on a device with no keys. */
+#hud:has(.touch.is-on) .finish-btn i { display: none; }
+
+@media (max-height: 500px) {
+  .race-panel { padding: 12px 18px; min-width: 240px; max-height: 92%; overflow-y: auto; touch-action: pan-y; }
+  .finish-actions { margin-top: 12px; }
+}
+
 .race-delta {
   height: 22px;
   font-size: 19px;
@@ -1748,3 +1801,34 @@ textarea, input { -webkit-user-select: text; user-select: text; }
 /* Key hints are noise on a device with no keys. */
 #hud:has(.touch.is-on) .menu-foot,
 #hud:has(.touch.is-on) .help { display: none; }
+
+/*
+ * The by-hand fallback in the lobby.
+ *
+ * The one-tap path is a share sheet and a clipboard read, and both are things
+ * a browser is allowed to refuse. The raw code has to stay reachable — folded
+ * away so it is not the first thing you see, and one tap from the surface when
+ * the easy path does not work.
+ */
+.lobby-raw { margin: 6px 0 14px; }
+.lobby-raw summary {
+  font-size: var(--step-0);
+  letter-spacing: var(--track-ui);
+  color: var(--dim);
+  cursor: pointer;
+  padding: 6px 0;
+  /* A summary is a tap target, and a phone's minimum is 44px. */
+  min-height: 30px;
+}
+.lobby-raw summary:hover { color: var(--ink); }
+.lobby-raw textarea { margin-top: 6px; }
+
+.lobby button.primary {
+  background: var(--accent);
+  color: #0c0f14;
+  font-weight: 700;
+  border: 0;
+  min-height: 44px;
+}
+.lobby button.primary:hover { filter: brightness(1.12); }
+.lobby button.primary:disabled { filter: none; opacity: 0.45; }

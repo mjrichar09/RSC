@@ -37,6 +37,18 @@ const LAUNCH_WORD: Record<LaunchQuality, string> = {
 };
 
 export class RaceHud {
+  /** Pressed on the finish panel's retry button. */
+  onRetry: (() => void) | null = null;
+  /** Pressed on the finish panel's way-out button. */
+  onLeave: (() => void) | null = null;
+  /** What the finish panel offers. Set by whoever knows the mode. */
+  private actions: { retry: boolean; leave: string } = { retry: true, leave: 'Garage' };
+
+  /** Tell the finish panel what it may offer, and what to call the way out. */
+  setActions(actions: { retry: boolean; leave: string }): void {
+    this.actions = actions;
+  }
+
   private readonly root: HTMLElement;
   private readonly clock: HTMLElement;
   private readonly stageName: HTMLElement;
@@ -348,7 +360,8 @@ export class RaceHud {
       <div class="finish-time">${formatTime(time)}</div>
       ${this.billMarkup(damage)}
       ${this.ledgerMarkup()}
-      <div class="finish-hint"><b>R</b> retry · <b>Esc</b> garage</div>`;
+      ${this.actionsMarkup()}`;
+    this.bindActions();
   }
 
   private showFinish(medal: Medal, time: number, stage: Stage, damage: DamageModel | null): void {
@@ -377,6 +390,39 @@ export class RaceHud {
       <div class="finish-medals">${rows}</div>
       ${this.billMarkup(damage)}
       ${this.ledgerMarkup()}
-      <div class="finish-hint"><b>R</b> retry · <b>Esc</b> garage</div>`;
+      ${this.actionsMarkup()}`;
+    this.bindActions();
+  }
+
+  /**
+   * What to do next.
+   *
+   * These were a line of text naming two keys, which on a phone is a dead end:
+   * the run ends, the panel appears, and there is nothing to press. They are
+   * buttons now, and the key hints stay alongside for anyone who has keys.
+   *
+   * Retry is offered only where it is actually allowed. In a career with the
+   * practice aids off, a run you can repeat for free is a run with no
+   * consequences in it — so there the panel offers the way out and not the way
+   * round.
+   */
+  private actionsMarkup(): string {
+    const retry = this.actions.retry
+      ? `<button class="finish-btn" data-finish="retry">Retry<i>R</i></button>`
+      : '';
+    return `
+      <div class="finish-actions">
+        ${retry}
+        <button class="finish-btn ghost" data-finish="leave">${this.actions.leave}<i>Esc</i></button>
+      </div>`;
+  }
+
+  private bindActions(): void {
+    for (const el of this.panel.querySelectorAll('[data-finish]')) {
+      el.addEventListener('click', () => {
+        if ((el as HTMLElement).dataset.finish === 'retry') this.onRetry?.();
+        else this.onLeave?.();
+      });
+    }
   }
 }

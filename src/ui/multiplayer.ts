@@ -151,6 +151,70 @@ export class MultiplayerPanel {
     this.render();
   }
 
+  /**
+   * The invite, as something you can send in one action.
+   *
+   * A 96-character code is short enough to read out and still a thing the
+   * other player has to copy, open the game, find the join box and paste into.
+   * A link is a tap: it opens the game with the code already applied, and the
+   * first thing they see is their own reply. Same code, one fewer step each
+   * way, and the bare code is still on screen for anyone whose chat app eats
+   * links.
+   */
+  private inviteLink(code: string): string {
+    const url = new URL(location.href);
+    url.hash = '';
+    url.searchParams.set('join', code);
+    return url.toString();
+  }
+
+  /**
+   * Hand a string to the player as directly as the platform allows.
+   *
+   * `navigator.share` opens the OS share sheet, which on a phone is the whole
+   * job done — pick the conversation and it is sent. Everywhere else it is the
+   * clipboard, which is what it always was.
+   */
+  private async handOver(text: string, title: string): Promise<void> {
+    const share = navigator.share?.bind(navigator);
+    if (share) {
+      try {
+        await share({ text, title });
+        this.say('Sent.');
+        return;
+      } catch {
+        // Cancelled, or refused. Fall through to the clipboard.
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      this.say('Copied.');
+    } catch {
+      this.say('Select the box and copy it by hand — the browser would not.');
+    }
+  }
+
+  /**
+   * Take the reply straight from the clipboard.
+   *
+   * The host had to focus a textarea, long-press, paste, and then press a
+   * second button. On a phone that is four deliberate actions to finish a
+   * handshake. Reading the clipboard is one, and the textarea stays for the
+   * browsers that refuse to be read.
+   */
+  private async pasteReply(): Promise<void> {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (!text.trim()) {
+        this.say('Nothing in the clipboard yet — copy their reply first.');
+        return;
+      }
+      await this.takeReply(text);
+    } catch {
+      this.say('This browser will not let the game read the clipboard. Paste it into the box.');
+    }
+  }
+
   private say(text: string): void {
     this.status = text;
     this.render();
@@ -308,6 +372,19 @@ export class MultiplayerPanel {
     this.render();
   }
 
+  /**
+   * Open straight onto somebody's invite.
+   *
+   * The link the host sends carries the code, so the guest's whole side of the
+   * handshake is: tap the link, tap send. Nothing is copied, nothing is
+   * pasted, and there is no screen to find first.
+   */
+  joinFromLink(code: string): void {
+    this.screen = 'join';
+    this.setOpen(true);
+    void this.join(code);
+  }
+
   /** Whether there is a lobby to go back to at all. */
   get inLobby(): boolean {
     return this.host !== null || this.guest !== null;
@@ -444,16 +521,23 @@ export class MultiplayerPanel {
           <h3>Invite a player</h3>
           ${
             this.invite
-              ? `<p class="lobby-hint">1 — send them this code.</p>
-                 <textarea readonly data-act="code">${this.invite.code}</textarea>
-                 <button data-act="copy">Copy invite code</button>
-                 <p class="lobby-hint">2 — paste the reply they send back.</p>
-                 <textarea data-act="reply" placeholder="their reply code"></textarea>
-                 <button data-act="accept">Connect them</button>`
+              ? `<p class="lobby-hint">1 — send them this link. It opens the game ready to join.</p>
+                 <button class="wide primary" data-act="send-invite">Send invite link</button>
+                 <details class="lobby-raw">
+                   <summary>or copy it by hand</summary>
+                   <textarea readonly data-act="code">${this.inviteLink(this.invite.code)}</textarea>
+                 </details>
+                 <p class="lobby-hint">2 — when they send their reply back, take it.</p>
+                 <button class="wide primary" data-act="paste">Paste their reply</button>
+                 <details class="lobby-raw">
+                   <summary>or paste it in here</summary>
+                   <textarea data-act="reply" placeholder="their reply code"></textarea>
+                   <button data-act="accept">Connect them</button>
+                 </details>`
               : `<p class="lobby-hint">
-                   One invite per player. Make one, send it, paste the reply, repeat.
+                   One invite per player. Send the link, take the reply, repeat.
                  </p>
-                 <button data-act="invite" ${this.host?.full ? 'disabled' : ''}>Make an invite code</button>`
+                 <button class="wide primary" data-act="invite" ${this.host?.full ? 'disabled' : ''}>Make an invite</button>`
           }
         </div>
       </div>`;
@@ -470,8 +554,12 @@ export class MultiplayerPanel {
       <div class="lobby-cols">
         <div>
           <h3>Send this back</h3>
-          <textarea readonly data-act="code">${this.reply}</textarea>
-          <button data-act="copy">Copy reply code</button>
+          <p class="lobby-hint">One tap, then wait — the host does the rest.</p>
+          <button class="wide primary" data-act="send-reply">Send my reply</button>
+          <details class="lobby-raw">
+            <summary>or copy it by hand</summary>
+            <textarea readonly data-act="code">${this.reply}</textarea>
+          </details>
         </div>
         <div>
           <h3>Your car</h3>
@@ -535,12 +623,13 @@ export class MultiplayerPanel {
       const box = pick('invite-in') as HTMLTextAreaElement | null;
       if (box?.value) void this.join(box.value);
     });
-    on('copy', () => {
-      const box = pick('code') as HTMLTextAreaElement | null;
-      if (!box) return;
-      box.select();
-      void navigator.clipboard?.writeText(box.value).then(() => this.say('Copied.'));
+    on('send-invite', () => {
+      if (this.invite) void this.handOver(this.inviteLink(this.invite.code), 'Race me on RSC');
     });
+    on('send-reply', () => {
+      if (this.reply) void this.handOver(this.reply, 'My RSC reply code');
+    });
+    on('paste', () => void this.pasteReply());
     on('ready', () => this.guest?.ready(true));
     on('start', () => this.startRace());
 

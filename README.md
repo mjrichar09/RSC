@@ -706,6 +706,12 @@ however they already talk, and pastes back the reply. Two data channels — one
 ordered and reliable for the lobby, one unordered with no retransmits for inputs
 and snapshots, because a late input is worse than a lost one.
 
+**The exchange is a link.** The host sends one — `?join=<code>` — and it opens
+the game with the invite already applied, so the joiner taps the link and then
+taps send. The host takes the reply straight off the clipboard. The raw codes
+are still there behind a fold, because a share sheet and a clipboard read are
+both things a browser is allowed to refuse.
+
 **The codes are 96 characters.** A browser's SDP is about 600 characters of
 boilerplate around five things that matter — ICE username, ICE password, DTLS
 fingerprint, setup role, and the candidate addresses — so only those are sent

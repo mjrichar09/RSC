@@ -371,6 +371,7 @@ const params = new URLSearchParams(location.search);
     celebrations.clear();
     damagePanel.reset();
     raceHud.setStage(stage, variant.name, variant.medals);
+    refreshFinishActions();
     minimap.setStage(stage);
     tuningPanel?.rebind(world.vehicle.tuning);
 
@@ -446,6 +447,7 @@ const params = new URLSearchParams(location.search);
       world.vehicle.reset(stage.start.position, stage.start.heading);
       race.reset();
       raceHud.setStage(stage, variant?.name, variant?.medals);
+      refreshFinishActions();
       raceHud.setBest(save.recordFor(currentKey())?.time ?? null);
       raceHud.setSplitDeltas([]);
       raceHud.setDelta(null);
@@ -754,6 +756,32 @@ const params = new URLSearchParams(location.search);
     if (garage.isOpen) garage.setOpen(false);
     if (menu.isOpen) menu.setOpen(false);
     multiplayer.toggle();
+  };
+
+  /**
+   * The finish panel's buttons.
+   *
+   * Retry is the same path R takes, and it is offered wherever R would work:
+   * always in arcade and multiplayer, and in a career only while the practice
+   * aids are on — a career run you can repeat for free has no consequences in
+   * it. The way out is named for wherever it actually goes.
+   */
+  // A declaration rather than a const: `loadStage` calls it, and `loadStage`
+  // is reachable from the boot path before this point in the file.
+  function refreshFinishActions(): void {
+    raceHud.setActions({
+      retry: mode !== 'career' || career.profile.settings.practice,
+      leave: session ? 'Lobby' : mode === 'career' ? 'Garage' : 'Menu',
+    });
+  }
+  raceHud.onRetry = () => {
+    touch.release();
+    restart();
+  };
+  raceHud.onLeave = () => {
+    touch.release();
+    if (session && multiplayer.inLobby) multiplayer.returnToLobby();
+    else controls.onGarage?.();
   };
 
   // The on-screen menu button does what Escape does, and drops whatever the
@@ -1520,7 +1548,11 @@ const params = new URLSearchParams(location.search);
     // `?screen=garage` and `?screen=arcade` open one screen directly, which is
     // how the visual harness photographs them.
     const screen = params.get('screen');
-    if (screen === 'garage') garage.setOpen(true);
+    // `?join=CODE` is an invite link, and it beats every other opening screen:
+    // somebody sent it, and the only reason the page is open is to use it.
+    const joinCode = params.get('join');
+    if (joinCode) multiplayer.joinFromLink(joinCode);
+    else if (screen === 'garage') garage.setOpen(true);
     else if (screen === 'arcade') menu.setOpen(true, 'arcade');
     else if (screen === 'lobby') {
       // Straight into a hosted lobby, so the harness can photograph the grid,
