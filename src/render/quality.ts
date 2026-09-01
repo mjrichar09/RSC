@@ -9,8 +9,13 @@
  * So there are two mechanisms here and they do different jobs:
  *
  *   - A **tier**, chosen once, that decides what exists at all: shadow map
- *     size, how much scenery is scattered, whether the windscreen pass runs.
- *     These are structural and cannot change per frame without rebuilding.
+ *     size, particle density, whether the windscreen pass runs. These are
+ *     structural and cannot change per frame without rebuilding.
+ *
+ *     Scenery is *not* one of them, and that is deliberate: the trees are
+ *     collidable, placed by the simulation, so drawing fewer of them on a
+ *     phone would leave invisible things to hit. A stage has to be the same
+ *     stage on every device.
  *   - A **render scale**, adjusted continuously, that decides how many pixels
  *     those things are drawn into. This is the one that actually saves a phone,
  *     because fill rate is what it runs out of first, and it is free to change.
@@ -28,8 +33,6 @@ export interface QualitySettings {
   shadowMap: number;
   /** Cap on the device pixel ratio before the adaptive scale is applied. */
   maxPixelRatio: number;
-  /** Multiplier on the scenery instance budget. */
-  scenery: number;
   /** Multiplier on the particle budget. */
   particles: number;
   /** Whether the windscreen effect is worth its fullscreen pass. */
@@ -40,10 +43,10 @@ export interface QualitySettings {
 const TIERS: Record<QualityTier, Omit<QualitySettings, 'tier'>> = {
   // A phone. No shadows: a 2048 map plus the depth pass is the single most
   // expensive thing in the frame and the least missed at this screen size.
-  low: { shadowMap: 0, maxPixelRatio: 1.25, scenery: 0.4, particles: 0.5, vision: false, antialias: false },
+  low: { shadowMap: 0, maxPixelRatio: 1.25, particles: 0.5, vision: false, antialias: false },
   // A tablet, or a laptop with integrated graphics.
-  medium: { shadowMap: 1024, maxPixelRatio: 1.5, scenery: 0.7, particles: 0.8, vision: true, antialias: false },
-  high: { shadowMap: 2048, maxPixelRatio: 2, scenery: 1, particles: 1, vision: true, antialias: true },
+  medium: { shadowMap: 1024, maxPixelRatio: 1.5, particles: 0.8, vision: true, antialias: false },
+  high: { shadowMap: 2048, maxPixelRatio: 2, particles: 1, vision: true, antialias: true },
 };
 
 /**

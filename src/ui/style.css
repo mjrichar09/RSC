@@ -407,6 +407,35 @@ html, body {
 
 .race-cps span.ahead { color: #4fd6a0; background: rgba(79, 214, 160, 0.16); }
 .race-cps span.behind { color: var(--hot); background: rgba(232, 85, 47, 0.16); }
+.race-cps span.missed {
+  color: var(--hot);
+  background: rgba(232, 85, 47, 0.28);
+  box-shadow: inset 0 0 0 1px var(--hot);
+}
+
+/* A missed gate, said in the middle of the screen.
+   The only recoverable mistake in the game that is invisible from the driver's
+   seat: you are past it, still moving, and nothing about the road says so. */
+.race-missed {
+  position: absolute;
+  top: 34%;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: var(--hot);
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.85);
+  opacity: 0;
+  transition: opacity 140ms ease;
+  pointer-events: none;
+}
+.race-missed.show { opacity: 1; animation: missed-pulse 1s ease-in-out infinite; }
+@keyframes missed-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
 
 .finish-record {
   font-size: 12px;
@@ -823,6 +852,46 @@ html, body {
 .map-finish { fill: var(--hot); }
 .map-car { fill: #ffffff; stroke: #0c0f14; stroke-width: 1; }
 
+/* --- Elevation ------------------------------------------------------------
+   The route is tinted by height by `tintedRoute`, which writes its own stroke
+   colours; `.map-route` stays underneath it as the dim outline that keeps a
+   pale high section legible against a pale background. The profile below the
+   map is height against distance, vertically exaggerated on purpose. */
+.stage-profile {
+  display: block;
+  width: 100%;
+  height: 34px;
+  margin-top: 4px;
+  overflow: visible;
+}
+.prof-fill { fill: rgba(127, 168, 94, 0.22); stroke: none; }
+.prof-line {
+  fill: none;
+  stroke: #9fc27a;
+  stroke-width: 1.4;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.prof-gate {
+  stroke: rgba(242, 193, 78, 0.5);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.prof-car {
+  fill: #ffffff;
+  stroke: #0c0f14;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.profile-label {
+  margin-top: 1px;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  color: var(--dim);
+  text-align: right;
+  white-space: nowrap;
+}
+
 /* HUD minimap: top-right. The bottom-right corner belongs to the speed and
    gear, which must never be covered. */
 .minimap {
@@ -830,7 +899,8 @@ html, body {
   right: 18px;
   top: 18px;
   width: 132px;
-  height: 132px;
+  /* The square map, then the profile strip and its one line of text under it. */
+  height: 186px;
   padding: 8px;
   border-radius: 8px;
   background: rgba(12, 15, 20, 0.55);
@@ -844,6 +914,19 @@ html, body {
   opacity: 0.85;
 }
 .stage-map-thumb .map-done { display: none; }
+
+/* The section beside the plan, in the stage list. Short and wide: it is read
+   for its shape, not for values off it. */
+.stage-profile-thumb {
+  margin-top: 3px;
+  max-width: 240px;
+}
+.stage-profile-thumb .stage-profile { height: 20px; margin: 0; }
+.stage-climb { color: #9fc27a; }
+
+/* The minimap box holds a square plan with the profile under it, so the plan
+   has to keep its own aspect rather than filling the taller box. */
+.minimap .stage-map { height: auto; aspect-ratio: 1 / 1; }
 
 /* The basic readouts own an element rather than the whole HUD root. */
 .hud-basic { position: absolute; inset: 0; pointer-events: none; }

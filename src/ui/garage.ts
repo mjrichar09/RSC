@@ -10,7 +10,7 @@
 import { Career, type RaceTarget } from '../game/career.js';
 import { GarageCar } from '../render/garageCar.js';
 import { Stage, type StageDef } from '../sim/stage.js';
-import { stageMapSvg } from './stageMap.js';
+import { elevationProfileSvg, stageElevation, stageMapSvg } from './stageMap.js';
 import { UPGRADES, levelOf, maxLevel, nextCost } from '../game/garage.js';
 import { LIVERIES } from '../data/liveries.js';
 import { sweepProgress } from '../game/awards.js';
@@ -31,14 +31,44 @@ const MEDAL_TINT: Record<string, string> = {
  * and every purchase — fifteen rows would spend 40 ms redrawing shapes that
  * cannot have changed.
  */
-const MAP_CACHE = new Map<string, string>();
+interface StageThumb {
+  map: string;
+  profile: string;
+  /** Total metres climbed, which is the honest measure of how hilly it is. */
+  climb: number;
+}
 
-function stageThumb(def: StageDef): string {
+const MAP_CACHE = new Map<string, StageThumb>();
+
+/**
+ * The shape of a stage, and its section.
+ *
+ * Two rows of a stage list can have identical outlines and be nothing alike to
+ * drive, because one of them climbs two hundred metres. The plan says which
+ * stage it is; the profile beside it says what kind of stage it is.
+ *
+ * The tinted route is deliberately left off the plan here: at fifty-four pixels
+ * the outline is all that is readable, and the height belongs in the profile
+ * next to it where there is room for it.
+ */
+function stageThumb(def: StageDef): StageThumb {
   const cached = MAP_CACHE.get(def.id);
   if (cached !== undefined) return cached;
-  const svg = stageMapSvg(new Stage(def), { size: 100, markers: true, corners: true, stroke: 3.4 });
-  MAP_CACHE.set(def.id, svg);
-  return svg;
+  const stage = new Stage(def);
+  const elevation = stageElevation(stage);
+  const thumb: StageThumb = {
+    map: stageMapSvg(stage, {
+      size: 100,
+      markers: true,
+      corners: true,
+      stroke: 3.4,
+      elevation: false,
+    }),
+    profile: elevationProfileSvg(stage, 100, 18),
+    climb: Math.round(elevation.climb),
+  };
+  MAP_CACHE.set(def.id, thumb);
+  return thumb;
 }
 
 const money = (n: number): string => `${n < 0 ? '−' : ''}${Math.abs(n).toLocaleString('en-GB')}`;
@@ -258,16 +288,18 @@ export class Garage {
         // Only the first nine rows have a number key, so the rest show none
         // rather than a key that does nothing.
         const key = i < 9 ? `${i + 1}` : '';
+        const thumb = stageThumb(def);
 
         return `
           <div class="stage-row ${check.allowed ? '' : 'locked'}">
             <div class="stage-key">${key}</div>
-            <div class="stage-map-thumb">${stageThumb(def)}</div>
+            <div class="stage-map-thumb">${thumb.map}</div>
             <div class="stage-body">
               <div class="stage-name">${def.name} <span class="dim">· ${variant.name}</span></div>
-              <div class="stage-meta">${def.biome}${
+              <div class="stage-meta">${def.biome} · <span class="stage-climb">▲ ${thumb.climb} m</span>${
                 check.reason === 'locked' ? ` · <span class="locked-note">locked</span>` : ''
               }</div>
+              <div class="stage-profile-thumb">${thumb.profile}</div>
               <div class="stage-meta">${best}</div>
             </div>
             <div class="stage-pay">

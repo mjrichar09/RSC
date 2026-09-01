@@ -46,7 +46,7 @@ import {
   addSurfacePatches,
   createScene,
 } from './render/scene.js';
-import { buildStageView, setSceneryBudget, type StageView } from './render/stageMesh.js';
+import { buildStageView, type StageView } from './render/stageMesh.js';
 import { Controls } from './ui/controls.js';
 import { Hud } from './ui/hud.js';
 import { RaceHud } from './ui/raceHud.js';
@@ -122,7 +122,6 @@ async function main(): Promise<void> {
     tierParam === 'low' || tierParam === 'medium' || tierParam === 'high' ? tierParam : guessTier(),
   );
   const renderScale = new RenderScale();
-  setSceneryBudget(quality.scenery);
   const { renderer, scene, key, applyConditions, resize } = createScene(canvas, quality);
   const camera = new IsoCamera();
   const carView = new CarView(scene);

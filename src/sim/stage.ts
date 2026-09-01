@@ -17,6 +17,16 @@ import { type Vec3, add, scale, v3 } from './math.js';
 import { type ControlPoint, Spline, type SplineSample } from './spline.js';
 import { type Corner, findCorners } from './corners.js';
 import { shapeCamber, terrainRise } from './terrain.js';
+import {
+  BANK_HEIGHT,
+  BANK_WIDTH,
+  CROWN,
+  VERGE_DROP,
+  VERGE_WIDTH,
+  WALL_HEIGHT,
+  WALL_WIDTH,
+} from './corridor.js';
+import { type SceneryItem, scatterScenery } from './scenery.js';
 import type { SurfaceId } from './surfaces.js';
 
 export interface CameraZone {
@@ -195,36 +205,7 @@ const PROP_SHAPE: Record<PropKind, { radius: number; height: number; mass?: numb
   gatePost: { radius: 0.28, height: 3.4 },
 };
 
-/** Corridor cross-section, in metres either side of the driveable width. */
-const VERGE_WIDTH = 3.2;
-const VERGE_DROP = 0.18;
-const BANK_WIDTH = 5.0;
-const BANK_HEIGHT = 2.4;
-
-/**
- * The corridor's shape, for anything that has to sit on it.
- *
- * Exported because the renderer scatters vegetation up the embankment, and a
- * second copy of these numbers over there would drift from these ones the first
- * time a verge got wider — leaving a stage with bushes hovering a metre above
- * their own hillside.
- */
-export const CORRIDOR = {
-  vergeWidth: VERGE_WIDTH,
-  vergeDrop: VERGE_DROP,
-  bankWidth: BANK_WIDTH,
-  bankHeight: BANK_HEIGHT,
-  /** Height of the corridor surface at `offset` metres from the centreline. */
-  heightAt(width: number, offset: number): number {
-    const from = Math.abs(offset);
-    if (from <= width) return 0;
-    if (from <= width + VERGE_WIDTH) {
-      return -VERGE_DROP * ((from - width) / VERGE_WIDTH);
-    }
-    const up = Math.min((from - width - VERGE_WIDTH) / BANK_WIDTH, 1);
-    return -VERGE_DROP + (BANK_HEIGHT + VERGE_DROP) * up;
-  },
-} as const;
+export { CORRIDOR } from './corridor.js';
 
 /**
  * Flat apron extended straight out past each end of the centreline, metres.
@@ -234,22 +215,8 @@ export const CORRIDOR = {
  * straight through the world. It also gives the start somewhere to sit and the
  * finish somewhere to slow down, both of which the game needs regardless.
  */
-/** Height of the road's centre above its edges, metres. */
-const CROWN = 0.09;
-
 const APRON_LENGTH = 24;
 const APRON_STEP = 3;
-
-/**
- * Near-vertical wall closing the outside of each embankment.
- *
- * The corridor is the entire world — there is nothing beyond it — so without a
- * wall a big slide simply carries the car over the bank and into an infinite
- * fall. Rally stages are lined with rock faces, trees and snowbanks anyway, so
- * this is honest as well as necessary.
- */
-const WALL_WIDTH = 1.5;
-const WALL_HEIGHT = 8.5;
 
 export interface StageGeometry {
   /** Flat [x, y, z, ...] triples. */
@@ -273,10 +240,23 @@ export interface Checkpoint {
   /** Arc length along the stage, metres. */
   distance: number;
   position: Vec3;
-  /** Half-width of the gate, for rendering markers. */
+  /** Half-width of the gate: the posts stand at ±this across it. */
   width: number;
   /** Unit vector across the gate, pointing to the driver's left. */
   left: Vec3;
+  /**
+   * Unit vector through the gate, pointing down the stage.
+   *
+   * With `position` and `left` this is the gate as a plane, which is what the
+   * race rules test against. Testing instead against arc length and the
+   * spline's own lateral looked equivalent and was not: that lateral comes from
+   * the nearest *sample*, and through a tight corner the nearest sample is
+   * across the apex from the car — it reported a car in the middle of the road
+   * as twelve metres off it, and marked gates missed that were driven straight
+   * through. A gate is three vectors, and it should be measured as three
+   * vectors.
+   */
+  forward: Vec3;
 }
 
 /** Key under which a variant's record and ghost are stored. */
@@ -338,6 +318,13 @@ export class Stage {
   readonly checkpoints: Checkpoint[];
   readonly props: StageProp[];
   /**
+   * The wood, the quarry floor or the street the road runs through.
+   *
+   * Built here rather than in the renderer so the trees you can see are the
+   * trees you can hit — see `scenery.ts` for why that was ever otherwise.
+   */
+  readonly scenery: SceneryItem[];
+  /**
    * Camera zones, derived from the road rather than authored.
    *
    * The authored zones in `def.cameraZones` supply zoom only; the yaw is
@@ -371,6 +358,7 @@ export class Stage {
     this.geometry = this.buildGeometry();
     this.checkpoints = this.buildCheckpoints(def.checkpoints ?? 3);
     this.props = this.buildProps();
+    this.scenery = scatterScenery(def.id, def.biome, this.spline);
     this.cameraZones = this.buildCameraZones();
     this.corners = findCorners(this.spline, this.length);
     this.signs = this.buildSigns();
@@ -486,12 +474,24 @@ export class Stage {
     return this.def.bank;
   }
 
+  /**
+   * Checkpoints, spaced evenly along the stage.
+   *
+   * Evenly, and nowhere cleverer. Moving each gate onto the straightest road
+   * within forty metres was tried — a gate mid-corner is one the racing line
+   * goes round the outside of — and it works, but a gate that moves takes the
+   * hazard layout with it: props are kept clear of every gate, so shifting one
+   * reshuffles every tree and rock downstream of it. On Grand Traverse that put
+   * something new in the AI's path and cost its reference lap fifteen seconds
+   * against medals calibrated on the old one. Not a trade worth making for a
+   * problem the gate rule does not have.
+   */
   private buildCheckpoints(count: number): Checkpoint[] {
     const out: Checkpoint[] = [];
     for (let i = 1; i <= count; i++) {
       const distance = (this.length * i) / (count + 1);
       const s = this.spline.at(distance);
-      out.push({ distance, position: s.position, width: s.width, left: s.left });
+      out.push({ distance, position: s.position, width: s.width, left: s.left, forward: s.forward });
     }
     return out;
   }

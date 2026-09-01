@@ -83,10 +83,17 @@ npm run shoot -- --cells=trace:circle@8 --grid=1x1 --size=900x560 --out=inspect
 ## Performance
 
 The simulation is not the constraint. Measured with `npm run perf`, one fixed
-step on a stage with damage, wildlife and weather costs about 100 µs, so the 120
-steps that make a second of game time cost roughly **12 ms of CPU per second** —
-about 1% of one core, with eighty times more headroom than that needs. Building
-a stage, which happens on load, takes under 3 ms.
+step on a stage with damage, wildlife and weather costs about 115 µs, so the 120
+steps that make a second of game time cost roughly **14 ms of CPU per second** —
+a little over 1% of one core, with seventy times more headroom than that needs.
+Building a stage, which happens on load, takes under 3 ms.
+
+About half that step is the wood. Every tree, boulder and building near the road
+is a collider, and colliders are broadphase entries whether anything is near them
+or not: giving one to everything within forty-six metres took the step from 71 µs
+to 155. What it costs now is the same wood, bounded — solid only out to a few
+metres past the corridor wall, which is as far as a car coming off a crest can
+land. Past that the scenery is a picture, and a picture is free.
 
 Debris is free once it stops moving: Rapier sleeps resting bodies, so a stage
 strewn with wreckage measures the same as a clean one. The bill is paid while
@@ -97,8 +104,8 @@ cap recycles the body furthest from the car rather than the oldest: the cost is
 bounded either way, but deleting the bumper lying across the road ahead of you
 while a door two corners back survives is the one thing it must not do.
 
-A full multiplayer grid costs about **223 µs a step** — 27 ms of CPU per second
-of game, and still 37 times more headroom than it needs. Four cars is not four
+A full multiplayer grid costs about **190 µs a step** — 23 ms of CPU per second
+of game, and still 45 times more headroom than it needs. Four cars is not four
 times one: the road, the wildlife and the weather are simulated once whoever is
 racing on them, and the extra bill is three more vehicles and the contacts
 between them. The host pays it on top of its own rendering, which is the machine
@@ -126,10 +133,27 @@ telemetry and the regression suite possible.
 | `src/ui/` | DOM overlay — HUD and input mapping. |
 | `src/game/` | Race rules: timing, checkpoints, medals, and saved progress. |
 | `src/data/` | `tuning.ts` holds every magic number; `stages/` holds stage definitions. |
+| `src/sim/scenery.ts` | Where the wood, the quarry floor or the street stands, and which of it is solid. |
 | `tools/` | `headless.ts` (telemetry), `sweep.ts` (balance), `stages.ts` (validation), `shoot.ts` (composites). |
 
 The sim runs at a fixed 120 Hz; rendering interpolates between the last two
 steps, so handling is identical on any display refresh rate.
+
+### Maps, and the height on them
+
+A stage map is not an asset: it is the centreline the road is built from, seen
+from above, so it can never fall out of step with the stage. Seen from above,
+though, a stage that climbs sixty metres looks exactly like one that does not,
+and the two drive nothing alike — a crest unloads the car at the one place you
+wanted to turn.
+
+So height is shown twice, because the two questions are different. The route is
+**tinted by elevation**, cold and dark low down through to pale at the top,
+which answers "where does this stage sit" without being read. Under it runs a
+**profile** — height against distance, with the gates marked and the car moving
+along it — which answers "what is coming", the question you actually have while
+driving. The garage's stage list carries the same profile beside each map, plus
+the one number worth printing: total metres climbed.
 
 ### Damage
 
@@ -160,6 +184,38 @@ Stages are lined with trees, rocks and bales because without them the damage
 model has nothing to act on: the embankments are shallow ramps, so a car that
 runs wide climbs one and slides back with far too little force to hurt anything.
 The hazards are what make running wide a decision rather than an inconvenience.
+
+The wood behind them is solid too. Scenery — the pines, the quarry boulders, the
+houses along a village street — used to be placed by the renderer and existed
+nowhere else, so the car drove straight through it: a fully drawn tree that is
+not there is the game visibly lying about its own world. Placement lives in
+`sim/scenery.ts` now, and what is drawn is what you hit. Not all of it: grass and
+heather stay soft, small stones stay ground, and anything past the corridor wall
+plus a car's landing distance is backdrop that pays no physics bill.
+
+### Gates
+
+A checkpoint is passed by driving through it. Progress along a stage is arc
+length — it has to be, or cutting a corner or landing sideways breaks the
+timing — but arc length alone counted a checkpoint the moment the car drew level
+with it, wherever it was. On a stage that loops back within forty metres of
+itself, "level with it" could mean standing on a different leg of the road; the
+finish line could be taken by cutting across the middle of the loop rather than
+driving round it.
+
+So the gates are the one trigger volume in the game. Each is a plane with a
+width, crossed in order, and the finish is the same kind of gate as the rest.
+Miss one and the HUD names it and says to go back, the splits behind it stop
+counting, and the run cannot finish until it is taken — and it can be taken, by
+turning round and coming back through, which is why the rule names the gate
+rather than ending the run.
+
+The width is the corridor rather than the posts. That was measured, not chosen:
+driving every stage with the AI at three levels of commitment, the
+over-committed run is up to five metres outside the posts at some gates — it is
+on the verge, which is part of the stage and already costs grip. A rule that
+failed that run would be refereeing a wheel on the grass rather than stopping
+anyone skipping a checkpoint.
 
 ### Conditions
 
@@ -589,7 +645,7 @@ re-centres under your thumb every time you lift. Throttle, brake and handbrake
 are thumb-sized buttons up the right edge, and both thumbs work at once.
 
 **The picture adapts rather than the settings menu.** A tier chosen at startup
-decides what exists — shadows, scenery density, whether the windscreen pass
+decides what exists — shadows, particle density, whether the windscreen pass
 runs — and a render scale then trades resolution for frame rate continuously,
 because fill rate is what a phone runs out of first and it is the only thing
 that can change mid-race without rebuilding anything. It counts consecutive
