@@ -228,8 +228,19 @@ const DRESSING: Record<string, Scatter[]> = {
 
 /** How far out from the road scenery is scattered, metres. */
 const SCENERY_REACH = 105;
-/** Total instances allowed per stage, whatever the recipe asks for. */
-const SCENERY_BUDGET = 3200;
+/**
+ * Total instances allowed per stage, whatever the recipe asks for.
+ *
+ * Scaled down on a phone. Scenery is the cheapest thing in the frame per
+ * instance and the most numerous, so it is where a budget goes furthest — and
+ * a wood with two thirds of its trees still reads as a wood.
+ */
+let SCENERY_BUDGET = 3200;
+
+/** Set once at startup, from the quality tier. */
+export function setSceneryBudget(scale: number): void {
+  SCENERY_BUDGET = Math.round(3200 * scale);
+}
 
 function scatterGeometry(kind: Scatter['kind']): THREE.BufferGeometry {
   switch (kind) {

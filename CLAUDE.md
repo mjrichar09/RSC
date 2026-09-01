@@ -31,6 +31,7 @@ npm run crash -- --deer=60,90,120             # what a deer strike costs
 npm run perf       # simulation cost per step
 npm run shoot      # ONE composite grid PNG, only for visual questions
 npm run netcheck   # two browsers, one race — the only test of the real transport
+npm run mobilecheck # a phone viewport, driven by thumbs rather than by keys
 ```
 
 `shoot` always emits a single labelled grid rather than a burst of images, and
@@ -196,6 +197,29 @@ Two lifetime bugs, both of which read as "multiplayer is broken":
   pasted, blaming the reply code for a connection that died earlier.
 - **The signalling channel is two people copying strings into a chat window.**
   A one-minute timeout fires in the middle of that. It is five now.
+
+## Mobile
+
+The game is played on a phone in landscape, and the checks for it live in
+`npm run mobilecheck`: an 844x390 viewport, real touch events, no keyboard.
+Three things there are easy to get wrong:
+
+- **`touch-action: none` on the document is what makes steering work**, and it
+  is also what stops every menu scrolling. The panels that scroll opt back in
+  with `pan-y`; forgetting one means the bottom half of the stage list cannot
+  be reached on a phone and nothing on a desktop ever notices.
+- **The steering pad is deliberately huge and sits under the HUD.** It takes
+  the whole left third so a thumb never has to aim, which is only safe while
+  everything drawn over it is `pointer-events: none`. `mobilecheck` asserts
+  that, and separately that no two visible panels overlap — a landscape phone
+  is ~390 px tall and every panel sized for a desktop's vertical room stacks
+  into the one beside it.
+- **Fill rate is what a phone runs out of first**, so the adaptive
+  `RenderScale` multiplies the *pixel ratio* rather than the CSS size — the
+  canvas stays put and is drawn into fewer pixels. It counts *consecutive*
+  slow seconds; measured as time-since-last-change instead, one stutter on a
+  stage load cost a permanently softer picture. `?quality=low|medium|high`
+  overrides the guess.
 
 ## Tuning and calibration
 

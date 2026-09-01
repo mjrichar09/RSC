@@ -21,7 +21,8 @@
     "icon": "tsx tools/icon.ts",
     "perf": "tsx tools/perf.ts",
     "netcheck": "tsx tools/netcheck.ts",
-    "uicheck": "tsx tools/uicheck.ts"
+    "uicheck": "tsx tools/uicheck.ts",
+    "mobilecheck": "tsx tools/mobilecheck.ts"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.14.0",

@@ -47,12 +47,36 @@ html, body {
   color: var(--ink);
   font-family: var(--font-ui);
   -webkit-font-smoothing: antialiased;
+  /*
+   * A phone's browser wants to treat every drag as a scroll and every
+   * double-tap as a zoom. On a steering pad that means the car does not turn
+   * and the page jumps instead — so the whole document opts out, and the
+   * elements that genuinely scroll (the menus) opt back in.
+   */
+  touch-action: none;
+  overscroll-behavior: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
-#app { position: relative; width: 100vw; height: 100vh; }
+/*
+ * `100vh` on a phone is the height with the address bar *hidden*, which is not
+ * the height you have while it is showing — the bottom of the HUD ends up
+ * under it. `dvh` is the live value; the `vh` line is the fallback for
+ * anything that does not know it yet.
+ */
+#app { position: relative; width: 100vw; height: 100vh; height: 100dvh; }
 #view { display: block; width: 100%; height: 100%; }
 
-#hud { position: absolute; inset: 0; pointer-events: none; }
+#hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  /* Keep the corners out from under a notch or a home indicator. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+    env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
 
 .hud-corner { position: absolute; padding: 18px 22px; }
 .hud-tl { top: 0; left: 0; }
@@ -1364,3 +1388,280 @@ html, body {
 .lights-word.launch-clean { color: #bfe8a0; }
 .lights-word.launch-late { color: #e8c86a; }
 .lights-word.launch-bogged { color: #d67a63; }
+
+/* ---------------------------------------------------------------------------
+ * Touch controls.
+ *
+ * Sized in `vmin` rather than px so a 4-inch phone and a 13-inch tablet both
+ * get controls that fit the same thumbs — a 60 px button is comfortable on one
+ * and a speck on the other. Hidden until something actually touches the
+ * screen, so a desktop with a touchscreen does not get thumb pads over its
+ * game the moment the page loads.
+ * ------------------------------------------------------------------------ */
+.touch {
+  position: absolute;
+  inset: 0;
+  display: none;
+  pointer-events: none;
+  z-index: 40;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+    env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+.touch.is-on { display: block; }
+
+/* Menus own the screen while they are up; driving controls under them would
+   only be pressed by accident. */
+#hud.in-menu .touch,
+#hud.in-garage .touch,
+#hud.in-lobby .touch,
+#hud.in-replay .touch { display: none; }
+
+/*
+ * The steering pad. Deliberately enormous and mostly invisible: the whole left
+ * third of the screen takes the drag, and the visible strip is only there to
+ * say so the first time. Aiming at a small target while cornering is exactly
+ * what a touch control must not require.
+ */
+.touch-steer {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 38%;
+  height: 62%;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: max(3vmin, 10px);
+}
+.touch-steer span {
+  font: 600 var(--step-0)/1 var(--font-ui);
+  letter-spacing: var(--track-wide);
+  color: rgb(238 242 247 / 0.35);
+  text-transform: uppercase;
+}
+.touch-wheel {
+  position: relative;
+  width: min(52vmin, 260px);
+  height: 9vmin;
+  max-height: 46px;
+  border-radius: 999px;
+  background: rgb(12 15 20 / 0.42);
+  box-shadow: inset 0 0 0 1px rgb(238 242 247 / 0.16);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.touch-wheel i {
+  width: 22%;
+  height: 62%;
+  border-radius: 999px;
+  background: rgb(242 193 78 / 0.82);
+  will-change: transform;
+}
+
+/* Pedals, stacked up the right edge under the right thumb. */
+.touch-pedals {
+  position: absolute;
+  right: max(3vmin, 10px);
+  bottom: max(3vmin, 10px);
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 2vmin;
+  pointer-events: auto;
+}
+.touch-btn {
+  -webkit-appearance: none;
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  font: 700 var(--step-1)/1 var(--font-ui);
+  letter-spacing: var(--track-ui);
+  color: var(--ink);
+  background: rgb(12 15 20 / 0.5);
+  box-shadow: inset 0 0 0 1px rgb(238 242 247 / 0.18);
+  /* Thumb-sized, and never smaller than the 44 px everyone agrees on. */
+  width: max(19vmin, 74px);
+  height: max(19vmin, 74px);
+  transition: transform 0.06s ease-out, background 0.06s ease-out;
+}
+.touch-gas { background: rgb(126 240 162 / 0.2); box-shadow: inset 0 0 0 1px rgb(126 240 162 / 0.5); }
+.touch-brake { background: rgb(232 85 47 / 0.2); box-shadow: inset 0 0 0 1px rgb(232 85 47 / 0.5); }
+.touch-hand {
+  width: max(15vmin, 60px);
+  height: max(15vmin, 60px);
+  font-size: var(--step-0);
+  align-self: flex-end;
+}
+.touch-btn.is-held { transform: scale(0.93); background: rgb(238 242 247 / 0.26); }
+
+.touch-menu {
+  position: absolute;
+  top: max(2vmin, 8px);
+  right: max(2vmin, 8px);
+  pointer-events: auto;
+  -webkit-appearance: none;
+  appearance: none;
+  border: 0;
+  border-radius: 10px;
+  width: max(11vmin, 44px);
+  height: max(11vmin, 44px);
+  font-size: var(--step-2);
+  color: var(--ink);
+  background: rgb(12 15 20 / 0.5);
+  box-shadow: inset 0 0 0 1px rgb(238 242 247 / 0.18);
+}
+
+/* ---------------------------------------------------------------------------
+ * A phone, held sideways.
+ *
+ * Keyed on height rather than width, because that is the constraint: a
+ * landscape phone is wide and only about 390 CSS pixels tall, so every panel
+ * sized for a desktop's vertical room stacks into the one beside it. Three
+ * things happen here — everything shrinks, the two bottom corners get out of
+ * the way of the thumbs, and anything that only exists to name a key stops
+ * taking up room on a device with no keys.
+ * ------------------------------------------------------------------------ */
+@media (max-height: 500px) {
+  :root {
+    --step-0: 9px;
+    --step-1: 10px;
+    --step-2: 13px;
+    --step-3: 17px;
+    --step-4: 22px;
+  }
+
+  .hud-corner { padding: 8px 10px; }
+
+  /* Nothing to press on a touchscreen, and it sat under the steering pad. */
+  .help { display: none; }
+
+  /* The clock and the splits move up and shrink; the stage name goes, because
+     you already know which stage you chose. */
+  .race-top { top: 4px; }
+  .race-stage { display: none; }
+  .race-clock { font-size: 30px; }
+  .race-progress { width: min(46vw, 340px); }
+  .race-cps span { padding: 2px 8px; }
+
+  /* Below the surface readout rather than on top of it: two absolutely
+     positioned panels both claiming the top-left corner is how "CONDITION"
+     ended up printed through "DIRT". */
+  .damage { top: 26px; left: 8px; width: 108px; padding: 6px 8px; }
+  /* Fixed height so the damage panel below it has something to sit under. */
+  .hud-tl { padding: 3px 10px; font-size: var(--step-0); line-height: 1.2; height: 24px; }
+  /* A debug readout. It is not worth a line on a phone. */
+  .hud-tl .readout.dim { display: none; }
+  .damage-car { width: 52px; margin-bottom: 3px; }
+  .damage-toasts { width: 150px; margin-top: 5px; }
+  .damage-toast { font-size: 9px; padding: 2px 6px; margin-bottom: 2px; }
+
+  .minimap { width: 84px; height: 84px; padding: 5px; right: 8px; top: 8px; }
+  /* Clear of the on-screen menu button, which owns the top-right corner. */
+  .touch.is-on ~ .minimap,
+  .touch.is-on + * .minimap { right: 62px; }
+
+  /*
+   * The speed cluster and the pedals both want the bottom-right corner, and
+   * the pedals win — they are the ones you have to hit. The readout slides
+   * left of the pedal column rather than under it.
+   */
+  .hud-br { padding-right: 10px; }
+  .speed { font-size: 30px; }
+  .rpm { width: 120px; }
+}
+
+/* Only once the thumbs are actually on screen: a small window on a laptop is
+   short too, and it has no pedals in the corner to make room for. */
+@media (max-height: 500px) {
+  #hud:has(.touch.is-on) .hud-br { padding-right: max(23vmin, 92px); }
+  #hud:has(.touch.is-on) .minimap { right: max(13vmin, 56px); }
+}
+
+/*
+ * The panels that genuinely scroll, opting back in to touch.
+ *
+ * `touch-action: none` on the document is what stops a steering drag being
+ * eaten as a page scroll — and it stops these scrolling too, which on a phone
+ * means the bottom half of the stage list simply cannot be reached. `pan-y`
+ * gives them vertical dragging back and keeps horizontal drags out of it.
+ */
+.menu-scroll,
+.menu-inner,
+.garage,
+.garage-inner,
+.lobby,
+.lobby-inner,
+.tuning-body,
+.repair-list,
+.upgrade-list,
+textarea {
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+textarea, input { -webkit-user-select: text; user-select: text; }
+
+/* The menus on a landscape phone. The title was taking a third of the screen
+   and pushing the third card off the bottom, so a mode you could pick was one
+   you had to know to scroll for. */
+@media (max-height: 500px) {
+  .menu-inner { padding: 14px 16px 24px; }
+  .menu-title { font-size: clamp(18px, 3.4vw, 26px); margin: 2px 0 0; }
+  .menu-mark { font-size: 10px; letter-spacing: 0.4em; }
+  .menu-strap { font-size: 10px; line-height: 1.4; margin: 6px 0 12px; }
+  .menu-choice { padding: 9px 12px; }
+  .menu-choice b { font-size: 15px; }
+  .menu-choice span { margin-top: 2px; font-size: 10px; line-height: 1.35; }
+  .menu-choice em { margin-top: 3px; font-size: 9px; }
+  .menu-row { padding: 7px 10px; }
+
+  .garage-inner { padding: 12px 16px 20px; }
+  .lobby-inner { padding: 12px 16px 20px; }
+  .lobby textarea { min-height: 54px; font-size: 11px; }
+}
+
+/*
+ * "Turn your phone sideways".
+ *
+ * Only on a touch device in portrait: a portrait phone is narrower than the
+ * car is on screen, and the isometric camera has nowhere to put the road. A
+ * second layout for an orientation nobody would choose to play in is worse
+ * value than asking once.
+ */
+.rotate-me { display: none; }
+.rotate-me.is-on {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: #0c0f14;
+  color: var(--ink);
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+@media (orientation: portrait) and (max-width: 700px) {
+  .rotate-me.is-on { display: flex; }
+}
+.rotate-me b {
+  display: block;
+  font-size: 56px;
+  color: var(--accent);
+  animation: rotate-hint 2.4s ease-in-out infinite;
+}
+.rotate-me span {
+  display: block;
+  margin-top: 18px;
+  font-size: var(--step-2);
+  letter-spacing: var(--track-ui);
+  color: var(--dim);
+}
+@keyframes rotate-hint {
+  0%, 45% { transform: rotate(0deg); }
+  60%, 100% { transform: rotate(90deg); }
+}
+
+/* Key hints are noise on a device with no keys. */
+#hud:has(.touch.is-on) .menu-foot,
+#hud:has(.touch.is-on) .help { display: none; }

@@ -83,6 +83,9 @@ export class MultiplayerPanel {
   setOpen(open: boolean): void {
     this.open = open;
     this.root.classList.toggle('is-open', open);
+    // The HUD carries the flag so the touch controls can hide under a panel —
+    // a throttle button behind the lobby is only ever pressed by accident.
+    this.root.parentElement?.classList.toggle('in-lobby', open);
     if (open) this.render();
   }
 

@@ -14,6 +14,7 @@
 import * as THREE from 'three';
 import { CLEAR_DAY, type Conditions, type TimeOfDay, visibility } from '../sim/conditions.js';
 import { CAMERA_DISTANCE } from './camera.js';
+import { type QualitySettings, qualityFor } from './quality.js';
 import type { GroundPatch } from '../sim/world.js';
 import { SURFACES } from '../sim/surfaces.js';
 
@@ -142,13 +143,16 @@ export interface SceneBundle {
   key: THREE.DirectionalLight;
   /** Re-light the scene for a set of conditions. Safe to call on every stage load. */
   applyConditions: (conditions: Conditions) => void;
-  resize: (width: number, height: number) => void;
+  resize: (width: number, height: number, scale?: number) => void;
+  quality: QualitySettings;
 }
 
-export function createScene(canvas: HTMLCanvasElement): SceneBundle {
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.shadowMap.enabled = true;
+export function createScene(canvas: HTMLCanvasElement, quality = qualityFor('high')): SceneBundle {
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: quality.antialias });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality.maxPixelRatio));
+  // A phone's shadow pass costs more than everything else in the frame put
+  // together, and at that screen size it is the least missed thing to lose.
+  renderer.shadowMap.enabled = quality.shadowMap > 0;
   renderer.shadowMap.type = THREE.PCFShadowMap;
 
   const scene = new THREE.Scene();
@@ -159,8 +163,8 @@ export function createScene(canvas: HTMLCanvasElement): SceneBundle {
   // that actually tells you where the ground is.
   const key = new THREE.DirectionalLight(0xfff2e0, 2.6);
   key.position.set(KEY_LIGHT_OFFSET.x, KEY_LIGHT_OFFSET.y, KEY_LIGHT_OFFSET.z);
-  key.castShadow = true;
-  key.shadow.mapSize.set(2048, 2048);
+  key.castShadow = quality.shadowMap > 0;
+  key.shadow.mapSize.set(quality.shadowMap || 1024, quality.shadowMap || 1024);
   // Tight frustum: the shadow camera follows the car (see main.ts), so it only
   // ever has to cover the area actually on screen. A loose frustum here wastes
   // the whole 2048 map on ground nobody is looking at.
@@ -198,7 +202,7 @@ export function createScene(canvas: HTMLCanvasElement): SceneBundle {
     key.intensity = preset.key.intensity * dim;
     // A shadow needs a sun. Under moonlight or heavy cloud there is barely one,
     // and a hard shadow at midnight looks wrong immediately.
-    key.castShadow = preset.shadowStrength * dim > 0.25;
+    key.castShadow = quality.shadowMap > 0 && preset.shadowStrength * dim > 0.25;
 
     hemisphere.color.setHex(preset.hemisphere.sky);
     hemisphere.groundColor.setHex(preset.hemisphere.ground);
@@ -221,11 +225,15 @@ export function createScene(canvas: HTMLCanvasElement): SceneBundle {
 
   applyConditions(CLEAR_DAY);
 
-  const resize = (width: number, height: number) => {
+  const resize = (width: number, height: number, scale = 1) => {
+    // The scale multiplies the pixel ratio rather than the CSS size: the canvas
+    // stays the same size on screen and is drawn into fewer pixels, which is
+    // what buys the frame rate back on a phone without moving the layout.
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality.maxPixelRatio) * scale);
     renderer.setSize(width, height, false);
   };
 
-  return { renderer, scene, key, applyConditions, resize };
+  return { renderer, scene, key, applyConditions, resize, quality };
 }
 
 /**

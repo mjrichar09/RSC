@@ -92,7 +92,23 @@ export class ParticleField {
   }
 
   /** Spawn one particle. Oldest are recycled once the pool is full. */
+  /**
+   * How many of the particles asked for are actually spawned, 0..1.
+   *
+   * Thinning rather than capping: a phone still gets spray and sparks, just
+   * fewer of them, and every emitter keeps working without knowing about it.
+   */
+  density = 1;
+  private thin = 0;
+
   emit(at: Vec3, velocity: Vec3, color: THREE.Color, size: number, life: number): void {
+    if (this.density < 1) {
+      // Deterministic thinning: an accumulator rather than a random draw, so a
+      // headless run is still reproducible and a steady jet does not flicker.
+      this.thin += this.density;
+      if (this.thin < 1) return;
+      this.thin -= 1;
+    }
     const i = this.next;
     this.next = (this.next + 1) % MAX_PARTICLES;
 

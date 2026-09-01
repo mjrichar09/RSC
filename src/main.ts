@@ -13,12 +13,14 @@ import { Career, type RaceTarget } from './game/career.js';
 import { rollcageMitigation } from './game/garage.js';
 import { Race } from './game/race.js';
 import { ImpactDrama } from './game/drama.js';
+import { TouchControls } from './ui/touch.js';
+import { type QualityTier, RenderScale, guessTier, qualityFor } from './render/quality.js';
 import { useRelay } from './net/webrtc.js';
 import { StartLights } from './game/startLights.js';
 import { awardsFor } from './game/awards.js';
 import { Celebrations } from './ui/celebrate.js';
 import { SaveStore } from './game/save.js';
-import { NEUTRAL_INPUT } from './sim/input.js';
+import { type DriverInput, NEUTRAL_INPUT } from './sim/input.js';
 import { Driver } from './sim/driver.js';
 import { GhostPlayer, GhostRecorder } from './sim/replay.js';
 import { COMPONENTS, FAILURE_LABEL, type ComponentId } from './sim/damage.js';
@@ -44,7 +46,7 @@ import {
   addSurfacePatches,
   createScene,
 } from './render/scene.js';
-import { buildStageView, type StageView } from './render/stageMesh.js';
+import { buildStageView, setSceneryBudget, type StageView } from './render/stageMesh.js';
 import { Controls } from './ui/controls.js';
 import { Hud } from './ui/hud.js';
 import { RaceHud } from './ui/raceHud.js';
@@ -109,7 +111,19 @@ async function main(): Promise<void> {
 
   const canvas = document.getElementById('view') as HTMLCanvasElement;
   const hudRoot = document.getElementById('hud') as HTMLElement;
-  const { renderer, scene, key, applyConditions, resize } = createScene(canvas);
+  /**
+   * How hard to work this machine's GPU.
+   *
+   * `?quality=low|medium|high` overrides the guess, which is what the mobile
+   * harness uses and what a player with a phone the guess got wrong can use.
+   */
+  const tierParam = new URLSearchParams(location.search).get('quality') as QualityTier | null;
+  const quality = qualityFor(
+    tierParam === 'low' || tierParam === 'medium' || tierParam === 'high' ? tierParam : guessTier(),
+  );
+  const renderScale = new RenderScale();
+  setSceneryBudget(quality.scenery);
+  const { renderer, scene, key, applyConditions, resize } = createScene(canvas, quality);
   const camera = new IsoCamera();
   const carView = new CarView(scene);
   const ghostView = new CarView(scene, { ghost: true });
@@ -138,9 +152,28 @@ async function main(): Promise<void> {
   const wildlifeView = new WildlifeView(scene);
   ghostView.visible = false;
   const particles = new ParticleField(scene);
+  particles.density = quality.particles;
   const skids = new SkidMarks(scene);
   const precipitation = new Precipitation(scene);
   const mixer = new Mixer();
+  /**
+   * On-screen controls, off until something touches the screen.
+   *
+   * Detected rather than sniffed: a laptop with a touchscreen is a keyboard
+   * machine until somebody actually uses a finger on it, and a tablet with a
+   * keyboard attached is the same in reverse. The first real touch decides,
+   * and a key press decides back.
+   */
+  const touch = new TouchControls(hudRoot);
+  window.addEventListener(
+    'pointerdown',
+    (event) => {
+      if (event.pointerType === 'touch') touch.setVisible(true);
+    },
+    { capture: true },
+  );
+  window.addEventListener('keydown', () => touch.setVisible(false), { capture: true });
+
   const hud = new Hud(hudRoot);
   const raceHud = new RaceHud(hudRoot);
   const damagePanel = new DamagePanel(hudRoot);
@@ -595,7 +628,15 @@ const params = new URLSearchParams(location.search);
   // and remembered: at 0 a night stage is merely dim, at 1 you drive by the
   // headlights alone. The URL parameter still wins, for the visual harness.
   const VISION_STEPS = [0, 0.35, 0.6, 1];
-  visionPass.strength = visionParam !== null ? Number(visionParam) : career.profile.settings.vision;
+  // The windscreen is a fullscreen pass, which on a phone is pure fill rate —
+  // the one thing it has least of. Held at zero on the low tier unless the URL
+  // asks for it, which is how the harness photographs it anyway.
+  visionPass.strength =
+    visionParam !== null
+      ? Number(visionParam)
+      : quality.vision
+        ? career.profile.settings.vision
+        : 0;
   // The crash cinematic, on the same pattern and for the same reason: some
   // people will want it off entirely, and 0 means genuinely nothing happens.
   const DRAMA_STEPS = [0, 0.5, 1];
@@ -716,6 +757,14 @@ const params = new URLSearchParams(location.search);
     multiplayer.toggle();
   };
 
+  // The on-screen menu button does what Escape does, and drops whatever the
+  // thumbs were holding on the way — a throttle left down behind a panel is a
+  // car that drives itself into the scenery while you read a repair bill.
+  touch.onMenu = () => {
+    touch.release();
+    controls.onGarage?.();
+  };
+
   controls.onGarage = () => {
     if (freeRoam) return;
     // Escape backs out of photo mode before it backs out of anything else.
@@ -804,7 +853,7 @@ const params = new URLSearchParams(location.search);
   const onResize = () => {
     const w = window.innerWidth;
     const h = window.innerHeight;
-    resize(w, h);
+    resize(w, h, renderScale.value);
     camera.resize(w, h);
     visionPass.setSize(w, h);
   };
@@ -1226,6 +1275,9 @@ const params = new URLSearchParams(location.search);
         // second and a half; on a page rendering one frame a second that is a
         // coin toss, and the car gets driven against the handbrake.
         held: lights.holding,
+        // The steering the car is actually being given. On a phone this is the
+        // only way to tell a thumb that moved from a thumb the page swallowed.
+        steer: lastInput.steer,
         money: career.money,
         medal: race?.medal ?? null,
         time: race?.time.toFixed(2),
@@ -1483,6 +1535,8 @@ const params = new URLSearchParams(location.search);
 
   let last = performance.now();
   let fps = 60;
+  /** What the car was last actually given, for the status readout. */
+  let lastInput: DriverInput = NEUTRAL_INPUT;
 
   const frame = (now: number) => {
     // Two clocks. `dt` is capped so a stall cannot hand the physics accumulator
@@ -1494,6 +1548,11 @@ const params = new URLSearchParams(location.search);
     const wallDt = Math.min((now - last) / 1000, 0.5);
     const dt = Math.min(wallDt, 0.1);
     last = now;
+
+    // Trade resolution for frame rate. Fill rate is the first thing a phone
+    // runs out of, and it is the only setting that can be changed mid-race
+    // without rebuilding anything — so it is the one that adapts.
+    if (renderScale.update(wallDt)) onResize();
     fps += (1 / Math.max(dt, 1e-4) - fps) * 0.08;
 
     // The world keeps stepping behind the garage so the scene stays alive, but
@@ -1508,7 +1567,10 @@ const params = new URLSearchParams(location.search);
 
     // The start. While the lamps are lit the car is held on the line: the
     // handbrake is on and nothing the player does reaches the wheels.
-    const driving = garage.isOpen || multiplayer.isOpen || menu.isOpen ? NEUTRAL_INPUT : controls.sample(dt);
+    const driving =
+      garage.isOpen || multiplayer.isOpen || menu.isOpen
+        ? NEUTRAL_INPUT
+        : touch.merge(controls.sample(dt), wallDt);
     const lit = lights.update(wallDt, driving.throttle);
     if (lit) mixer.startLight(lit === 'go');
     stageView?.startLights.set(lights.lamps, lights.greenFor > 0);
@@ -1525,6 +1587,7 @@ const params = new URLSearchParams(location.search);
         // cost you anything, and it is what makes timing the light worth more
         // than holding the pedal down.
         { ...driving, throttle: driving.throttle * lights.throttleScale };
+    lastInput = input;
     // The crash cinematic runs on the clock the world sees, not on the frame
     // clock: the accumulator is simply fed less real time, so the fixed 120 Hz
     // step, the physics and the netcode are all untouched. Never in a network

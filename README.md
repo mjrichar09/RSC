@@ -575,6 +575,36 @@ the corridor runs into itself. That last check matters: a centreline that
 doubles back within ~27 m produces two overlapping ribbons, and the car ends up
 buried in an embankment belonging to a section it has not reached yet.
 
+### On a phone
+
+Open the same URL on a phone, turn it sideways, and drive. There is no app and
+no install step; it is the same static files.
+
+**Steering is a relative drag, not a wheel and not arrows.** Put a thumb down
+anywhere in the left third of the screen and slide. A fixed on-screen wheel
+makes you look at it to find it, and arrows are digital — and this car's whole
+tyre model lives in the region between straight and full lock, which a digital
+input cannot reach. A relative drag is analogue, needs no aiming, and
+re-centres under your thumb every time you lift. Throttle, brake and handbrake
+are thumb-sized buttons up the right edge, and both thumbs work at once.
+
+**The picture adapts rather than the settings menu.** A tier chosen at startup
+decides what exists — shadows, scenery density, whether the windscreen pass
+runs — and a render scale then trades resolution for frame rate continuously,
+because fill rate is what a phone runs out of first and it is the only thing
+that can change mid-race without rebuilding anything. It counts consecutive
+slow seconds, so one stutter costs nothing. `?quality=low|medium|high`
+overrides the guess.
+
+```bash
+npm run mobilecheck   # 844x390, real touch, no keyboard
+```
+
+That check drives the game with thumbs and asserts the two things a desktop
+screenshot cannot show: that no two HUD panels sit on top of each other at 390
+pixels of height, and that nothing drawn over the steering pad swallows the
+touch.
+
 ### Multiplayer
 
 Up to four cars in one world, hitting each other, over a connection with no
@@ -643,6 +673,7 @@ https://…/RSC/?turn=turn:your.host:3478|user|password
 
 ```bash
 npm run netcheck   # two real browsers, one race, over a real data channel
+npm run mobilecheck # a phone viewport, driven by thumbs rather than by keys
 ```
 
 That check drives the lobby through its own DOM and then verifies that what one
