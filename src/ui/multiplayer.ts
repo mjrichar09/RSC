@@ -1,11 +1,20 @@
 /**
  * The lobby.
  *
- * There is no server, so the handshake is done by the players: the host makes
- * an invite code, sends it however they already talk to each other, and pastes
- * back the reply. It is two copy-pastes per player, once, and then the race is
- * a race. The alternative was a signalling server, a domain and a bill, for a
- * game that is otherwise a folder of static files.
+ * Two ways in, and the second one only exists because the first is friction
+ * every single time.
+ *
+ * **A room code.** The host opens a room and reads out six characters; the
+ * guest types them in. A broker holds the handshake for a few seconds (see
+ * `net/room.ts` and `server/`) and then forgets it. Nothing about a race goes
+ * through it.
+ *
+ * **Invite codes, by hand.** The host makes an invite, sends it however they
+ * already talk to each other, and pastes back the reply. Two copy-pastes per
+ * player. This is what the game did before there was a broker, and it is kept
+ * — not as a legacy path, but as the floor: it needs no infrastructure, works
+ * on a LAN with no internet, and still works on the day the broker stops being
+ * paid for. When there is no broker configured the lobby simply *is* this.
  *
  * The panel owns the connection objects and hands `main.ts` a finished pair —
  * a host or a guest, and the race they agreed on — at the moment the race
@@ -16,7 +25,10 @@ import { STAGES } from '../data/stages/index.js';
 import { DEFAULT_LIVERY, LIVERIES, liveryById } from '../data/liveries.js';
 import { RaceHost } from '../net/host.js';
 import { RaceGuest } from '../net/guest.js';
-import { acceptInvite, createInvite, type Invite } from '../net/webrtc.js';
+import { acceptInvite, createInvite, type Invite, type RtcLink } from '../net/webrtc.js';
+import { formatRoomCode, makeRoomCode, normaliseRoomCode, type Room } from '../net/room.js';
+import { brokerFor } from '../net/roomHttp.js';
+import { joinRoom, serveRoom, type ServedRoom } from '../net/signalling.js';
 import { MAX_PLAYERS, type PlayerInfo, type RaceSetup } from '../net/protocol.js';
 import { stageVariants, type StageDef, type StageVariant } from '../sim/stage.js';
 
@@ -46,6 +58,20 @@ export class MultiplayerPanel {
   private guest: RaceGuest | null = null;
   private invite: Invite | null = null;
   private reply = '';
+  /**
+   * The room broker, or null when none is configured.
+   *
+   * Read once, at construction: whether the game has a broker is a property of
+   * how it was deployed, not something that changes while somebody is looking
+   * at a lobby. Null is a supported state, not a failure — the panel falls back
+   * to invite codes and says nothing about it.
+   */
+  private readonly broker: Room | null = brokerFor(new URLSearchParams(location.search));
+  /** The code this host is holding open, and the loop serving it. */
+  private roomCode: string | null = null;
+  private served: ServedRoom | null = null;
+  /** What the guest typed, kept so a bad code stays on screen to be corrected. */
+  private roomEntry = '';
   private status = '';
   private busy = false;
   private stageIndex = 0;
@@ -96,6 +122,13 @@ export class MultiplayerPanel {
   /** Tear the whole thing down — leaving a lobby, or starting a solo race. */
   reset(): void {
     this.invite?.cancel();
+    // Before the host goes: the broker should stop handing out offers for a
+    // lobby that no longer exists, so a stale code fails fast instead of
+    // connecting somebody to nothing.
+    this.served?.close();
+    this.served = null;
+    this.roomCode = null;
+    this.roomEntry = '';
     this.host?.shutdown();
     this.guest?.leave();
     this.host = null;
@@ -238,7 +271,31 @@ export class MultiplayerPanel {
     this.screen = 'host';
     this.status = '';
     this.announcePick();
+    this.openRoom();
     this.render();
+  }
+
+  /**
+   * Hold a room open for the whole life of the lobby.
+   *
+   * Started with the lobby rather than on a button, because a code that only
+   * exists after somebody asks for it is a step, and removing the steps is the
+   * entire point. The loop publishes an offer, waits for a reply, and connects
+   * whoever answers; it republishes immediately, so there is always something
+   * for the next player to take.
+   */
+  private openRoom(): void {
+    if (!this.broker || this.served) return;
+    const code = makeRoomCode().replace('-', '');
+    this.roomCode = code;
+    this.served = serveRoom({
+      room: this.broker,
+      code,
+      // The host holds a slot of its own, so the room only ever offers the rest.
+      slots: MAX_PLAYERS - 1,
+      onLink: (link) => this.host?.accept(link),
+      onStatus: (message) => this.say(message),
+    });
   }
 
   private async makeInvite(): Promise<void> {
@@ -385,12 +442,55 @@ export class MultiplayerPanel {
     void this.join(code);
   }
 
+  /** Open straight onto a room code, from a `?room=` link. */
+  joinRoomFromLink(code: string): void {
+    this.screen = 'join';
+    this.roomEntry = code;
+    this.setOpen(true);
+    void this.joinByRoom(code);
+  }
+
   /** Whether there is a lobby to go back to at all. */
   get inLobby(): boolean {
     return this.host !== null || this.guest !== null;
   }
 
   // ---- Joining ------------------------------------------------------------
+
+  /**
+   * Join by room code.
+   *
+   * The code is normalised before anything is sent, so "k7f m29" and "K7F-M29"
+   * are the same room and a code that could not be one is rejected here rather
+   * than after a pointless round trip.
+   */
+  private async joinByRoom(typed: string): Promise<void> {
+    if (this.busy) return;
+    const code = normaliseRoomCode(typed);
+    if (!code) {
+      this.say('That is not a room code — six characters, like K7F-M29.');
+      return;
+    }
+    if (!this.broker) {
+      this.say('This copy of the game has no room service. Use an invite code instead.');
+      return;
+    }
+    this.busy = true;
+    try {
+      const link = await joinRoom({
+        room: this.broker,
+        code,
+        onStatus: (message) => this.say(message),
+      });
+      this.attachGuest(link);
+    } catch (error) {
+      this.say(error instanceof Error ? error.message : String(error));
+    } finally {
+      this.busy = false;
+      this.render();
+    }
+  }
+
 
   private async join(code: string): Promise<void> {
     if (this.busy) return;
@@ -413,31 +513,7 @@ export class MultiplayerPanel {
       // handshake with each side waiting for the other.
       this.reply = reply;
       this.say(`Send your reply code back to the host. (found ${addresses})`);
-      this.guest = new RaceGuest(await link, {
-        name: this.name,
-        livery: this.livery,
-        number: this.number,
-        onLobby: (players, pick) => {
-          this.players = players;
-          this.pick = pick;
-          this.render();
-        },
-        onStart: (setup) => {
-          const guest = this.guest!;
-          this.setOpen(false);
-          this.onRace?.({
-            guest,
-            setup,
-            cars: Math.max(setup.players.length, guest.car + 1),
-            slots: guest.slots,
-            onGo: (run) => {
-              this.go = run;
-            },
-          });
-        },
-        onGo: () => this.go?.(),
-        onClose: () => this.say('The host disconnected.'),
-      });
+      this.attachGuest(await link);
       void connected
         .then(() => this.say('Connected. Waiting for the host to start.'))
         .catch((error: Error) => this.say(error.message));
@@ -447,6 +523,43 @@ export class MultiplayerPanel {
       this.busy = false;
       this.render();
     }
+  }
+
+  /**
+   * Become a guest on a link that is already open.
+   *
+   * Shared by both routes in, because everything after the handshake is
+   * identical — a link is a link however the two ends found each other, which
+   * is the property that made adding a room code a small change rather than a
+   * second lobby.
+   */
+  private attachGuest(link: RtcLink): void {
+    this.guest = new RaceGuest(link, {
+      name: this.name,
+      livery: this.livery,
+      number: this.number,
+      onLobby: (players, pick) => {
+        this.players = players;
+        this.pick = pick;
+        this.render();
+      },
+      onStart: (setup) => {
+        const guest = this.guest!;
+        this.setOpen(false);
+        this.onRace?.({
+          guest,
+          setup,
+          cars: Math.max(setup.players.length, guest.car + 1),
+          slots: guest.slots,
+          onGo: (run) => {
+            this.go = run;
+          },
+        });
+      },
+      onGo: () => this.go?.(),
+      onClose: () => this.say('The host disconnected.'),
+    });
+    this.say('Connected. Waiting for the host to start.');
   }
 
   // ---- Rendering ----------------------------------------------------------
@@ -518,6 +631,7 @@ export class MultiplayerPanel {
           </button>
         </div>
         <div>
+          ${this.roomPanel()}
           <h3>Invite a player</h3>
           ${
             this.invite
@@ -543,12 +657,69 @@ export class MultiplayerPanel {
       </div>`;
   }
 
+  /**
+   * The room code, when there is a broker to hold one.
+   *
+   * Shown as the first thing on the hosting screen and as large as the panel
+   * allows, because it is going to be read out loud across a room or typed off
+   * a phone screen. The invite-code path stays underneath it: it is what works
+   * when there is no broker, and it is the only thing that works on a LAN with
+   * no internet.
+   */
+  private roomPanel(): string {
+    if (!this.broker || !this.roomCode) return '';
+    return `
+      <h3>Room code</h3>
+      <p class="lobby-code">${formatRoomCode(this.roomCode)}</p>
+      <p class="lobby-hint">Read it out, or send the link. They type it in and they are on the grid.</p>
+      <button class="wide primary" data-act="send-room">Send a join link</button>`;
+  }
+
+  /** A link that opens the game with the room already entered. */
+  private roomLink(code: string): string {
+    const url = new URL(location.href);
+    url.hash = '';
+    url.searchParams.delete('join');
+    url.searchParams.set('room', formatRoomCode(code));
+    return url.toString();
+  }
+
   private joinBody(): string {
-    if (!this.reply) {
-      return `
-        <h3>Paste the invite</h3>
+    if (!this.guest && !this.reply) {
+      // With a broker, the room code is the way in and the invite code is the
+      // fallback, folded away. Without one there is only the fallback, and it
+      // is not presented as a fallback — it is simply how the game works.
+      const paste = `
+        <h3>${this.broker ? 'Or paste an invite code' : 'Paste the invite'}</h3>
         <textarea data-act="invite-in" placeholder="the code the host sent you"></textarea>
         <button data-act="use-invite">Continue</button>`;
+      if (!this.broker) return paste;
+      return `
+        <h3>Room code</h3>
+        <p class="lobby-hint">Six characters, from whoever is hosting.</p>
+        <input class="lobby-room" data-act="room-in" placeholder="K7F-M29"
+               autocapitalize="characters" autocomplete="off" spellcheck="false"
+               maxlength="8" value="${this.roomEntry}">
+        <button class="wide primary" data-act="use-room" ${this.busy ? 'disabled' : ''}>Join</button>
+        <details class="lobby-raw"><summary>No room code?</summary>${paste}</details>`;
+    }
+    if (!this.reply) {
+      // Joined by room code: there is no reply for the player to send back,
+      // which is the whole point of having done it that way.
+      return `
+        <div class="lobby-cols">
+          <div>
+            <h3>Your car</h3>
+            ${this.liveryPicker()}
+          </div>
+          <div>
+            <h3>Racing</h3>
+            <p class="lobby-hint">${this.pickedName}</p>
+            <h3>Grid</h3>
+            ${this.playerList()}
+            <button class="wide" data-act="ready">I'm ready</button>
+          </div>
+        </div>`;
     }
     return `
       <div class="lobby-cols">
@@ -623,6 +794,16 @@ export class MultiplayerPanel {
       const box = pick('invite-in') as HTMLTextAreaElement | null;
       if (box?.value) void this.join(box.value);
     });
+    on('use-room', () => {
+      const box = pick('room-in') as HTMLInputElement | null;
+      // Kept on the panel so a mistyped code survives the re-render and can be
+      // corrected, rather than clearing itself and making the player start again.
+      this.roomEntry = box?.value ?? '';
+      if (this.roomEntry) void this.joinByRoom(this.roomEntry);
+    });
+    on('send-room', () => {
+      if (this.roomCode) void this.handOver(this.roomLink(this.roomCode), 'Race me on RSC');
+    });
     on('send-invite', () => {
       if (this.invite) void this.handOver(this.inviteLink(this.invite.code), 'Race me on RSC');
     });
@@ -630,6 +811,18 @@ export class MultiplayerPanel {
       if (this.reply) void this.handOver(this.reply, 'My RSC reply code');
     });
     on('paste', () => void this.pasteReply());
+    const roomBox = pick('room-in') as HTMLInputElement | null;
+    if (roomBox) {
+      // A single short field: pressing Enter is what everyone will do, and
+      // making them find the button instead is the kind of friction this
+      // whole feature exists to remove.
+      roomBox.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        this.roomEntry = roomBox.value;
+        if (this.roomEntry) void this.joinByRoom(this.roomEntry);
+      });
+    }
     on('ready', () => this.guest?.ready(true));
     on('start', () => this.startRace());
 

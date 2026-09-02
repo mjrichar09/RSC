@@ -1035,6 +1035,45 @@ html, body {
   font-weight: 600;
 }
 .lobby-hint { font-size: 12px; line-height: 1.6; color: var(--dim); margin: 10px 0; }
+
+/*
+ * The room code, and the box it is typed into.
+ *
+ * Deliberately the largest text in the lobby. It exists to be read out loud
+ * across a room or copied off somebody's phone screen, and every character
+ * misheard is a failed join — so it is monospaced, widely tracked, and big
+ * enough to read at arm's length. The letter-spacing is doing real work here:
+ * it separates the two groups the dash already implies.
+ */
+.lobby-code {
+  font-family: var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace);
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: var(--accent);
+  margin: 6px 0 4px;
+  user-select: all;
+}
+.lobby-room {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 8px 0 10px;
+  padding: 12px 14px;
+  font-family: var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace);
+  font-size: 24px;
+  letter-spacing: 0.16em;
+  text-align: center;
+  text-transform: uppercase;
+  color: var(--ink);
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 4px;
+}
+.lobby-room:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 .lobby-status {
   margin-top: 18px;
   padding: 10px 12px;

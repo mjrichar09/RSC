@@ -1583,6 +1583,8 @@ const params = new URLSearchParams(location.search);
     // somebody sent it, and the only reason the page is open is to use it.
     const joinCode = params.get('join');
     if (joinCode) multiplayer.joinFromLink(joinCode);
+    const roomCode = params.get('room');
+    if (roomCode) multiplayer.joinRoomFromLink(roomCode);
     else if (screen === 'garage') garage.setOpen(true);
     else if (screen === 'arcade') menu.setOpen(true, 'arcade');
     else if (screen === 'lobby') {

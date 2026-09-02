@@ -1,0 +1,16 @@
+# The room broker. See README.md for what it does and why it is a Durable
+# Object rather than KV.
+name = "rsc-rooms"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+
+[durable_objects]
+bindings = [{ name = "ROOMS", class_name = "Rooms" }]
+
+# `new_classes` rather than `new_sqlite_classes`: rooms are sixty seconds of
+# state held in memory and never written down, so there is no storage backend
+# to choose. Nothing here survives a restart, and nothing needs to — a lobby
+# that was mid-handshake reopens with a new code.
+[[migrations]]
+tag = "v1"
+new_classes = ["Rooms"]

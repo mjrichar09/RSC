@@ -120,6 +120,35 @@ if (!(await page.$('[data-act="livery"]'))) throw new Error('no way to pick a pa
 if (!(await page.$('[data-act="number"]'))) throw new Error('no way to pick a number');
 console.log(`lobby grid: ${grid.map((row) => row.text.trim().replace(/\s+/g, ' ')).join(' | ')}`);
 
+// The room code, with a broker configured.
+//
+// `?rooms=` points at one that does not exist, on purpose: the panel has to
+// paint a code the moment the lobby opens, before anybody has joined and
+// whether or not the service is reachable. A host reading a code out loud
+// should not be waiting on a network call, and this is the check that the code
+// is on screen at all — it is the entire feature, and it is behind a config
+// flag that is off by default, so nothing else would ever notice it break.
+await page.goto(
+  'http://localhost:5181/?vision=0&drama=0&screen=lobby&rooms=http://127.0.0.1:9/none',
+);
+await page.waitForSelector('.lobby.is-open .lobby-code', { timeout: 20_000 });
+const roomCode = ((await page.textContent('.lobby-code')) ?? '').trim();
+if (!/^[2-9A-HJ-NP-Z]{3}-[2-9A-HJ-NP-Z]{3}$/.test(roomCode)) {
+  throw new Error(`the room code reads "${roomCode}", which is not a room code`);
+}
+if (!(await page.$('[data-act="send-room"]'))) throw new Error('no way to send the room link');
+// The invite-code path has to survive alongside it: it is the fallback for
+// when there is no broker, and deleting it by accident would go unnoticed
+// until the day the service went down.
+if (!(await page.$('[data-act="invite"]'))) throw new Error('the invite-code fallback is gone');
+console.log(`room code: ${roomCode}`);
+
+// And with no broker the lobby is exactly what it always was.
+await page.goto('http://localhost:5181/?vision=0&drama=0&screen=lobby');
+await page.waitForSelector('.lobby.is-open [data-act="invite"]', { timeout: 20_000 });
+if (await page.$('.lobby-code')) throw new Error('a room code was shown with no room service');
+console.log('no broker configured: the lobby falls back to invite codes');
+
 console.log('OK — career, arcade and multiplayer all open from the front door.');
 await browser.close();
 await server.close();

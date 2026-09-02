@@ -50,6 +50,11 @@ economy       protocol        never writes
                          ▼
                      main.ts      the only place any of it is wired together
 
+server/  The room broker: a Cloudflare Worker. Deployed separately, optional,
+         and carries no game traffic. Its logic is in `server/src/rooms.ts`
+         with no Cloudflare types in it, so `tests/rooms.test.ts` drives the
+         real thing without wrangler.
+
 tools/   Node harnesses. Import sim/, game/, data/ — never render/ or ui/.
          The three that need pixels (shoot, uicheck, netcheck) drive a real
          browser through Playwright instead of importing anything from it.
@@ -421,7 +426,32 @@ scannable as it grows; it is append-only.
 ## Multiplayer
 
 `src/net/` is the protocol, the host, the guest and the transports; `src/sim/`
-knows nothing about any of it. Three things there are easy to get wrong twice:
+knows nothing about any of it.
+
+**There are two ways into a race and the second does not replace the first.** A
+room code goes through the broker in `server/`; an invite code goes through the
+players, as it always did. The paste path is the floor — no infrastructure, works
+on a LAN with no internet, works the day the broker stops being paid for — so
+`uicheck` asserts *both*, including that the lobby with no broker configured is
+exactly what it was before any of this existed.
+
+The broker holds one offer and its reply for a few seconds and never sees a byte
+of a race. Two things about it are not negotiable:
+
+- **Claiming an offer has to be atomic.** An offer belongs to one
+  `RTCPeerConnection`; if two guests take the same one, the host can complete
+  only one of them and the other waits forever. That is why it is a Durable
+  Object and not KV — Cloudflare KV is eventually consistent with tens of
+  seconds of propagation, which for a poll-for-the-reply loop means it simply
+  does not work.
+- **Test the choreography in process, not through the network.** Same rule as
+  `LoopbackWire`. `LoopbackRoom` covers claiming once, matching a reply to its
+  ticket and a guest arriving before the host published; `tests/rooms.test.ts`
+  runs the *real* broker through the same paths in milliseconds. The one thing
+  that found a genuine bug was an unhandled rejection on an abandoned invite —
+  eight errors beside ten passes, in a suite that runs in a second.
+
+Three things about the transport are easy to get wrong twice:
 
 - **`npm run netcheck` drives both directions.** It used to drive only the host
   and check the guest saw it, which left "the joiner's car does not move on my
