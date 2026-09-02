@@ -142,6 +142,7 @@ async function main(): Promise<void> {
       speed: Math.abs(state.speed),
       surface: state.wheels.find((w) => w.grounded)?.surface.id ?? 'tarmac',
       wiperHealth: world.damage?.get('wipers') ?? 1,
+      windscreenHealth: world.damage?.get('windscreen') ?? 1,
       lightHealth: world.damage?.get('lights') ?? 1,
     });
   };
@@ -986,7 +987,10 @@ const params = new URLSearchParams(location.search);
     updateTags();
     // Turn the corner boards to face the camera. Cheap — there are a handful —
     // and it is the only way they stay readable through a zone change.
-    for (const board of stageView?.signBoards ?? []) board.rotation.y = camera.yaw;
+    // Boards still standing turn to face the camera; ones lying in the verge
+    // keep whatever attitude the physics left them in.
+    stageView?.signs.sync(world.movableProps);
+    stageView?.signs.faceCamera(camera.yaw);
     if (world.markers && stageView) stageView.markers.sync(world.markers);
     // Saplings that have been knocked over: real bodies, so their instances
     // have to follow them or they go over in the physics and stay standing on
@@ -1004,6 +1008,7 @@ const params = new URLSearchParams(location.search);
       ghostView.visible = race.time <= ghost.duration + 0.5;
     }
 
+    camera.advanceShake(dt);
     if (stage && race) camera.applyZones(stage.cameraZones, race.furthest);
     if (cameraLock) {
       camera.jumpTo(cameraLock.at);
@@ -1069,6 +1074,10 @@ const params = new URLSearchParams(location.search);
   const drawReplay = (dt: number) => {
     const state = replayUi.state;
     if (!state) return;
+    // This path draws with `jumpTo` and never reaches `camera.follow`, which is
+    // where the shake used to decay — so the crash cinematic ran with the
+    // camera frozen at the amplitude the crash set it to.
+    camera.advanceShake(dt);
     const at = replayUi.advance(dt);
     const sample = state.player.sampleAt(at);
     if (sample) {
@@ -1098,6 +1107,7 @@ const params = new URLSearchParams(location.search);
         speed: 0,
         surface: 'tarmac',
         wiperHealth: 1,
+          windscreenHealth: 1,
         lightHealth: world.damage?.get('lights') ?? 1,
       }),
       { x: 0.5, y: 0.5 },
@@ -1666,14 +1676,11 @@ const params = new URLSearchParams(location.search);
       // A bump the car shrugs off should still be felt and heard, so this reads
       // the raw impulse rather than waiting for a damage event.
       //
-      // On a *rising edge*, not on the raw value. `lastImpact` is whatever the
-      // hardest contact of the step was, and a car rolling down an embankment
-      // or grinding along a wall is in contact on every one of them — so this
-      // re-armed the shake every frame and the camera stayed at full amplitude
-      // for the whole crash instead of being knocked once and settling. What
-      // is wanted is one knock per impact: a hit only counts as new if it is
-      // meaningfully harder than the one still being felt, and the bar decays
-      // with the shake so the next accident gets its own.
+      // `lastImpact` is the hardest contact of the step, not an event — a car
+      // rolling down an embankment is in contact on every one of them. The
+      // camera enforces one knock per accident itself (`Camera.shake`); this
+      // gate is here so the *mixer* is not asked for an impact sound sixty
+      // times a second while a car grinds along a wall.
       if (world.lastImpact > 1200 && world.lastImpact > shakenFor * 1.35) {
         const severity = Math.min((world.lastImpact - 1200) / 26_000, 1);
         shakenFor = world.lastImpact;

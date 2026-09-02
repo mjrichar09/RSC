@@ -239,6 +239,14 @@ scannable as it grows; it is append-only.
   *default* has to be a seeded stream too. `random ?? Math.random` looks
   harmless and quietly made every run with a damage model non-reproducible;
   nothing failed until a test compared two identical runs.
+- **A calibration constant whose comment describes an outcome it stopped
+  producing.** `STRIKE_CONCENTRATION` said a 90 km/h deer strike wrote off the
+  front end; measured, it left the radiator at 78% and a bill of 584. The damage
+  thresholds had moved underneath it over months and nothing recomputed it,
+  because nothing links them. Every number calibrated against another number's
+  outcome — deer strikes, medal times, the AI's grip budget — is stale by
+  default and only true when it was last measured. The comment is where the
+  measurement goes, and re-running it is the only way to know.
 - **Trusting a metric without checking what it counts.** `timeAirborne` counted
   any moment with no wheel down, so a beached car read as a 45-second jump.
 - **Measuring a stop at the standstill.** The slip-ratio denominator clamps at
@@ -383,7 +391,15 @@ scannable as it grows; it is append-only.
 - **Effects written only inside the frame loop.** `shoot` and the `?stage=&t=`
   harness step the world directly and never call `frame()`, so anything that
   only lives there produces nothing in any screenshot and looks broken when it
-  is merely unreachable. Put per-frame effects in a function both call. The
+  is merely unreachable. Put per-frame effects in a function both call.
+- **Anything with a lifetime has to be advanced on *every* draw path**, and
+  there are three: the live loop, `drawReplay`, and the harness seek. The camera
+  shake decayed inside `camera.follow`, and the crash replay draws with
+  `jumpTo` and returns before `follow` is reached — so the shake froze at full
+  amplitude for the whole cinematic and stopped the instant it closed. It reads
+  exactly like the slow motion causing the shake, which is what it was reported
+  as, and no amount of work on the *trigger* touches it. Envelope in its own
+  method, called from all of them. The
   same block also has to pose the car (`carView.update`) before reading a
   dragging part's world position, or sparks come off where the bumper sat
   before it started hanging.

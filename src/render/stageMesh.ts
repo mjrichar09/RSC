@@ -36,7 +36,8 @@ export interface StageView {
    * the zone at the board is not the zone at the car, so a board goes edge-on
    * exactly when the car is far enough away for it to matter.
    */
-  signBoards: THREE.Mesh[];
+  /** The corner boards, which turn to face the camera until they are knocked over. */
+  signs: SignsView;
   /** The marker poles, which have to be re-synced whenever one goes over. */
   markers: MarkerView;
   /** The hazards, whose knock-over-able ones follow their physics bodies. */
@@ -104,7 +105,7 @@ export function buildStageView(stage: Stage, markers: Markers): StageView {
 
   return {
     group,
-    signBoards: signs.boards,
+    signs,
     markers: markerView,
     crowd,
     startLights,
@@ -1212,9 +1213,92 @@ function signTexture(direction: 'left' | 'right', severity: number): THREE.Canva
   return texture;
 }
 
-function buildSigns(stage: Stage): { group: THREE.Group; boards: THREE.Mesh[] } {
-  const group = new THREE.Group();
-  const boards: THREE.Mesh[] = [];
+/**
+ * A corner board and the post under it, as one thing that falls over.
+ *
+ * Not instanced, because every board carries its own texture — direction and
+ * severity — so they cannot share a material. That is also why they cannot ride
+ * the `PropsView` path the saplings use, and get their own sync instead.
+ */
+export class SignsView {
+  readonly group = new THREE.Group();
+  readonly boards: THREE.Mesh[] = [];
+  private readonly posts: THREE.Mesh[] = [];
+  /** Which of them have been knocked over and must stop facing the camera. */
+  private readonly down: boolean[] = [];
+
+  private readonly q = new THREE.Quaternion();
+  private readonly up = new THREE.Vector3();
+  private readonly offset = new THREE.Vector3();
+
+  add(post: THREE.Mesh, board: THREE.Mesh): void {
+    this.group.add(post, board);
+    this.posts.push(post);
+    this.boards.push(board);
+    this.down.push(false);
+  }
+
+  /**
+   * Pose each sign from the body carrying it.
+   *
+   * The body is centred on the post; the meshes are not, so both are placed by
+   * rotating their own offset from that centre. Get this wrong and a knocked
+   * sign pivots about its middle in mid-air instead of falling from its foot.
+   */
+  sync(
+    props: readonly {
+      prop: { kind: PropKind };
+      body: {
+        translation(): { x: number; y: number; z: number };
+        rotation(): { x: number; y: number; z: number; w: number };
+      };
+    }[],
+  ): void {
+    let i = 0;
+    for (const entry of props) {
+      if (entry.prop.kind !== 'signPost') continue;
+      const post = this.posts[i];
+      const board = this.boards[i];
+      if (!post || !board) break;
+      const t = entry.body.translation();
+      const r = entry.body.rotation();
+      this.q.set(r.x, r.y, r.z, r.w);
+
+      // Once it has tipped past about 25 degrees it is down, and it stays down:
+      // a board that rights itself because the body wobbled back is worse than
+      // one that never fell.
+      this.up.set(0, 1, 0).applyQuaternion(this.q);
+      if (this.up.y < 0.9) this.down[i] = true;
+
+      this.offset.set(0, -0.05, 0).applyQuaternion(this.q);
+      post.position.set(t.x + this.offset.x, t.y + this.offset.y, t.z + this.offset.z);
+      post.quaternion.copy(this.q);
+
+      this.offset.set(0, 1.6, 0).applyQuaternion(this.q);
+      board.position.set(t.x + this.offset.x, t.y + this.offset.y, t.z + this.offset.z);
+      if (this.down[i]) board.quaternion.copy(this.q);
+      i++;
+    }
+  }
+
+  /**
+   * Turn the standing boards to face the camera.
+   *
+   * A board turned to face the oncoming car is seen almost edge-on from an
+   * isometric view and reads as nothing at all. A board lying in the ditch is
+   * not turned at all — it is an object now, and it keeps the attitude the
+   * physics gave it.
+   */
+  faceCamera(yaw: number): void {
+    for (let i = 0; i < this.boards.length; i++) {
+      if (this.down[i]) continue;
+      this.boards[i]!.rotation.y = yaw;
+    }
+  }
+}
+
+function buildSigns(stage: Stage): SignsView {
+  const view = new SignsView();
   const postGeo = new THREE.BoxGeometry(0.12, 1.9, 0.12);
   const postMat = new THREE.MeshStandardMaterial({ color: 0x6b7280, roughness: 0.9 });
   // 1.9 m across: larger than a real corner board, because at race distance
@@ -1225,7 +1309,6 @@ function buildSigns(stage: Stage): { group: THREE.Group; boards: THREE.Mesh[] } 
     const post = new THREE.Mesh(postGeo, postMat);
     post.position.set(sign.position.x, sign.position.y + 0.95, sign.position.z);
     post.castShadow = true;
-    group.add(post);
 
     const board = new THREE.Mesh(
       boardGeo,
@@ -1238,10 +1321,9 @@ function buildSigns(stage: Stage): { group: THREE.Group; boards: THREE.Mesh[] } 
     );
     board.position.set(sign.position.x, sign.position.y + 2.6, sign.position.z);
     board.rotation.y = sign.yaw;
-    group.add(board);
-    boards.push(board);
+    view.add(post, board);
   }
-  return { group, boards };
+  return view;
 }
 
 /**

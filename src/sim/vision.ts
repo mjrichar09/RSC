@@ -116,7 +116,14 @@ export interface VisionState {
    * the blade itself you see rather than a line of clearing.
    */
   wiperReturning: boolean;
-  /** True when the wipers cannot clear at all any more. */
+  /**
+   * True when the wipers cannot clear at all any more.
+   *
+   * Either because the blades have gone or because the glass has. Losing the
+   * windscreen does *not* clean the view: what has already built up stays, and
+   * the weather keeps arriving — now at the driver rather than at the screen.
+   * Making it clear would turn a smashed windscreen into a wet-weather upgrade.
+   */
   wipersDead: boolean;
 }
 
@@ -128,6 +135,15 @@ export interface VisionInput {
   surface: SurfaceId;
   /** Health of the `wipers` component, 0..1. */
   wiperHealth: number;
+  /**
+   * Health of the `windscreen` component, 0..1.
+   *
+   * Blades can only clear glass that is still in the frame. The windscreen
+   * crazes and then leaves — `carView.applyGlass` scatters it into shards past
+   * about a third health — and until this was here the wipers carried on
+   * sweeping a hole, which is the one thing a wiper cannot do.
+   */
+  windscreenHealth: number;
   /** Health of the `lights` component, 0..1. */
   lightHealth: number;
 }
@@ -150,7 +166,15 @@ export class Vision {
   private sinceSweep = 0;
 
   update(dt: number, input: VisionInput): VisionState {
-    const { conditions, speed, surface, wiperHealth, lightHealth } = input;
+    const { conditions, speed, surface, lightHealth } = input;
+    // What is left of the glass, on the same ramp the renderer breaks it on, so
+    // what you see and what happens agree: at a third health the pane starts
+    // leaving the frame and the blades start losing what they were clearing.
+    // The existing wear model does the rest — a tired wiper is a slow wiper, so
+    // this reads as the sweeps stretching out and then stopping rather than as
+    // a switch being thrown.
+    const glass = clamp(input.windscreenHealth / 0.35, 0, 1);
+    const wiperHealth = Math.min(input.wiperHealth, glass);
 
     // What is landing, and what it is made of. Mud thrown off the road beats
     // whatever the sky is doing: you cannot wipe your way out of a mud bath.

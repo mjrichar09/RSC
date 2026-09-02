@@ -22,6 +22,7 @@ const SHAPE: Record<string, { radius: number; height: number; mass?: number }> =
   tree: { radius: 0.52, height: 7.5 },
   sapling: { radius: 0.16, height: 3.0, mass: 60 },
   building: { radius: 3.2, height: 9 },
+  signPost: { radius: 0.09, height: 2.0, mass: 45 },
 };
 
 /** Drive into one prop standing on the road, 60 m from the line. */
@@ -66,6 +67,24 @@ describe('what you hit at the roadside', () => {
     const big = await driveInto('tree');
     expect(big.world.movableProps.length).toBe(0);
   }, 40_000);
+
+  it('knocks a corner board over and barely marks the car', async () => {
+    // A corner board is the cheapest thing on a stage that is still a thing:
+    // it exists so the edge of the road is somewhere real, not so that running
+    // wide ends a run. Before it had a collider at all the car drove through
+    // it, which taught the player the verge was empty.
+    const sign = await driveInto('signPost');
+    expect(sign.world.movableProps.length).toBe(1);
+    const start = sign.world.movableProps[0]!.prop.position;
+    const now = sign.moved[0]!;
+    expect(Math.hypot(now.x - start.x, now.z - start.z), 'the board should go over').toBeGreaterThan(
+      0.5,
+    );
+    // Cheaper than a sapling: it is a pole and a sheet, not sixty kilos of wood.
+    const small = await driveInto('sapling');
+    expect(sign.damage.peakImpulse).toBeLessThan(small.damage.peakImpulse);
+    expect(sign.damage.condition).toBeGreaterThan(0.99);
+  }, 60_000);
 
   it('makes a building a major accident', async () => {
     // Not harder than a trunk, and it should not be: both are immovable, so

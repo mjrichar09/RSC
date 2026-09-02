@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import { STAGES } from '../src/data/stages/index.js';
 import { Stage } from '../src/sim/stage.js';
-import { Wildlife, DEER_MASS, STRIKE_CONCENTRATION } from '../src/sim/wildlife.js';
+import { Wildlife, STRIKE_CEILING, strikeImpulse } from '../src/sim/wildlife.js';
 import { Ambient } from '../src/sim/ambient.js';
 import { DamageModel } from '../src/sim/damage.js';
 import { COMPONENTS } from '../src/sim/damage.js';
@@ -139,23 +139,48 @@ describe('a strike', () => {
     expect(animal.state).not.toBe('gone');
   });
 
-  it('is expensive at speed and harmless at a crawl', () => {
+  it('is expensive at speed and cheap at a crawl', () => {
+    // Through `strikeImpulse`, not through the raw product: the ceiling is part
+    // of what a strike *is*, and a test that recomputes the product by hand is
+    // testing a formula the game no longer uses.
     const bill = (kph: number) => {
       const damage = new DamageModel();
-      damage.applyImpact(v3(0, 0, 1.8), (DEER_MASS * (kph / 3.6) * STRIKE_CONCENTRATION));
+      damage.applyImpact(v3(0, 0, 1.8), strikeImpulse(kph / 3.6));
       return damage.repairBill().total;
     };
-    expect(bill(20)).toBe(0);
-    expect(bill(90)).toBeGreaterThan(200);
+    // Not free any more, and deliberately: a deer is 130 kg and it lands on the
+    // lights. At walking pace that is a cracked lamp, which is a fright and a
+    // small bill rather than nothing at all.
+    expect(bill(20)).toBeGreaterThan(0);
+    expect(bill(20)).toBeLessThan(200);
+    // A written-off front end at open-road speed.
+    expect(bill(90)).toBeGreaterThan(3000);
+    // Always monotonic. The ceiling is approached, never reached, so faster is
+    // always worse — a hard clamp would make 120 and 200 identical.
     expect(bill(120)).toBeGreaterThan(bill(90));
+    expect(bill(200)).toBeGreaterThan(bill(120));
   });
 
   it('cannot end a run on its own, however fast', () => {
     // The fairness rule at its limit: a deer at 200 km/h is a disaster and an
-    // expensive one, but it is not allowed to be an instant retirement.
+    // expensive one, but it is not allowed to be an instant retirement. This is
+    // the constraint `STRIKE_CEILING` exists to hold — without it the damage
+    // model's structural spreading reaches the engine at around 105 km/h and a
+    // deer that stepped out with no warning ends the run.
     const damage = new DamageModel();
-    damage.applyImpact(v3(0, 0, 1.8), DEER_MASS * (200 / 3.6) * STRIKE_CONCENTRATION);
+    damage.applyImpact(v3(0, 0, 1.8), strikeImpulse(200 / 3.6));
     expect(damage.retired).toBe(false);
+    expect(damage.get('engine')).toBeGreaterThan(0);
+  });
+
+  it('keeps the ceiling clear of what would seize the engine', () => {
+    // A margin, not a coincidence: the ceiling has to sit below the impulse at
+    // which the spread reaches the engine, or the fairness rule is one damage
+    // retune away from being silently gone.
+    const seized = new DamageModel();
+    seized.applyImpact(v3(0, 0, 1.8), STRIKE_CEILING * 1.15);
+    expect(seized.get('engine'), 'ceiling has no margin left').toBeGreaterThan(0);
+    expect(strikeImpulse(500 / 3.6)).toBeLessThan(STRIKE_CEILING);
   });
 });
 

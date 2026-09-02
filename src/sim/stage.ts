@@ -236,10 +236,14 @@ const PROP_SHAPE: Record<PropKind, { radius: number; height: number; mass?: numb
   //
   // It had no collider at all: the boards were built as pure decoration, and a
   // steel post standing two metres off the road that a car passes through is
-  // the same bug as the trees were. Static rather than knocked over, because
-  // that is what a signpost is — but it is thin, so clipping one is a bang and
-  // a mark rather than the end of a run.
-  signPost: { radius: 0.09, height: 2.0 },
+  // the same bug as the trees were.
+  //
+  // Given a mass, so it goes over. Static was the first attempt and it is worse
+  // than it sounds: a post that stops dead and stays perfectly upright after
+  // being hit at ninety reads as scenery with a collider bolted on, which is
+  // the same complaint one layer further in. Forty-five kilos of board and
+  // pole — it barely marks the car, and it is lying in the verge afterwards.
+  signPost: { radius: 0.09, height: 2.0, mass: 45 },
   // A bridge pier. Height is per-instance — it is however far it is from the
   // ground to the deck — so this one is only the footprint.
   pier: { radius: 1.5, height: 1 },
@@ -811,6 +815,7 @@ export class Stage {
       radius: shape.radius,
       height: shape.height,
       yaw: sign.yaw,
+      ...(shape.mass ? { mass: shape.mass } : {}),
     }));
   }
 

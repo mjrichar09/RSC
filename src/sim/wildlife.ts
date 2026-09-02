@@ -47,11 +47,78 @@ export const DEER_MASS = 130;
  * The damage model's thresholds are momentum change of the *car*, calibrated
  * against a wall that stops it dead. A deer changes the car's momentum by
  * almost nothing and still destroys the front of it, because all of that load
- * lands on half a metre of panel. Set so that a strike at 90 km/h holes the
- * radiator and takes the lights — a written-off front end, which is what a deer
- * strike at that speed actually is — while 35 km/h is paint and a fright.
+ * lands on half a metre of panel.
+ *
+ * 3.6 for a long time, and it had quietly stopped meaning anything: the comment
+ * here claimed a 90 km/h strike wrote off the front end, and measured with
+ * `npm run crash -- --deer=90` it left the radiator at 78%, the lights at 32%
+ * and a bill of 584 — a scratch. The damage thresholds moved underneath it and
+ * this number never followed. At 9.0 the strike does what it was always
+ * described as doing:
+ *
+ *   20 km/h   a cracked lamp, ~110                        a fright
+ *   40 km/h   lights out, nose dented, ~740                a bill
+ *   60 km/h   lights gone, front panel folded, ~1900       a bad accident
+ *   90 km/h   radiator holed, front end gone, ~4100        written off
+ *  200 km/h   the same, ~4800                              see STRIKE_CEILING
+ *
+ * Re-measure with `npm run crash -- --deer=...` after any change to the damage
+ * thresholds, because that is precisely how this drifted the first time.
  */
-export const STRIKE_CONCENTRATION = 3.6;
+export const STRIKE_CONCENTRATION = 9.0;
+
+/**
+ * The most a deer is allowed to put into the car, newton-seconds.
+ *
+ * There is a rule here older than this number and it is a fairness one: a deer
+ * steps out with very little warning, so a strike may be an expensive disaster
+ * and may never be an instant retirement. Without a ceiling it becomes one —
+ * past about 34 000 N·s the damage model's structural spreading reaches the
+ * engine wherever the hit landed, and at 9.0 that is a deer at 105 km/h ending
+ * the run. `tests/wildlife.test.ts` asserts the rule at 200 km/h.
+ *
+ * A ceiling is also the honest end of the concentration fiction. The factor
+ * says a deer loads the front far harder than its momentum suggests, which is
+ * true; it cannot be true without limit, because there is only so much a 130 kg
+ * animal can put into a structure before it is the animal that gives way.
+ *
+ * Approached smoothly rather than clamped, so a faster strike is always a worse
+ * one — a hard clamp would make 120 km/h and 200 km/h identical, and "it stops
+ * getting worse" is its own kind of wrong.
+ *
+ * Set with margin rather than right up against the engine: the seize point is
+ * around 34 000 and this is 27 000, so a damage retune has to move things by a
+ * quarter before the fairness rule silently stops holding. `tests/wildlife`
+ * asserts that margin directly, so it fails loudly instead.
+ */
+export const STRIKE_CEILING = 27_000;
+
+/**
+ * Below this the strike is simply its raw impulse; above it, it bends.
+ *
+ * The knee matters as much as the ceiling. Softening the *whole* curve — one
+ * exponential from zero — was tried first and it compresses the bottom as hard
+ * as the top: a deer at 20 km/h ended up costing what one at 40 should, and the
+ * only way to get a written-off front end at 90 was to make a walking-pace
+ * bump expensive. Staying linear until the accident is already serious keeps
+ * the cheap end cheap and spends the whole soft region where it is needed,
+ * which is the last few thousand newton-seconds before the engine.
+ */
+const STRIKE_KNEE = 22_000;
+
+/**
+ * Impulse a strike actually delivers, after the ceiling.
+ *
+ * Exported because `npm run crash -- --deer=` has to model exactly what the
+ * world does; that harness computing the raw product itself is how the
+ * calibration and the game drifted apart in the first place.
+ */
+export function strikeImpulse(speed: number): number {
+  const raw = DEER_MASS * Math.abs(speed) * STRIKE_CONCENTRATION;
+  if (raw <= STRIKE_KNEE) return raw;
+  const room = STRIKE_CEILING - STRIKE_KNEE;
+  return STRIKE_KNEE + room * (1 - Math.exp(-(raw - STRIKE_KNEE) / room));
+}
 
 /** How far ahead a deer notices the car and lifts its head, metres. */
 const ALERT_RANGE = 60;
@@ -187,7 +254,7 @@ export class Wildlife {
       animal.state = 'gone';
       const speed = Math.hypot(carVelocity.x, carVelocity.z);
       return {
-        impulse: DEER_MASS * speed * STRIKE_CONCENTRATION,
+        impulse: strikeImpulse(speed),
         // Pushed along the car's own travel: the deer goes over the bonnet.
         push: speed > 0.1 ? v3(carVelocity.x / speed, 0, carVelocity.z / speed) : v3(0, 0, 1),
       };

@@ -15,7 +15,7 @@
 
 import { COMPONENTS } from '../src/sim/damage.js';
 import { createWorld } from '../src/sim/world.js';
-import { DEER_MASS, STRIKE_CONCENTRATION } from '../src/sim/wildlife.js';
+import { strikeImpulse } from '../src/sim/wildlife.js';
 
 function arg(name: string, fallback: string): string {
   const hit = process.argv.find((a) => a.startsWith(`--${name}=`));
@@ -63,8 +63,9 @@ if (deerSpec) {
     const world = await createWorld({ baseSurface: 'tarmac', damage: true });
     const damage = world.damage!;
     const speed = kph / 3.6;
-    // The same call the world makes when the proximity test fires.
-    const impulse = DEER_MASS * speed * STRIKE_CONCENTRATION;
+    // The same call the world makes when the proximity test fires — literally
+    // the same function, so this cannot drift from the game again.
+    const impulse = strikeImpulse(speed);
     damage.applyImpact({ x: 0, y: 0, z: 1.8 }, impulse);
 
     const hurt = COMPONENTS.filter((c) => damage.get(c.id) < 0.999)

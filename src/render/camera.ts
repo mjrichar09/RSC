@@ -13,6 +13,16 @@ import type { Vec3 } from '../sim/math.js';
 import type { CameraZone } from '../sim/stage.js';
 
 /**
+ * How long one impact rings the camera for, real seconds.
+ *
+ * Short on purpose. The knock is there to say *an impact happened*, and a
+ * camera still moving a second later has stopped reporting the impact and
+ * started being an effect — which is what it read as through a slow-motion
+ * replay, where a third of a second of world time is over a second of yours.
+ */
+const SHAKE_TIME = 0.3;
+
+/**
  * How far back the orthographic camera sits, in metres.
  *
  * Arbitrary for an orthographic projection — it only has to clear the near
@@ -45,8 +55,12 @@ export class IsoCamera {
   private desiredPitch: number = CAMERA.pitch;
   private desiredZoom: number = CAMERA.viewSize;
 
-  /** Current shake magnitude in metres, decaying every frame. */
+  /** Current shake magnitude in metres. */
   private shakeAmount = 0;
+  /** Real seconds left of the current knock. */
+  private shakeLeft = 0;
+  /** Amplitude the current knock started at. */
+  private shakePeak = 0;
   private shakeSeed = Math.random() * 1000;
   /** Extra zoom-out from speed, multiplied onto the zone's view size. */
   private speedZoom = 1;
@@ -96,9 +110,46 @@ export class IsoCamera {
   /**
    * Knock the camera. `severity` is 0..1; anything above a light bump reads as
    * an impact you felt rather than merely saw.
+   *
+   * One knock per accident. A crash is not one contact — a car rolling down an
+   * embankment is touching something on every step of it — and the previous
+   * version took the maximum of the incoming severity and whatever was already
+   * running, so every one of those contacts topped the shake back up and the
+   * camera never settled. A lighter hit while a knock is still going is the
+   * same accident still happening and is ignored; a harder one is a new event
+   * and restarts it.
    */
   shake(severity: number): void {
-    this.shakeAmount = Math.min(Math.max(this.shakeAmount, severity * 1.5), 2.2);
+    const amount = Math.min(Math.max(severity, 0) * 1.5, 2.2);
+    if (this.shakeLeft > 0 && amount <= this.shakePeak) return;
+    this.shakePeak = amount;
+    this.shakeAmount = amount;
+    this.shakeLeft = SHAKE_TIME;
+  }
+
+  /**
+   * Advance the shake envelope. Real seconds, never the simulation's.
+   *
+   * Its own method, called by *every* draw path, because that is exactly what
+   * went wrong: the decay used to live inside `follow`, and the crash replay
+   * draws with `jumpTo` and returns before `follow` is ever reached. So the
+   * shake was frozen at full amplitude for the whole cinematic — the camera
+   * shook for the entire slow-motion replay and stopped the instant it closed,
+   * which reads as the slow motion causing it. Anything with a lifetime has to
+   * be advanced somewhere both paths go through.
+   */
+  advanceShake(dt: number): void {
+    if (this.shakeLeft <= 0) return;
+    this.shakeLeft = Math.max(this.shakeLeft - dt, 0);
+    if (this.shakeLeft === 0) {
+      this.shakeAmount = 0;
+      this.shakePeak = 0;
+      return;
+    }
+    // Eased out rather than linear, so the knock reads as one impact ringing
+    // down instead of a wobble being switched off.
+    const t = this.shakeLeft / SHAKE_TIME;
+    this.shakeAmount = this.shakePeak * t * t;
   }
 
   /** Snap straight to the subject, with no smoothing. */
@@ -142,9 +193,6 @@ export class IsoCamera {
     // separate multiplier so it does not fight the camera-zone easing.
     const wanted = 1 + Math.min(speed / 60, 0.35);
     this.speedZoom += (wanted - this.speedZoom) * (1 - Math.pow(0.5, dt / 0.4));
-
-    this.shakeAmount *= Math.pow(0.02, dt);
-    if (this.shakeAmount < 0.001) this.shakeAmount = 0;
 
     this.applyProjection();
     this.place();

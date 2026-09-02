@@ -18,6 +18,7 @@ const base: VisionInput = {
   surface: 'tarmac',
   wiperHealth: 1,
   lightHealth: 1,
+  windscreenHealth: 1,
 };
 
 /** Run the model for `seconds`, returning the last state. */
@@ -251,5 +252,48 @@ describe('the glass outside the arc', () => {
     run(vision, 30, wet);
     vision.reset();
     expect(vision.update(1 / 120, { ...base, ...wet }).crust).toBeLessThan(0.01);
+  });
+});
+
+describe('a windscreen that has left the frame', () => {
+  it('stops the wipers, because there is nothing left to wipe', () => {
+    const wet = { weather: 'rain' } as const;
+    const glassGone = run(new Vision(), 8, {
+      conditions: { timeOfDay: 'day', ...wet },
+      windscreenHealth: 0,
+    });
+    expect(glassGone.wipersDead).toBe(true);
+    expect(glassGone.wiper).toBeNull();
+
+    // Intact glass in the same weather is being swept.
+    const intact = new Vision();
+    let swept = false;
+    for (let i = 0; i < 8 * 120; i++) {
+      const state = intact.update(1 / 120, {
+        ...base,
+        conditions: { timeOfDay: 'day', ...wet },
+      });
+      if (state.wiper !== null) swept = true;
+    }
+    expect(swept).toBe(true);
+  });
+
+  it('does not clean the view by breaking', () => {
+    // Losing the windscreen must not be a wet-weather upgrade: whatever has
+    // built up stays there, and the weather keeps arriving.
+    const wet = { timeOfDay: 'day', weather: 'rain' } as const;
+    const broken = run(new Vision(), 10, { conditions: wet, windscreenHealth: 0 });
+    const whole = run(new Vision(), 10, { conditions: wet, windscreenHealth: 1 });
+    expect(broken.occlusion).toBeGreaterThan(whole.occlusion);
+  });
+
+  it('slows the blades before it stops them', () => {
+    // The glass leaves the frame on a ramp, so the sweeps stretch out rather
+    // than switching off — half-gone glass still gets cleared, just worse.
+    const wet = { timeOfDay: 'day', weather: 'rain' } as const;
+    const half = run(new Vision(), 10, { conditions: wet, windscreenHealth: 0.18 });
+    expect(half.wipersDead).toBe(false);
+    const gone = run(new Vision(), 10, { conditions: wet, windscreenHealth: 0 });
+    expect(gone.occlusion).toBeGreaterThan(half.occlusion);
   });
 });
