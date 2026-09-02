@@ -176,8 +176,15 @@ export const CAR: VehicleTuning = {
   // stage that punishes handling changes hardest, it is a straight improvement:
   // Grand Traverse goes from 87.3 s and 2.7% off road to 85.5 s and 0.0%.
   maxSteerAngle: 0.56,
-  steerSpeedFalloff: 0.3,
-  steerSpeedFalloffAt: 24,
+  // 0.3 at 24 m/s before, which left only 30% of lock above 86 km/h. Now 60% of
+  // it, and not reached until 133 km/h — the car keeps far more steering at
+  // speed. Worth knowing what that did to the AI: `DriverInput.steer` is a
+  // fraction of lock, so the same output became 2.3x the angle at 100 km/h and
+  // the driver's recentring loop, whose gain was chosen against the old lock,
+  // started oscillating. That is compensated in `sim/driver.ts` rather than
+  // here; see `steerScale` for why only half the loop is compensated.
+  steerSpeedFalloff: 0.6,
+  steerSpeedFalloffAt: 37,
   steerRate: 3.6,
   steerReturnRate: 5.0,
 
@@ -216,11 +223,17 @@ export const CAR: VehicleTuning = {
   handbrakeTorque: 2600,
   handbrakeGripLoss: 0.42,
 
-  tireGrip: 1.35,
+  // 1.35 before, raised by driving it. Peak lateral grip on tarmac goes to
+  // about 1.08 g and every stage's AI lap comes down 2-3.5%, which is why the
+  // medal tables were rebased in the same commit — they are calibrated against
+  // that lap and go stale the moment the tyres change.
+  tireGrip: 1.43,
   tireWearRate: 0.012,
   tireGripBalance: 1.12,
   // Left at 0.20, and this is the record of why, because the obvious next idea
-  // is to widen it again.
+  // is to widen it again. (The figures below were measured at `tireGrip` 1.35,
+  // before it was raised; the argument is a ratio and survives, the absolute
+  // numbers would need retaking.)
   //
   // A broader peak is more warning before the tyre lets go and a wider window
   // to sit in once it has, and it measures that way: 0.24 moves the held slide
@@ -235,14 +248,16 @@ export const CAR: VehicleTuning = {
   // grip; that is where it came from instead.
   peakSlipAngle: 0.20,
   peakSlipRatio: 0.14,
-  // Raised from 0.74. This is the number the file's own comment calls the most
-  // important one for how the car feels, and it was set low enough that a
-  // slide was something to survive rather than something to steer. Measured
-  // on `npm run telemetry -- --trace=catch`, the time a provoked slide can be
-  // held goes from 1.83 s to 3.16 s, and the closed-loop `drift` trace gets a
-  // fourth transition it could not previously make. The AI's laps move by
-  // under two per cent and every stage keeps its medal tier.
-  slideGripFloor: 0.80,
+  // Raised from 0.74 to 0.80 to make a slide something you steer rather than
+  // something you survive, then settled at 0.77 by driving it. The measurement
+  // that motivated 0.80 still stands — on `npm run telemetry -- --trace=catch`
+  // the time a provoked slide can be held went from 1.83 s to 3.16 s — but a
+  // floor that high also makes a slide hard to *end*, and 0.77 was chosen from
+  // the seat for how the car recovers, not from that number. It costs held
+  // slide time (3.16 s to 2.03 s at the current tyres) and that is the trade
+  // being made deliberately: this is the number the file's own header calls the
+  // most important one for feel, and feel is not a metric.
+  slideGripFloor: 0.77,
   lockedGripFloor: 0.55,
 
   dragFactor: 0.42,

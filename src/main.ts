@@ -1178,7 +1178,7 @@ const params = new URLSearchParams(location.search);
       // that seedGhostAndSeek has just attached.
       if (!stage || stage.def.id !== stageId) loadStage(stageId);
       else restart();
-      const driver = new Driver(stage!, { gripBudget: grip });
+      const driver = new Driver(stage!, { gripBudget: grip, tuning: world.vehicle.tuning });
       for (let i = 0; i < 60; i++) world.step(NEUTRAL_INPUT);
       world.time = 0;
       while (world.time < seconds) {
@@ -1242,7 +1242,7 @@ const params = new URLSearchParams(location.search);
     async seedGhostAndSeek(stageId, seconds) {
       lights.skip();
       if (!stage || stage.def.id !== stageId) loadStage(stageId);
-      const driver = new Driver(stage!);
+      const driver = new Driver(stage!, { tuning: world.vehicle.tuning });
       for (let i = 0; i < 60; i++) world.step(NEUTRAL_INPUT);
       world.time = 0;
 
@@ -1281,7 +1281,7 @@ const params = new URLSearchParams(location.search);
     async finishWithAi(timeout = 240) {
       lights.skip();
       if (!stage || !race) return { error: 'no stage loaded' };
-      const driver = new Driver(stage);
+      const driver = new Driver(stage, { tuning: world.vehicle.tuning });
       for (let i = 0; i < 60; i++) world.step(NEUTRAL_INPUT);
       world.time = 0;
 

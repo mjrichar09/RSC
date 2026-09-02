@@ -488,6 +488,32 @@ Three things there are easy to get wrong:
 
 ## Tuning and calibration
 
+**The AI reads the car now, and only partly.** `sim/driver.ts` scales its grip
+budget by `gripFactor` (how this car's `tireGrip` and `peakSlipAngle` compare to
+the tuning the budgets were calibrated at) so a tyre change moves the AI's corner
+speeds instead of leaving it planning at speeds the car no longer has. Both
+reference constants are the values at calibration, which is what makes the factor
+exactly 1 there — every `gripBudget` in the codebase keeps the meaning it was
+chosen with.
+
+Steering is compensated the other way and only halfway, and the split is
+measured rather than reasoned. `DriverInput.steer` is a *fraction of lock*, so
+changing `maxSteerAngle` or the speed falloff changes the angle the AI gets for
+the same output. Its **pursuit** term wants that extra authority — compensating
+it cost Grand Traverse 13 s. Its **recentring** term is a stabiliser whose gain
+was chosen against the old lock — not compensating it cost Vieux Village 12 s
+and put a clean run into the walls. `steerScale` compensates exactly one.
+
+**Medal times are calibrated against an AI lap, so the car changing invalidates
+all thirteen tables.** They are hand-written constants in `data/stages/index.ts`
+and `data/stages/generated.ts`; nothing recomputes them, `generate` only makes
+new stages, and variant times are derived from them by a hand-calibrated
+`timeScale` so they inherit the staleness. Rebase them by scaling each table by
+that stage's own before/after ratio from `npm run stages` — which preserves how
+hard each stage was meant to be, rather than re-deriving from a single set of
+ratios and flattening the differences.
+
+
 `src/data/tuning.ts` holds every magic number for the car; nothing else should
 carry one. The live panel (`T` in game) mutates that object directly, and
 **Copy setup** gives back only the changed values, ready to paste.

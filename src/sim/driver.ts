@@ -14,21 +14,132 @@ import type { Stage } from './stage.js';
 import type { VehicleState } from './vehicle.js';
 import { CLEAR_DAY, type Conditions, gripMultiplier } from './conditions.js';
 import { surface } from './surfaces.js';
+import { CAR, type VehicleTuning } from '../data/tuning.js';
+
+/**
+ * The tyre model every `gripBudget` in this project was calibrated against.
+ *
+ * The budgets are absolute lateral g — 0.75 means "I will plan for three
+ * quarters of a g" — and that was a number with no connection to the car. The
+ * driver read the *surface* grip and the weather and nothing at all out of
+ * `data/tuning.ts`, so changing the tyres moved what the car could do and left
+ * the AI planning at the old speeds. Measured, dropping peak grip from 1.15 g
+ * to 1.03 turned a clean 87 s Grand Traverse lap into 111 s with a fifth of it
+ * in the scenery, and every stage's medal table is calibrated on that lap.
+ *
+ * So the budget is scaled by how the current tyres compare to these. Both
+ * constants are the values at the time of calibration, which is what makes
+ * `gripFactor` exactly 1 there: every budget in the codebase keeps the meaning
+ * it was chosen with, and only starts moving when the tyres do.
+ */
+const REFERENCE_TIRE_GRIP = 1.35;
+const REFERENCE_PEAK_SLIP = 0.2;
+
+/**
+ * The steering the driver's gains were tuned against.
+ *
+ * Same problem as the grip, on the other axis, and it bit immediately.
+ * `DriverInput.steer` is a *fraction of available lock*, not an angle, so the
+ * wheel angle the AI actually gets for a given bearing error depends on three
+ * tuning numbers it never read. Widening the speed falloff from 0.3/24 to
+ * 0.6/37 more than doubles the lock available at 100 km/h — the same output,
+ * 2.3x the angle — and the AI started sawing at every correction. On Vieux
+ * Village, which is a narrow street with stone walls down both sides, that put
+ * it off the road on every run it had previously driven clean.
+ */
+const REFERENCE_MAX_STEER = 0.5;
+const REFERENCE_STEER_FALLOFF = 0.3;
+const REFERENCE_STEER_FALLOFF_AT = 24;
+
+/** Lock actually available at a speed, radians. Mirrors `Vehicle.updateSteering`. */
+function lockAt(speed: number, maxSteer: number, falloff: number, falloffAt: number): number {
+  return maxSteer * (1 - (1 - falloff) * clamp(speed / falloffAt, 0, 1));
+}
+
+/**
+ * What to multiply the *recentring* term by so the angle it produces is the one
+ * it was tuned for.
+ *
+ * Only the recentring term, and that split is measured rather than reasoned.
+ * The two halves of this controller want opposite things from extra lock:
+ *
+ * - The **pursuit** term (`bearing * 2.1`) is aiming at a point down the road,
+ *   and more authority genuinely lets it make a tighter corner. Compensated, it
+ *   costs Grand Traverse — which is mostly hairpins — 13 seconds: 82.6 s to
+ *   95.4 s, degrading further the harder the driver commits.
+ * - The **recentring** term is a stabiliser, a proportional pull back toward
+ *   the centreline that exists because pure pursuit will happily settle into an
+ *   offset on the verge. Its gain was chosen against the lock of the day, so
+ *   2.3x the angle for the same output is 2.3x the loop gain, and it oscillates.
+ *   Uncompensated it cost Vieux Village — a narrow street with stone walls —
+ *   12 seconds and put a clean run off the road: 30.5 s to 42.6 s.
+ *
+ * Compensating exactly one of them is better than compensating both or neither
+ * on all three stages that care. Speed-dependent, because the reference falloff
+ * was: the old car simply had less lock at speed, and that was quietly doing a
+ * lot of the stabilising this now does explicitly.
+ */
+function steerScale(speed: number, tuning: VehicleTuning): number {
+  const now = lockAt(
+    speed,
+    tuning.maxSteerAngle,
+    tuning.steerSpeedFalloff,
+    tuning.steerSpeedFalloffAt,
+  );
+  if (now < 1e-6) return 1;
+  const reference = lockAt(
+    speed,
+    REFERENCE_MAX_STEER,
+    REFERENCE_STEER_FALLOFF,
+    REFERENCE_STEER_FALLOFF_AT,
+  );
+  return reference / now;
+}
+
+/**
+ * How much more (or less) lateral g this car can hold than the reference one.
+ *
+ * Two terms, and they are not equally solid:
+ *
+ * - **`tireGrip`** is the peak friction coefficient and scales the friction
+ *   circle directly, so this part is exact.
+ * - **`peakSlipAngle`** is a curve *shape*, not a height — the peak of the slip
+ *   curve is 1.0 whatever it is set to. What a wider peak actually costs is
+ *   force at the slip angles below it, which is where a car corners, and that
+ *   is not available in closed form. The inverse ratio here is an
+ *   approximation, and deliberately a pessimistic one: measured, 0.20 → 0.24
+ *   cost about 10% of peak lateral g and this predicts 17%. A driver that
+ *   under-estimates its grip is slow; one that over-estimates it is in a ditch,
+ *   and only one of those two failures ends a stage validation run.
+ *
+ * `npm run stages` is what actually confirms this, and it is the check that has
+ * to be run after any change to either number.
+ */
+function gripFactor(tuning: VehicleTuning): number {
+  return (
+    (tuning.tireGrip / REFERENCE_TIRE_GRIP) * (REFERENCE_PEAK_SLIP / tuning.peakSlipAngle)
+  );
+}
 
 export interface DriverOptions {
   /**
    * Lateral acceleration the driver believes it can sustain, in g.
    *
-   * A belief, and deliberately a constant: it is multiplied by the *surface*
-   * grip and the weather, and it reads nothing at all out of `data/tuning.ts`.
-   * So a change to the tyre model does not move the AI's corner speeds, and
-   * that is a trap worth knowing about — lowering real peak grip from 1.15 g
-   * to 1.03 left the driver planning at speeds the car could no longer make and
-   * put a fifth of a Grand Traverse lap in the scenery. Anything that moves
-   * peak grip has to be checked with `npm run stages`, and if it stays, this
-   * number and every stage's medal table move with it.
+   * Read as commitment rather than as an absolute: it is what the driver would
+   * plan for in a car with the reference tyres, and it is scaled by
+   * `gripFactor` for the car it is actually in. So 0.75 still means what it
+   * meant when it was chosen, and a stiffer or softer tyre moves it without
+   * anybody having to remember to.
    */
   gripBudget?: number;
+  /**
+   * The car being driven, so the driver knows what its tyres can do.
+   *
+   * Defaults to the committed tuning, which is what almost every caller is
+   * using anyway — a harness running with `--set` overrides has to pass the
+   * world's resolved tuning, or it is measuring one car with another's driver.
+   */
+  tuning?: VehicleTuning;
   /**
    * Conditions the lap is being driven in, so the driver knows the road is wet.
    * Without it, it plans every corner as though it were dry.
@@ -62,6 +173,7 @@ export class Driver {
     this.stage = stage;
     this.options = {
       gripBudget: options.gripBudget ?? 0.6,
+      tuning: options.tuning ?? CAR,
       conditions: options.conditions ?? CLEAR_DAY,
       baseLookahead: options.baseLookahead ?? 9,
       lookaheadPerSpeed: options.lookaheadPerSpeed ?? 0.6,
@@ -71,7 +183,8 @@ export class Driver {
 
   /** Target speed for the tightest corner within the next `scan` metres. */
   private targetSpeed(fromDistance: number, scan: number): number {
-    const { gripBudget, maxSpeed } = this.options;
+    const { maxSpeed } = this.options;
+    const gripBudget = this.options.gripBudget * gripFactor(this.options.tuning);
     let limit = maxSpeed;
 
     for (let d = 0; d < scan; d += 4) {
@@ -158,7 +271,9 @@ export class Driver {
     // Pull back toward the centreline rather than tracking the aim point alone;
     // pure pursuit will happily settle into a stable offset on the verge.
     const recentre = clamp(loc.lateral * 0.07, -0.45, 0.45);
-    const steer = clamp(bearing * 2.1 + recentre, -1, 1);
+    // Scaled to the lock this car actually has, so the wheel angle is the one
+    // these gains were tuned to produce whatever the steering tuning says.
+    const steer = clamp(bearing * 2.1 + recentre * steerScale(speed, this.options.tuning), -1, 1);
 
     const target = this.targetSpeed(loc.distance, 70);
     const error = target - speed;

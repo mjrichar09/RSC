@@ -5,6 +5,12 @@
  * finish by the AI at several grip budgets before being accepted, and its medal
  * times and payouts were calibrated from those laps.
  *
+ * The *shapes* are what must not be edited by hand. The medal times are a
+ * different thing: they are calibrated against a lap in a particular car, so
+ * they go stale whenever the car changes and have to be rebased from a fresh
+ * `npm run stages`. `generate` cannot do that — it only makes new stages — so
+ * that edit happens here, and the record of it is in the commit.
+ *
  * 6 stage(s), biomes: moor, coast, forest.
  */
 
@@ -154,10 +160,10 @@ export const GENERATED_STAGES: StageDef[] = [
     },
     "checkpoints": 3,
     "medals": {
-      "author": 31,
-      "gold": 37,
-      "silver": 46,
-      "bronze": 60
+      "author": 30,
+      "gold": 36,
+      "silver": 45,
+      "bronze": 59
     },
     "entryFee": 255,
     "payouts": {
@@ -388,10 +394,10 @@ export const GENERATED_STAGES: StageDef[] = [
     },
     "checkpoints": 4,
     "medals": {
-      "author": 33,
-      "gold": 39,
-      "silver": 48,
-      "bronze": 63
+      "author": 32,
+      "gold": 38,
+      "silver": 47,
+      "bronze": 62
     },
     "entryFee": 245,
     "payouts": {
@@ -559,10 +565,10 @@ export const GENERATED_STAGES: StageDef[] = [
     },
     "checkpoints": 3,
     "medals": {
-      "author": 27,
-      "gold": 32,
-      "silver": 40,
-      "bronze": 53
+      "author": 26,
+      "gold": 31,
+      "silver": 39,
+      "bronze": 52
     },
     "entryFee": 201,
     "payouts": {
@@ -810,10 +816,10 @@ export const GENERATED_STAGES: StageDef[] = [
     },
     "checkpoints": 4,
     "medals": {
-      "author": 41,
-      "gold": 48,
-      "silver": 59,
-      "bronze": 78
+      "author": 40,
+      "gold": 47,
+      "silver": 58,
+      "bronze": 76
     },
     "entryFee": 261,
     "payouts": {
@@ -1053,10 +1059,10 @@ export const GENERATED_STAGES: StageDef[] = [
     },
     "checkpoints": 4,
     "medals": {
-      "author": 38,
-      "gold": 45,
-      "silver": 55,
-      "bronze": 73
+      "author": 37,
+      "gold": 44,
+      "silver": 54,
+      "bronze": 71
     },
     "entryFee": 269,
     "payouts": {
@@ -1300,10 +1306,10 @@ export const GENERATED_STAGES: StageDef[] = [
     },
     "checkpoints": 4,
     "medals": {
-      "author": 42,
-      "gold": 50,
-      "silver": 61,
-      "bronze": 81
+      "author": 41,
+      "gold": 49,
+      "silver": 59,
+      "bronze": 79
     },
     "entryFee": 279,
     "payouts": {

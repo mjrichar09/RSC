@@ -141,6 +141,10 @@ export async function runStage(
   // The driver is told what it is driving in: a lap in the wet is planned in
   // the wet, or it brakes for every corner as though the road were dry.
   const driver = new Driver(stage, {
+    // The world's *resolved* tuning, not `options.tuning`, which is a partial —
+    // a harness running `--set=tireGrip=1.6` has to hand the driver the car it
+    // built, or it measures one car through another's idea of grip.
+    tuning: world.vehicle.tuning,
     ...options.driver,
     ...(options.conditions ? { conditions: options.conditions } : {}),
   });

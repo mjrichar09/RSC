@@ -57,7 +57,7 @@ const pineLoop: StageDef = {
   // so no amount of bad luck can strand a player without a way back.
   payouts: { author: 2600, gold: 1600, silver: 900, bronze: 500, finish: 300 },
   checkpoints: 3,
-  medals: { author: 36, gold: 41, silver: 52, bronze: 68 },
+  medals: { author: 35, gold: 40, silver: 51, bronze: 66 },
   controlPoints: [
     cp(0, 0, 0, 6.0, 'gravel'),
     // A crest on the opening straight. Sized so it only launches the car above
@@ -111,7 +111,7 @@ const quarryRun: StageDef = {
   requiresMedals: 1,
   payouts: { author: 5200, gold: 3200, silver: 1800, bronze: 1000, finish: 600 },
   checkpoints: 4,
-  medals: { author: 34, gold: 39, silver: 46, bronze: 55 },
+  medals: { author: 33, gold: 38, silver: 45, bronze: 54 },
   controlPoints: [
     cp(0, 0, 0, 5.4, 'tarmac'),
     cp(2, 26, 0, 5.4, 'tarmac'),
@@ -171,7 +171,7 @@ const northPass: StageDef = {
   // logic started reading the road. Medal times come from a measured AI lap, so
   // they move with it — at the same ratios this stage already had, so it is
   // exactly as hard relative to the car as it was.
-  medals: { author: 39, gold: 46, silver: 57, bronze: 73 },
+  medals: { author: 38, gold: 45, silver: 55, bronze: 71 },
   controlPoints: [
     cp(0, 0, 0, 6.4, 'snow'),
     cp(-8, 65, 2, 6.4, 'snow'),
@@ -220,7 +220,7 @@ const millstream: StageDef = {
   requiresMedals: 5,
   payouts: { author: 6400, gold: 3900, silver: 2200, bronze: 1250, finish: 720 },
   checkpoints: 3,
-  medals: { author: 32, gold: 35, silver: 44, bronze: 57 },
+  medals: { author: 31, gold: 34, silver: 43, bronze: 55 },
   controlPoints: [
     // A wide, fast opening: the width is the promise the rest of it breaks.
     cp(0, 0, 0, 7.6, 'gravel'),
@@ -283,7 +283,7 @@ const vieuxVillage: StageDef = {
   requiresMedals: 7,
   payouts: { author: 7600, gold: 4600, silver: 2600, bronze: 1450, finish: 850 },
   checkpoints: 3,
-  medals: { author: 28, gold: 31, silver: 39, bronze: 51 },
+  medals: { author: 27, gold: 30, silver: 38, bronze: 50 },
   controlPoints: [
     // Out of the square, which is the widest the stage ever gets.
     cp(0, 0, 0, 8.2, 'tarmac'),
@@ -348,7 +348,7 @@ const grandTraverse: StageDef = {
   requiresMedals: 9,
   payouts: { author: 14200, gold: 8800, silver: 4900, bronze: 2750, finish: 1600 },
   checkpoints: 6,
-  medals: { author: 77, gold: 84, silver: 106, bronze: 139 },
+  medals: { author: 74, gold: 81, silver: 102, bronze: 134 },
   controlPoints: [
     // Valley tarmac: fast, wide, and the only place on the stage to breathe.
     cp(0, 0, 0, 7.8, 'tarmac'),
@@ -467,11 +467,13 @@ const scrubbedFlats: StageDef = {
   payouts: { author: 7400, gold: 4500, silver: 2500, bronze: 1400, finish: 820 },
   checkpoints: 4,
   // From a measured AI lap, not from taste: `npm run stages --stage=scrubbed-flats`
-  // drives it in 45.6 s clean, 0% off road and no rescues, and these are that
+  // drives it in 44.5 s clean, 0% off road and no rescues, and these are that
   // time at the ratios every other stage in the game uses (0.89 / 0.97 / 1.22 /
   // 1.60). Re-measure and re-derive them if a jump moves — the whole stage is
-  // speed against geometry, so a lip half a metre lower is a different lap.
-  medals: { author: 41, gold: 44, silver: 56, bronze: 73 },
+  // speed against geometry, so a lip half a metre lower is a different lap —
+  // and note that a change to the *car* moves them too, which is why every
+  // table in this file was rebased when the tyres were.
+  medals: { author: 40, gold: 43, silver: 55, bronze: 71 },
   controlPoints: [
     // Start apron, then a flat run-up: the rhythm section has to be entered at
     // a speed the driver chose rather than at whatever the start produced.
