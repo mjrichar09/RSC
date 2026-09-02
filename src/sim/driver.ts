@@ -16,7 +16,18 @@ import { CLEAR_DAY, type Conditions, gripMultiplier } from './conditions.js';
 import { surface } from './surfaces.js';
 
 export interface DriverOptions {
-  /** Lateral acceleration the driver believes it can sustain, in g. */
+  /**
+   * Lateral acceleration the driver believes it can sustain, in g.
+   *
+   * A belief, and deliberately a constant: it is multiplied by the *surface*
+   * grip and the weather, and it reads nothing at all out of `data/tuning.ts`.
+   * So a change to the tyre model does not move the AI's corner speeds, and
+   * that is a trap worth knowing about — lowering real peak grip from 1.15 g
+   * to 1.03 left the driver planning at speeds the car could no longer make and
+   * put a fifth of a Grand Traverse lap in the scenery. Anything that moves
+   * peak grip has to be checked with `npm run stages`, and if it stays, this
+   * number and every stage's medal table move with it.
+   */
   gripBudget?: number;
   /**
    * Conditions the lap is being driven in, so the driver knows the road is wet.

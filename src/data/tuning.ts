@@ -34,9 +34,19 @@ export interface VehicleTuning {
   /** Steering angle multiplier at `steerSpeedFalloffAt` m/s and above. */
   steerSpeedFalloff: number;
   steerSpeedFalloffAt: number;
-  /** Radians per second the front wheels can be turned. */
+  /**
+   * How fast the front wheels can be turned, in **full locks per second**.
+   *
+   * Not radians per second, which is what this said and is not what it does:
+   * `vehicle.ts` moves the angle by `steerRate * maxSteerAngle * dt`, so the
+   * rate is proportional to the lock. That is the useful behaviour — raising
+   * `maxSteerAngle` leaves lock-to-lock time unchanged at 0.56 s rather than
+   * making the steering feel heavier — but it means this number is a fraction
+   * of the available range, not an angle. At 3.6 with 0.56 rad of lock it is
+   * about 2.0 rad/s of actual wheel movement.
+   */
   steerRate: number;
-  /** Radians per second the wheels return to centre with no input. */
+  /** The same, in full locks per second, for returning to centre with no input. */
   steerReturnRate: number;
 
   /** Peak engine torque curve as [rpm, Nm] pairs. */
@@ -91,7 +101,21 @@ export interface VehicleTuning {
    * decision rather than a free improvement.
    */
   tireWearRate: number;
-  /** Front/rear grip balance. >1 gives the front more bite (more oversteer). */
+  /**
+   * Front/rear grip balance. >1 gives the front more bite (more oversteer).
+   *
+   * Applied as `front ? balance : 2 - balance`, so 1.12 means the front tyres
+   * get 1.12x their friction coefficient and the rear 0.88x — the rear lets go
+   * first, which is oversteer.
+   *
+   * The direction reads backwards against `npm run sweep`, which calls the car
+   * "understeer" at this value, and both are right: the chassis understeers on
+   * its own and this dials that out rather than adding oversteer on top of it.
+   * Measured, the balance figure (front slip minus rear slip, so positive is
+   * understeer) goes 2.00 at 0.90, 1.68 at 1.00, 0.72 at 1.12, and negative at
+   * 1.25 — where the car stops cornering and starts spinning. There is very
+   * little room above the current value.
+   */
   tireGripBalance: number;
   /** Slip angle of peak lateral force, radians. */
   peakSlipAngle: number;

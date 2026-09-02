@@ -104,6 +104,14 @@ Every source file opens with a comment saying what it is for and, where it
 matters, what was tried first and why it failed. Read that block before the
 code; it is usually the answer.
 
+Which makes a wrong comment worse than no comment: it is the documentation, so
+correct one in place the moment it is found rather than noting it and moving on.
+Verify before rewriting, though — a comment that reads backwards is often right.
+`tireGripBalance` says ">1 gives the front more bite (more oversteer)" and looks
+wrong beside a `sweep` that calls the car "understeer" at that value; both are
+true, because the chassis understeers on its own and the number dials it out.
+The fix there was to add the measurement, not to change the claim.
+
 ### Two entry points
 
 - **Browser:** `src/main.ts`. Query parameters drive the visual harness —

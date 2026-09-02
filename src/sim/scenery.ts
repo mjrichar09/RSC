@@ -14,12 +14,18 @@
  * in the headless tools and on every machine in a multiplayer race — which is
  * the other thing decoration in the renderer could never be.
  *
- * Not all of it is solid. A tuft of grass and a heather bush are things you
- * brush through, and giving them colliders would turn the verge into a minefield
- * of invisible kerbs. Solidity is a property of the kind, plus two limits: a
- * boulder has to be big enough to be worth stopping a car, and anything further
- * out than `SOLID_MARGIN` past the corridor wall is backdrop no car can reach,
- * so it pays no physics bill.
+ * Not all of it is solid, and there are three cases rather than two. A tuft of
+ * grass and a heather bush are things you brush through, and giving them
+ * colliders would turn the verge into a minefield of invisible kerbs. A boulder
+ * big enough to be worth stopping a car is an obstacle. Between them, a stone
+ * too small to stop anything but too big to ignore is a **bump**: same
+ * footprint, height capped a few centimetres above the ground, so a car rides
+ * over it and is thrown rather than parked against it.
+ *
+ * On top of that, two limits. Anything further out than `SOLID_MARGIN` past the
+ * corridor wall is backdrop no car can reach, so it pays no physics bill — and
+ * nothing at all is placed on road anybody drives on, which is asked at
+ * placement rather than by suppressing a collider and drawing the thing anyway.
  */
 
 import { type Vec3, clamp, v3 } from './math.js';
