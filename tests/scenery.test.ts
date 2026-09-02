@@ -10,6 +10,11 @@
  * The size threshold matters as much as the collider does. A quarry floor is
  * strewn with pebble-sized stones for texture, and making every one of them
  * solid is the difference between a rally stage and a cattle grid.
+ *
+ * There is a third case between those two now. A stone too small to be an
+ * obstacle is still worth feeling, so it becomes a *bump*: same footprint, and
+ * a hard cap on how far it stands above the ground. The cap is the only thing
+ * making that safe, so it is the thing these tests check.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -17,7 +22,13 @@ import { Stage } from '../src/sim/stage.js';
 import { createWorld } from '../src/sim/world.js';
 import { stageById } from '../src/data/stages/index.js';
 import { CORRIDOR } from '../src/sim/corridor.js';
-import { SOLID_MARGIN, scatterScenery } from '../src/sim/scenery.js';
+import {
+  BUMP_PROUD,
+  MIN_BUMP_EXTENT,
+  SOLID_MARGIN,
+  scatterScenery,
+  sinkFor,
+} from '../src/sim/scenery.js';
 
 describe('what stands beside the road', () => {
   it('is the same wood on every machine', () => {
@@ -46,16 +57,57 @@ describe('what stands beside the road', () => {
     }
   });
 
-  it('leaves grass and heather soft, and small stones alone', () => {
+  it('leaves grass and heather soft, and small stones as bumps', () => {
     for (const id of ['pine-loop', 'quarry-run', 'grand-traverse']) {
       for (const item of new Stage(stageById(id)).scenery) {
         if (item.kind === 'tuft' || item.kind === 'bush') {
           expect(item.solid, `${id} ${item.kind}`).toBeUndefined();
         }
-        // Nothing knee-high enough to trip a car without being seen.
-        if (item.solid) expect(item.solid.radius).toBeGreaterThanOrEqual(0.55);
+        if (!item.solid) continue;
+
+        if (!item.solid.bump) {
+          // An obstacle has to be big enough to have been seen and avoided.
+          // Nothing knee-high enough to trip a car without being seen.
+          expect(item.solid.radius, `${id} ${item.kind}`).toBeGreaterThanOrEqual(0.55);
+          continue;
+        }
+
+        // A bump is the deliberate exception: small enough that the bar above
+        // rejects it, and safe only because its *height* is capped instead. So
+        // that cap is what gets asserted — this is the property that keeps a
+        // stony verge from becoming the boulder field that once left the AI
+        // unable to finish Grand Traverse in snow at all.
+        expect(item.solid.radius, `${id} ${item.kind}`).toBeGreaterThanOrEqual(MIN_BUMP_EXTENT);
+        const ground = item.position.y + sinkFor(item.kind, item.size);
+        const top = item.solid.center.y + item.solid.halfHeight;
+        expect(top - ground, `${id} ${item.kind} stands too proud`).toBeLessThanOrEqual(
+          BUMP_PROUD + 1e-6,
+        );
+        // And it is buried, not balanced: a bump whose base is off the ground
+        // is a slab the car can hit the edge of.
+        expect(item.solid.center.y - item.solid.halfHeight).toBeLessThanOrEqual(ground);
       }
     }
+  });
+
+  it('only makes bumps out of stone, and only where a car can reach them', () => {
+    let bumps = 0;
+    for (const id of ['quarry-run', 'north-pass', 'grand-traverse']) {
+      const stage = new Stage(stageById(id));
+      for (const item of stage.scenery) {
+        if (!item.solid?.bump) continue;
+        bumps++;
+        // Heather and grass are brushed through; only rock makes a bump.
+        expect(item.kind, id).toBe('boulder');
+        // Past the wall nothing reaches them, so nothing there should pay for
+        // a collider.
+        const widest = Math.max(...stage.spline.samples.map((s) => s.width));
+        expect(item.offset).toBeLessThanOrEqual(
+          widest + CORRIDOR.vergeWidth + CORRIDOR.bankWidth + CORRIDOR.wallWidth,
+        );
+      }
+    }
+    expect(bumps).toBeGreaterThan(100);
   });
 
   it('does not pay for a backdrop no car can reach', () => {

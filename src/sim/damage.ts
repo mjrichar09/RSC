@@ -115,7 +115,17 @@ export const COMPONENTS: ComponentDef[] = [
   // at the wheel so a corner impact takes several of them together.
   ...(['FL', 'FR', 'RL', 'RR'] as const).flatMap((c) => [
     corner(`suspension${c}` as ComponentId, `Suspension ${c}`, WHEEL_AT[c], 9000, 20000, 880, 0.95),
-    corner(`hub${c}` as ComponentId, `Hub ${c}`, WHEEL_AT[c], 24000, 24000, 1250, 1.0),
+    // 24000/24000 before, which made losing a wheel theoretical. Measured: no
+    // impact under about 50 000 N·s destroyed a hub, the hardest wall strike
+    // the game can produce is 45 000 at 130 km/h, and every impulse that did
+    // reach a hub had already seized the engine — so the wheel came off a car
+    // whose run was over anyway and nobody ever drove away on three. Set here
+    // so a hard corner strike, around 36 000, takes that corner's wheel and
+    // leaves the engine running: the interesting outcome is limping to the
+    // finish on three wheels, not another way to be told the race has ended.
+    // A nose-on shunt still kills the engine first, because the engine is
+    // where the nose is.
+    corner(`hub${c}` as ComponentId, `Hub ${c}`, WHEEL_AT[c], 15000, 14000, 1250, 1.0),
     corner(`tyre${c}` as ComponentId, `Tyre ${c}`, WHEEL_AT[c], 7000, 16000, 310, 0.85),
     corner(`brake${c}` as ComponentId, `Brake ${c}`, WHEEL_AT[c], 13000, 26000, 540, 0.85),
   ]),

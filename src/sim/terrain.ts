@@ -31,7 +31,66 @@
  * in the renderer would be a picture of a hill.
  */
 
-import type { ControlPoint } from './spline.js';
+import type { ControlPoint, Spline } from './spline.js';
+
+/**
+ * How far around a point to look for a lower piece of road.
+ *
+ * Wide enough to cover the gap between two stacked corridors, narrow enough
+ * that a stage which merely climbs is not dragged down to its own valley.
+ */
+const UNDER_RADIUS = 70;
+
+/** How far the ground sits below the road it follows, metres. */
+const BELOW_ROAD = 4;
+
+/**
+ * The height of the open ground at a point, in world space.
+ *
+ * In `sim/` and shared, because two things have to agree about it and used not
+ * to. The renderer built its terrain mesh from one rule and the scenery scatter
+ * placed every tree in the `far` band at the height of the nearest *road*
+ * sample — so past the thirty metres where the ground starts following its own
+ * noise, the ground fell away by up to a dozen metres and the trees standing on
+ * it did not. Worse where a stage crosses over itself: the ground takes the
+ * lowest road nearby and the scatter took the nearest one, so every tree
+ * scattered off the upper leg of Grand Traverse hung in the air above the lower
+ * one, which is exactly what it looked like.
+ *
+ * One function, called by both. It is not cheap — it sweeps the sample list —
+ * but it runs once per stage load for a few thousand points, not per frame.
+ */
+export function groundHeight(spline: Spline, x: number, z: number): number {
+  // Two octaves of cheap trig noise: enough to read as landscape, and
+  // deterministic, so the same stage always looks the same.
+  const h =
+    Math.sin(x * 0.011) * Math.cos(z * 0.013) * 9 +
+    Math.sin(x * 0.037 + 1.7) * Math.cos(z * 0.029 - 0.9) * 3.5;
+
+  // Follow the road's local height rather than a single global minimum, so the
+  // ground sits just below the corridor everywhere instead of dropping into a
+  // canyon wherever the stage climbs.
+  //
+  // The *lowest* road nearby, not the nearest one. Where a stage passes over
+  // itself the nearest sample flips from one leg to the other across a knife
+  // edge, and the ground took a twelve-metre step inside a single cell — a
+  // cliff in the middle of the landscape, and where the strange shadows around
+  // a doubled-back stage were coming from. Taking the minimum puts the ground
+  // under everything, which is what ground does.
+  const nearest = spline.locate({ x, y: 0, z });
+  let roadHeight = nearest.sample.position.y;
+  for (const sample of spline.samples) {
+    const dx = sample.position.x - x;
+    const dz = sample.position.z - z;
+    if (dx * dx + dz * dz > UNDER_RADIUS * UNDER_RADIUS) continue;
+    if (sample.position.y < roadHeight) roadHeight = sample.position.y;
+  }
+
+  // The noise fades in with distance from the road: the ground has to meet the
+  // corridor flush where it touches it and is free to be landscape further out.
+  const clearance = Math.min(Math.max((Math.abs(nearest.lateral) - 30) / 110, 0), 1);
+  return roadHeight - BELOW_ROAD + h * clearance;
+}
 
 export interface TerrainOptions {
   /** Metres of rise and fall added along the road. */

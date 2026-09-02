@@ -25,6 +25,7 @@
 import { type Vec3, clamp, v3 } from './math.js';
 import { CORRIDOR } from './corridor.js';
 import type { Spline } from './spline.js';
+import { groundHeight } from './terrain.js';
 
 export type SceneryKind =
   | 'conifer'
@@ -81,6 +82,20 @@ export interface SceneryCollider {
   /** Half the box's extent along its own facing. Cylinders ignore it. */
   halfDepth: number;
   yaw: number;
+  /**
+   * True when this is a bump rather than an obstacle.
+   *
+   * A stone big enough to feel and too small to stop you. It stands only a few
+   * centimetres proud of the ground, so a car rides over it and is thrown by
+   * it rather than being parked against it — and the impact goes through the
+   * same damage pipeline as anything else, which is what makes clipping one at
+   * speed a tyre and a wheel bearing rather than a free bit of texture.
+   *
+   * Kept as a flag rather than inferred from the height, because the thing that
+   * makes it safe is the *cap* on how proud it stands, and something reading
+   * these colliders later needs to know that cap was applied deliberately.
+   */
+  bump?: boolean;
 }
 
 export interface SceneryItem {
@@ -249,8 +264,56 @@ const FOOTPRINT: Record<SceneryKind, { radius: number; height: number; depth?: n
 const MIN_SOLID_EXTENT = 0.55;
 const MIN_SOLID_EXTENT_ON_CORRIDOR = 0.75;
 
+/**
+ * The smallest stone worth *feeling*, metres of radius.
+ *
+ * Below the solid bar there used to be nothing at all: a verge strewn with
+ * rocks the car passed through as if they were painted on, which is the same
+ * complaint as the trees and has the same answer. But making them solid at
+ * their full height is the mistake this file already made once — measured, a
+ * run-off area with a boulder every four metres is a cattle grid, and it left
+ * the AI unable to finish Grand Traverse in snow at all.
+ *
+ * So they are bumps. Same footprint, capped height: something that unsettles a
+ * car and costs it a tyre, never something that stops one. Anything under this
+ * is loose gravel and stays scenery — there has to be a floor, or the verge
+ * becomes a texture made of colliders.
+ */
+export const MIN_BUMP_EXTENT = 0.3;
+
+/**
+ * How far a bump is allowed to stand above the ground it sits on, metres.
+ *
+ * Measured against the car rather than chosen: the wheels are 0.34 m in radius,
+ * so a fifth of that is an obstacle a rolling wheel climbs rather than one it
+ * hits square. High enough to throw the car, low enough that it cannot catch
+ * the floor pan and stop it.
+ */
+export const BUMP_PROUD = 0.07;
+
 /** Kinds whose geometry stands on the ground rather than being sunk into it. */
 const STANDING = new Set<SceneryKind>(['building', 'wall']);
+
+/**
+ * Kinds that make a bump when they are too small to make an obstacle.
+ *
+ * Stone only. A bush half a metre across is something you drive through and
+ * always has been; giving heather a collider is how a verge becomes a minefield
+ * of invisible kerbs, which is the thing this file's own header warns about.
+ */
+const BUMPABLE = new Set<SceneryKind>(['boulder']);
+
+/**
+ * How far into the ground an item's anchor is sunk, metres.
+ *
+ * The scatter sinks everything that is not `STANDING` so nothing hovers over
+ * ground that undulates beneath it, and the collider builder has to undo
+ * exactly that to find the surface the thing is sitting on. One function, so
+ * the two cannot drift apart.
+ */
+export function sinkFor(kind: SceneryKind, size: number): number {
+  return STANDING.has(kind) ? 0.15 : 0.6 * size;
+}
 
 /**
  * Clearance a solid thing must leave the driveable road, metres.
@@ -285,6 +348,46 @@ function acrossSpan(radius: number, depth: number, yaw: number, left: Vec3): num
   );
 }
 
+/**
+ * Does this thing stand on road that somebody drives on?
+ *
+ * Including a different part of the same road: a stage is a ribbon that can
+ * pass within thirty metres of itself and scenery reaches a hundred out, so a
+ * pine placed forty metres off one leg of Pine Loop stands squarely in the
+ * middle of another. The answer comes from the road itself — whatever leg of
+ * whatever corner this turned out to be nearest — never from the scatter that
+ * placed it.
+ *
+ * What has to clear the road is the shape's reach *across* it, which for a box
+ * is not its widest dimension: a stone wall is three metres long and lies along
+ * the verge, so measuring it by its length would reject every wall on a town
+ * stage and leave the street with nothing down its sides.
+ *
+ * This used only to switch the collider off, which was the wrong half of the
+ * job and is the bug behind "there are still large trees in the middle of the
+ * road you drive straight through". A fully drawn pine standing on the racing
+ * line is not fixed by making it intangible — that reads as the game being
+ * broken, which is exactly what a solid tree in the renderer read as before any
+ * of this moved into `sim/`. So it is asked at *placement* now, and anything
+ * standing on driveable road is not placed at all.
+ */
+function onDriveableRoad(
+  kind: SceneryKind,
+  size: number,
+  position: Vec3,
+  yaw: number,
+  spline: Spline,
+): boolean {
+  const base = FOOTPRINT[kind];
+  // Grass and heather are brushed through; they are allowed anywhere.
+  if (!base) return false;
+  const radius = base.radius * size;
+  const depth = (base.depth ?? base.radius) * size;
+  const near = spline.locate(position);
+  const span = base.depth === undefined ? radius : acrossSpan(radius, depth, yaw, near.sample.left);
+  return Math.abs(near.lateral) < near.sample.width + span + ROAD_CLEARANCE;
+}
+
 function colliderFor(
   kind: SceneryKind,
   size: number,
@@ -294,7 +397,6 @@ function colliderFor(
   offset: number,
   reach: number,
   band: SceneryBand,
-  spline: Spline,
 ): SceneryCollider | undefined {
   const base = FOOTPRINT[kind];
   if (!base) return undefined;
@@ -305,18 +407,32 @@ function colliderFor(
   // Measured on the larger dimension: a wall is thin and still worth stopping a
   // car, and a pebble is small in both.
   const floor = band === 'far' ? MIN_SOLID_EXTENT : MIN_SOLID_EXTENT_ON_CORRIDOR;
-  if (Math.max(radius, depth) < floor) return undefined;
-
-  // Nothing solid overhangs road anyone drives on — including a different part
-  // of this one. What has to clear it is the shape's reach *across* that road,
-  // which for a box is not its widest dimension: a stone wall is three metres
-  // long and lies along the verge, so measuring it by its length would reject
-  // every wall on a town stage and leave the street with nothing down its sides.
-  const near = spline.locate(position);
-  const span = base.depth === undefined ? radius : acrossSpan(radius, depth, yaw, near.sample.left);
-  if (Math.abs(near.lateral) < near.sample.width + span + ROAD_CLEARANCE) return undefined;
-
   const halfHeight = (base.height * size * stretch) / 2;
+
+  if (Math.max(radius, depth) < floor) {
+    // Too small to be an obstacle. On the corridor — the verge and the
+    // embankment, where a car that has run wide actually goes — the bigger of
+    // them are still worth feeling, so they become bumps instead of nothing.
+    // Out past the wall there is no point: nothing reaches them.
+    if (band === 'far' || !BUMPABLE.has(kind) || radius < MIN_BUMP_EXTENT) return undefined;
+
+    // `position.y` is the sunk anchor the renderer draws from, so the ground it
+    // stands on is `sink` above it — see the scatter. The collider's top is put
+    // BUMP_PROUD above that ground and its bottom is buried, which is what
+    // makes the cap a property of the shape rather than of the terrain.
+    const ground = position.y + sinkFor(kind, size);
+    const top = ground + BUMP_PROUD;
+    const half = Math.max(halfHeight, BUMP_PROUD);
+    return {
+      shape: 'cylinder',
+      center: v3(position.x, top - half, position.z),
+      radius,
+      halfHeight: half,
+      halfDepth: depth,
+      yaw,
+      bump: true,
+    };
+  }
 
   return {
     shape: base.depth === undefined ? 'cylinder' : 'box',
@@ -390,20 +506,28 @@ export function scatterScenery(id: string, biome: string, spline: Spline): Scene
               : beyond + (SCENERY_REACH - beyond) * random() ** 2;
         const along = (random() - 0.5) * step;
 
-        const position = v3(
-          sample.position.x + sample.left.x * out * side + sample.forward.x * along,
-          // On the embankment rather than at road level, or a bush on a bank
-          // hovers a metre above its own hillside.
-          sample.position.y + (onCorridor ? CORRIDOR.heightAt(sample.width, out) : 0),
-          sample.position.z + sample.left.z * out * side + sample.forward.z * along,
-        );
+        const x = sample.position.x + sample.left.x * out * side + sample.forward.x * along;
+        const z = sample.position.z + sample.left.z * out * side + sample.forward.z * along;
+        // On the corridor, the corridor's own cross-section: a bush on a bank
+        // has to sit on that bank, not a metre above it.
+        //
+        // Off it, the *open ground*, from the one function the terrain mesh is
+        // built from. This used to be the nearest road sample's height, which
+        // is only correct where the ground still touches the corridor. Thirty
+        // metres out the ground starts following its own noise and falls away
+        // by up to a dozen metres; where a stage crosses over itself the ground
+        // drops to the lower leg while the nearest sample stayed the upper one.
+        // Both read as trees hanging in the air, which is what they were.
+        const y = onCorridor
+          ? sample.position.y + CORRIDOR.heightAt(sample.width, out)
+          : groundHeight(spline, x, z);
+        const position = v3(x, y, z);
 
         const size = recipe.size[0] + random() * (recipe.size[1] - recipe.size[0]);
         // Sunk slightly so nothing hovers over ground that undulates under it.
         // Buildings and walls stand on it instead: their geometry already has
         // its base at the origin, and a sunk house loses its ground floor.
-        const standing = STANDING.has(recipe.kind);
-        position.y -= standing ? 0.15 : 0.6 * size;
+        position.y -= sinkFor(recipe.kind, size);
         const stretch = 0.85 + random() * 0.4;
         // A wall follows the road. Given a random yaw like everything else it
         // read as scattered planks rather than as the edge of a street.
@@ -416,6 +540,12 @@ export function scatterScenery(id: string, biome: string, spline: Spline): Scene
         const pitch = recipe.kind === 'wall' ? -Math.asin(clamp(sample.forward.y, -1, 1)) : 0;
         const mix = random();
 
+        // Nothing is placed on road anybody drives on — not drawn, not solid,
+        // not there. Every draw from the random stream this instance needed has
+        // already been made, so a rejection does not shift the ones after it
+        // and reshuffle the whole wood; the slot is simply left empty.
+        if (onDriveableRoad(recipe.kind, size, position, yaw, spline)) continue;
+
         const item: SceneryItem = {
           kind: recipe.kind,
           recipe: r,
@@ -427,7 +557,7 @@ export function scatterScenery(id: string, biome: string, spline: Spline): Scene
           pitch,
           offset: out,
         };
-        const solid = colliderFor(recipe.kind, size, stretch, position, yaw, out, reach, recipe.band, spline);
+        const solid = colliderFor(recipe.kind, size, stretch, position, yaw, out, reach, recipe.band);
         if (solid) item.solid = solid;
         items.push(item);
         n++;

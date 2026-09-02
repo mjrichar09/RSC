@@ -26,8 +26,17 @@ const FLAT = 0.9;
  * limiter rather than launching, and it costs you.
  */
 const LIMITER_AFTER = 0.9;
-/** Go flat within this of the green and the launch is clean. Seconds. */
-const PERFECT_WINDOW = 0.28;
+/**
+ * Go flat within this of the green and the launch is perfect. Seconds.
+ *
+ * 0.28 was wider than a human reaction time, so simply reacting to the green
+ * scored perfect and there was nothing left to be good at. Simple reaction to
+ * a light is about 0.2 s, so the window has to sit *inside* that: the only way
+ * through it is to read the rhythm of the lamps — they step every `STEP`
+ * seconds, which is a countdown you can time — and go on the beat rather than
+ * on the sight of the green. That is the skill a rally start actually has.
+ */
+const PERFECT_WINDOW = 0.15;
 /** Past this the launch is merely late rather than mistimed. Seconds. */
 const LATE_WINDOW = 0.75;
 /** How long a bogged launch keeps costing power. Seconds. */

@@ -631,6 +631,28 @@ the corridor runs into itself. That last check matters: a centreline that
 doubles back within ~27 m produces two overlapping ribbons, and the car ends up
 buried in an embankment belonging to a section it has not reached yet.
 
+Passing over itself at *height* is a different thing and a legitimate one, and
+it gets a bridge. The crossings are found the same way the corners are — by
+scanning the road rather than by being written down — because a hand-placed
+bridge is in the wrong place the first time a control point moves. Grand
+Traverse has two, at 46 m and 20 m of headroom, and until they existed the
+upper corridor was a ribbon hanging in the sky above the lower one with the
+ground dipping away beneath it.
+
+**Scrubbed Flats** is the one stage that is not about a line through a corner.
+It is a motocross rhythm: a row of four crests on a fixed pitch, a table-top, a
+step-down where the road falls away past a lip you cannot see over, and a big
+one launching onto a long descent. The fast lap is the one that arrives at each
+take-off at the speed its landing was built for, which makes it the only stage
+in the game where the thing being tested is a number rather than a line.
+
+The jumps are calibrated rather than eyeballed. A car leaves a crest when
+`v² / R > g`, and that is checkable straight off the control points without
+driving anything — every jump on the stage launches between 78 and 92 km/h, and
+the AI spends 3.0 s of a 49 s lap in the air. It is also deliberately wide: a
+jump taken crooked lands crooked, and on a narrow road every landing becomes a
+save, which turns a stage about speed back into a stage about steering.
+
 ### On a phone
 
 Open the same URL on a phone, turn it sideways, and drive. There is no app and

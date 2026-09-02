@@ -17,6 +17,7 @@ import { DRESSING, type SceneryItem, type SceneryKind } from '../sim/scenery.js'
 import type { Markers } from '../sim/markers.js';
 import type { Vec3 } from '../sim/math.js';
 import { SURFACES } from '../sim/surfaces.js';
+import { groundHeight } from '../sim/terrain.js';
 
 /** Slight per-vertex value jitter so large flat areas do not read as dead. */
 function mottle(index: number): number {
@@ -99,6 +100,7 @@ export function buildStageView(stage: Stage, markers: Markers): StageView {
   group.add(props.group);
   const signs = buildSigns(stage);
   group.add(signs.group);
+  group.add(buildBridges(stage));
 
   return {
     group,
@@ -175,12 +177,30 @@ function trunk(radiusTop: number, radiusBottom: number, height: number): THREE.B
  * obviously manufactured. Displacing it breaks the regularity that gives it
  * away, and it costs nothing because it happens once at build time.
  */
+/**
+ * Knock the regularity off a solid.
+ *
+ * Hashed from the vertex *position*, not from its index. Every polyhedron three
+ * builds is non-indexed — each triangle carries its own three vertices — so a
+ * per-index hash gave the same corner a different displacement on each face
+ * touching it, and the solid came apart along every edge. On a dodecahedron at
+ * detail 1 that is thirty-six separate triangles drifting away from each other,
+ * which at a 2.6 m boulder's scale is gaps you can see through: the big rocks
+ * read as a pile of flakes rather than as stone. Hashing the position instead
+ * moves a shared corner identically for every face that owns it, so the surface
+ * stays closed however finely it is subdivided.
+ */
 function roughen(geometry: THREE.BufferGeometry, amount: number, seed = 1): THREE.BufferGeometry {
   const position = geometry.getAttribute('position') as THREE.BufferAttribute;
   const v = new THREE.Vector3();
   for (let i = 0; i < position.count; i++) {
     v.fromBufferAttribute(position, i);
-    const n = Math.sin((i + seed) * 12.9898) * 43758.5453;
+    // Quantised before hashing: two faces' copies of one corner are equal to
+    // the last bit here, but rounding costs nothing and makes that a property
+    // of the code rather than a hope about floating point.
+    const key =
+      Math.round(v.x * 1024) * 0.1731 + Math.round(v.y * 1024) * 0.3319 + Math.round(v.z * 1024) * 0.5741;
+    const n = Math.sin(key + seed * 12.9898) * 43758.5453;
     const jitter = 1 + ((n - Math.floor(n)) - 0.5) * 2 * amount;
     v.multiplyScalar(jitter);
     position.setXYZ(i, v.x, v.y, v.z);
@@ -705,14 +725,6 @@ const TERRAIN_COLOUR: Record<string, [number, number]> = {
 };
 
 /**
- * How far around a terrain vertex to look for a lower piece of road.
- *
- * Wide enough to cover the gap between two stacked corridors, narrow enough
- * that a stage which merely climbs is not dragged down to its own valley.
- */
-const UNDER_RADIUS = 70;
-
-/**
  * Distant ground beyond the corridor.
  *
  * Without it the world stops at the embankment walls and the isometric camera
@@ -754,36 +766,16 @@ function buildTerrain(stage: Stage): THREE.Group {
     const x = position.getX(i);
     const z = position.getZ(i);
 
-    // Two octaves of cheap trig noise: enough to read as landscape, and
-    // deterministic, so the same stage always looks the same.
+    // The rule itself lives in `sim/terrain.ts`, because the scenery scatter
+    // has to stand its trees on exactly this surface and used to guess at it.
+    const y = groundHeight(stage.spline, x, z);
+    // The colour still reads off the noise alone, so a hillside is green at the
+    // same height whatever the road beside it is doing.
     const h =
       Math.sin(x * 0.011) * Math.cos(z * 0.013) * 9 +
       Math.sin(x * 0.037 + 1.7) * Math.cos(z * 0.029 - 0.9) * 3.5;
 
-    // Follow the road's local height rather than a single global minimum, so
-    // the ground sits just below the corridor everywhere instead of dropping
-    // into a canyon wherever the stage climbs.
-    //
-    // The *lowest* road nearby, not the nearest one. Where a stage passes over
-    // itself — Grand Traverse's snow section runs 12 m above its gravel section
-    // and 8 m across from it — the nearest sample flips from one to the other
-    // across a knife edge, and the ground took a twelve-metre step inside a
-    // single 22 m cell. That is a cliff in the middle of the landscape, and it
-    // is where the strange shadows and occlusion around a doubled-back stage
-    // were coming from. Taking the minimum puts the ground under everything,
-    // which is what ground does.
-    const nearest = stage.spline.locate({ x, y: 0, z });
-    let roadHeight = nearest.sample.position.y;
-    for (const sample of stage.spline.samples) {
-      const dx = sample.position.x - x;
-      const dz = sample.position.z - z;
-      if (dx * dx + dz * dz > UNDER_RADIUS * UNDER_RADIUS) continue;
-      if (sample.position.y < roadHeight) roadHeight = sample.position.y;
-    }
-    const distance = Math.abs(nearest.lateral);
-    const clearance = Math.min(Math.max((distance - 30) / 110, 0), 1);
-
-    position.setY(i, roadHeight - 4 + h * clearance);
+    position.setY(i, y);
     mixed.copy(a).lerp(b, Math.min(Math.max(h / 12, 0), 1));
     colors[i * 3] = mixed.r;
     colors[i * 3 + 1] = mixed.g;
@@ -824,6 +816,10 @@ const PROP_BASE: Record<PropKind, { radius: number; height: number }> = {
   pole: { radius: 0.16, height: 2.2 },
   building: { radius: 3.2, height: 9 },
   gatePost: { radius: 0.28, height: 3.4 },
+  signPost: { radius: 0.09, height: 2.0 },
+  // Drawn a metre tall and stretched to whatever the crossing needs, which is
+  // how a single instanced mesh carries piers from 18 m to 51 m.
+  pier: { radius: 1.5, height: 1 },
 };
 
 /**
@@ -965,9 +961,21 @@ function propParts(kind: PropKind): SceneryParts {
       band.translate(0, 1.85, 0);
       return { main: post, extra: { geometry: band, color: 0xe8552f }, casts: false };
     }
-    // Never built: gate posts are drawn by `buildGates`, banner and all.
+    // Never built: gate posts are drawn by `buildGates`, banner and all, and
+    // sign posts by `buildSigns` with the board they carry.
     case 'gatePost':
       return { main: new THREE.BoxGeometry(0.4, 3.4, 0.4), casts: false };
+    case 'signPost':
+      return { main: new THREE.BoxGeometry(0.12, 1.9, 0.12), casts: false };
+    // A bridge column. Tapered and eight-sided rather than round: at this
+    // camera distance a smooth cylinder has no edge to catch the light and
+    // reads as a flat grey stripe, and the taper is what makes a fifty-metre
+    // one look like it is holding something up rather than like a pipe.
+    case 'pier': {
+      const shaft = new THREE.CylinderGeometry(1.5, 2.1, 1, 8);
+      shaft.translate(0, 0.5, 0);
+      return { main: shaft, casts: true };
+    }
   }
 }
 
@@ -980,6 +988,8 @@ const PROP_COLOUR: Record<PropKind, number> = {
   bale: 0xb59a55,
   pole: 0xdcd6c6,
   gatePost: 0xf2c14e,
+  signPost: 0x6b7280,
+  pier: 0x8a8579,
 };
 
 function buildProps(stage: Stage): PropsView {
@@ -991,7 +1001,9 @@ function buildProps(stage: Stage): PropsView {
   for (const prop of stage.props) {
     // Gate posts are props so the simulation gives them colliders; they are
     // drawn with their gate, banner and all, rather than as another hazard.
-    if (prop.kind === 'gatePost') continue;
+    if (prop.kind === 'gatePost' || prop.kind === 'signPost') continue;
+    // Piers are drawn with their bridge, along with the deck they carry.
+    if (prop.kind === 'pier') continue;
     const list = byKind.get(prop.kind) ?? [];
     list.push(prop);
     byKind.set(prop.kind, list);
@@ -1230,6 +1242,101 @@ function buildSigns(stage: Stage): { group: THREE.Group; boards: THREE.Mesh[] } 
     boards.push(board);
   }
   return { group, boards };
+}
+
+/**
+ * The bridges, where the stage passes over itself.
+ *
+ * The corridor was always a ribbon in space — verge, bank and wall, with open
+ * air underneath — so an overpass was already geometrically an overpass. What
+ * it had was no structure: a road hanging in the sky above another road, with
+ * the ground dipping away beneath it because the terrain takes the *lowest*
+ * nearby road. From the lower leg of Grand Traverse that reads as a bug, and it
+ * is the thing "it needs a bridge so that it makes sense" is asking for.
+ *
+ * Three parts, and each is doing a job:
+ *
+ * - A **soffit** under the carried span, so the road has a visible underside
+ *   rather than being a surface you can see the sky through from below.
+ * - **Piers** at each end, which are what turn a slab into a bridge. They are
+ *   `sim/` props, placed there and given colliders there — a fifty-metre
+ *   concrete column is not decoration — and drawn here from that same list.
+ * - An **edge beam** down each side of the deck, which at this camera distance
+ *   is most of what actually reads as a bridge: it is the horizontal line under
+ *   the parapet that says the road is being carried.
+ */
+function buildBridges(stage: Stage): THREE.Group {
+  const group = new THREE.Group();
+  if (stage.crossings.length === 0) return group;
+
+  const concrete = new THREE.MeshStandardMaterial({
+    color: 0x8a8579,
+    roughness: 0.95,
+    flatShading: true,
+    // The same emissive floor everything vertical here gets: a pier lit only by
+    // the hemisphere light comes out navy whatever colour it is painted.
+    emissive: 0x8a8579,
+    emissiveIntensity: 0.12,
+  });
+
+  for (const crossing of stage.crossings) {
+    const [from, to] = crossing.span;
+    // Along the span at the spline's own resolution, so a bridge on a curve
+    // follows it instead of cutting the corner.
+    const step = 6;
+    const count = Math.max(Math.ceil((to - from) / step), 1);
+    for (let i = 0; i < count; i++) {
+      const at = from + ((to - from) * (i + 0.5)) / count;
+      const sample = stage.spline.at(at);
+      const length = (to - from) / count + 0.3;
+      const half = sample.width + CORRIDOR.vergeWidth;
+
+      const soffit = new THREE.Mesh(new THREE.BoxGeometry(half * 2, 1.1, length), concrete);
+      soffit.position.set(sample.position.x, sample.position.y - 0.9, sample.position.z);
+      soffit.rotation.y = Math.atan2(sample.forward.x, sample.forward.z);
+      soffit.castShadow = true;
+      soffit.receiveShadow = true;
+      group.add(soffit);
+
+      for (const side of [-1, 1]) {
+        const beam = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.9, length), concrete);
+        beam.position.set(
+          sample.position.x + sample.left.x * half * side,
+          sample.position.y - 0.55,
+          sample.position.z + sample.left.z * half * side,
+        );
+        beam.rotation.y = Math.atan2(sample.forward.x, sample.forward.z);
+        beam.castShadow = true;
+        group.add(beam);
+      }
+    }
+  }
+
+  // The columns. Their positions, heights and colliders all come from `sim/`;
+  // this only draws what is already there.
+  const piers = stage.props.filter((prop) => prop.kind === 'pier');
+  if (piers.length > 0) {
+    const parts = propParts('pier');
+    const mesh = new THREE.InstancedMesh(parts.main, concrete, piers.length);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    const m = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const up = new THREE.Vector3(0, 1, 0);
+    const base = PROP_BASE.pier;
+    piers.forEach((prop, i) => {
+      m.compose(
+        new THREE.Vector3(prop.position.x, prop.position.y, prop.position.z),
+        q.setFromAxisAngle(up, prop.yaw),
+        new THREE.Vector3(prop.radius / base.radius, prop.height / base.height, prop.radius / base.radius),
+      );
+      mesh.setMatrixAt(i, m);
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    group.add(mesh);
+  }
+
+  return group;
 }
 
 function buildGates(stage: Stage): THREE.Group {

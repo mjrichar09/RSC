@@ -232,6 +232,24 @@ const params = new URLSearchParams(location.search);
   hudRoot.appendChild(tagLayer);
   let stuckFor = 0;
   /**
+   * What the car was last actually given, for the status readout.
+   *
+   * Declared up here rather than beside the frame loop, which is where it was
+   * and where it could not be: `window.RSC.status()` reads it, and the visual
+   * harness calls that before the first frame has run — so every `npm run
+   * shoot` died on `Cannot access 'lastInput' before initialization`, a
+   * temporal dead zone error pointing at a line that looked fine. Anything the
+   * status readout touches has to be initialised before the harness can ask.
+   */
+  let lastInput: DriverInput = NEUTRAL_INPUT;
+  /**
+   * How hard the impact was that the camera has already been knocked for, N·s.
+   *
+   * Decays every frame, so it is a bar the next hit has to clear rather than a
+   * lockout. See the shake in the frame loop for why one is needed.
+   */
+  let shakenFor = 0;
+  /**
    * The countdown on the gantry. The car is held while it runs, so a jumped
    * start is impossible rather than penalised — and every time recorded before
    * this existed stays comparable, because the clock still starts on the car's
@@ -713,7 +731,10 @@ const params = new URLSearchParams(location.search);
 
     const ghost = recorder.finish(currentKey(), race.time);
     const player = new GhostPlayer(ghost);
-    const from = Math.max(player.duration - 2.5, 0);
+    // Half what it was. 2.5 s back is the corner *before* the accident: by the
+    // time the crash arrives the cinematic has been running long enough to
+    // read as the game slowing down rather than as the moment being held.
+    const from = Math.max(player.duration - 1.25, 0);
     replayUi.open({
       player,
       time: from,
@@ -1566,8 +1587,6 @@ const params = new URLSearchParams(location.search);
 
   let last = performance.now();
   let fps = 60;
-  /** What the car was last actually given, for the status readout. */
-  let lastInput: DriverInput = NEUTRAL_INPUT;
 
   const frame = (now: number) => {
     // Two clocks. `dt` is capped so a stall cannot hand the physics accumulator
@@ -1632,6 +1651,10 @@ const params = new URLSearchParams(location.search);
     // that is what puts inputs on the wire and takes snapshots off it.
     const alpha = session ? session.advance(dt, input) : world.advance(simDt, input);
 
+    // The bar the next impact has to clear to count as a new one, decaying
+    // over about a second so a second accident is always felt.
+    shakenFor *= Math.pow(0.25, dt);
+
     const state = world.state();
     if (race && stage) {
       const wasRunning = race.phase === 'running';
@@ -1642,8 +1665,18 @@ const params = new URLSearchParams(location.search);
 
       // A bump the car shrugs off should still be felt and heard, so this reads
       // the raw impulse rather than waiting for a damage event.
-      if (world.lastImpact > 1200) {
+      //
+      // On a *rising edge*, not on the raw value. `lastImpact` is whatever the
+      // hardest contact of the step was, and a car rolling down an embankment
+      // or grinding along a wall is in contact on every one of them — so this
+      // re-armed the shake every frame and the camera stayed at full amplitude
+      // for the whole crash instead of being knocked once and settling. What
+      // is wanted is one knock per impact: a hit only counts as new if it is
+      // meaningfully harder than the one still being felt, and the bar decays
+      // with the shake so the next accident gets its own.
+      if (world.lastImpact > 1200 && world.lastImpact > shakenFor * 1.35) {
         const severity = Math.min((world.lastImpact - 1200) / 26_000, 1);
+        shakenFor = world.lastImpact;
         camera.shake(severity);
         mixer.impact(severity);
         // Only a hit worth watching gets the cinematic; `hit` decides, and

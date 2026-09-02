@@ -141,7 +141,17 @@ export const CAR: VehicleTuning = {
   suspensionReboundDamping: 5200,
   antiRollStiffness: 9000,
 
-  maxSteerAngle: 0.5,
+  // 0.5 before. More lock at the wheel is more authority to catch a slide with,
+  // which is what it is for. It cannot be judged on the `catch` trace: that
+  // trace's inputs are *fractions of lock*, so raising this raises the
+  // counter-steer it applies and changes what is being tested rather than
+  // measuring the car. On the closed-loop `drift` trace, which counter-steers
+  // the way a driver does, it buys a transition the car could not previously
+  // make (4 unbroken drift stretches to 5) at no cost in held time, and it
+  // tightens the minimum turn radius from 56.3 m to 47.9 m. Measured on the
+  // stage that punishes handling changes hardest, it is a straight improvement:
+  // Grand Traverse goes from 87.3 s and 2.7% off road to 85.5 s and 0.0%.
+  maxSteerAngle: 0.56,
   steerSpeedFalloff: 0.3,
   steerSpeedFalloffAt: 24,
   steerRate: 3.6,
@@ -185,8 +195,20 @@ export const CAR: VehicleTuning = {
   tireGrip: 1.35,
   tireWearRate: 0.012,
   tireGripBalance: 1.12,
-  // Widened from 0.18. A broader peak is more warning before the tyre lets go
-  // and a wider window to sit in once it has.
+  // Left at 0.20, and this is the record of why, because the obvious next idea
+  // is to widen it again.
+  //
+  // A broader peak is more warning before the tyre lets go and a wider window
+  // to sit in once it has, and it measures that way: 0.24 moves the held slide
+  // on `npm run telemetry -- --trace=catch` from 3.16 s to 3.47 s. But
+  // spreading the peak lowers it. `npm run sweep` puts steady-state lateral
+  // grip at 1.03 g against 1.15, and the AI plans its corner speeds from grip
+  // it no longer has: `npm run stages --stage=grand-traverse` goes from 87.3 s
+  // and 2.7% off road to 111.3 s and 20.2%, a silver lap turned bronze. That
+  // stage's medals are calibrated on that lap, so this is not a number that can
+  // be raised on its own — it would need the driver model and four sets of
+  // medal times moving with it. Steering lock buys slide control without the
+  // grip; that is where it came from instead.
   peakSlipAngle: 0.20,
   peakSlipRatio: 0.14,
   // Raised from 0.74. This is the number the file's own comment calls the most

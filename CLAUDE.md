@@ -88,7 +88,8 @@ The sim clock and the wall clock are different things. `dt` is the world's;
 | The shape of a stage | `data/stages/`, `sim/spline.ts`, `sim/terrain.ts` |
 | The corridor cross-section | `sim/corridor.ts` — road, verge, bank, wall, all of it |
 | Trees, boulders, houses: where they stand and what is solid | `sim/scenery.ts` |
-| Hazards on the verge, gates, corner signs | `sim/stage.ts` |
+| The height of the open ground away from the road | `sim/terrain.ts` — `groundHeight` |
+| Hazards on the verge, gates, corner signs, bridge piers | `sim/stage.ts` |
 | Colliders, contacts, the fixed loop | `sim/world.ts` |
 | The AI's line and pace | `sim/driver.ts` |
 | Timing, checkpoints, medals | `game/race.ts` |
@@ -145,6 +146,14 @@ values without editing and reverting a file. `stages` only gained it after the
 documentation had claimed it for months — every "the AI still gets round with
 the new handling" check before that was driving the committed tuning and
 reporting the committed times.
+
+**A fixed-input trace cannot A/B a number the inputs are expressed in.** The
+`catch` trace steers at `0.85`, which is a *fraction of lock* — so raising
+`maxSteerAngle` raises the counter-steer it applies and the trace measures a
+different manoeuvre rather than a different car. It is an honest instrument for
+`peakSlipAngle` (0.20 → 0.24 moved held slide from 3.16 s to 3.47 s) and a
+useless one for steering lock, where only the closed-loop `drift` trace and the
+minimum radius out of `sweep` say anything.
 
 Handling questions that are about *feel* need a closed-loop trace, not a
 recording. With fixed inputs, changing the tuning changes what the trace is
@@ -228,6 +237,13 @@ scannable as it grows; it is append-only.
   1 m/s, so every wheel reads locked at walking pace whatever it was doing at
   speed. Sample mid-stop; a slip ratio taken at the end told me the car was
   locking when it was not, and I nearly retuned the tyre model on it.
+- **Reading a per-step peak as if it were an event.** `world.lastImpact` is the
+  hardest contact of the step just taken, and a car rolling down an embankment
+  is in contact on every one of them. Used directly it re-armed the camera shake
+  every frame, so the camera stayed at full amplitude for the whole crash
+  instead of being knocked once and settling — which is what "the slow motion
+  shakes the whole time" was. A shake is one per impact: keep a decaying bar the
+  next hit has to clear.
 - **Using the physics `dt` for something a person experiences as a duration.**
   The frame delta is capped at 0.1 s so a stall cannot hand the accumulator a
   second to catch up on in one go. The start countdown ran on that capped
@@ -294,6 +310,32 @@ scannable as it grows; it is append-only.
 
 ### Rendering
 
+- **Fixing a thing in the road by making it intangible.** Scenery that landed
+  on driveable road had its collider suppressed and was drawn anyway, so twelve
+  conifers stood in the middle of Pine Loop, sixty boulders and fifteen firs on
+  Grand Traverse and four houses on Vieux Village, and the car went through all
+  of them. That is the same bug as placing them in the renderer, one layer up:
+  the question is asked at *placement* now and anything on the road is not put
+  there at all. `onDriveableRoad` in `sim/scenery.ts`.
+- **Displacing a mesh's vertices by their index.** Every polyhedron three builds
+  is non-indexed, so one corner exists three times over and a per-index hash
+  moves each copy somewhere different — the solid comes apart along every edge.
+  At `DodecahedronGeometry(1.1, 1)` scaled to a 2.6 m boulder that is gaps you
+  can see through, and the big rocks read as a pile of flakes. Hash the vertex
+  *position*, quantised, so a shared corner moves once.
+- **A refactor that leaves a term feeding nothing.** The windscreen shader split
+  the swept glass and the crust into two numbers that are composited separately,
+  and the wiper carried on modifying the old combined one — which by then only
+  fed the blur. So the blade cleared nothing visible, was never drawn, and the
+  screen simply snapped clean when the simulation dropped its soiling. Nothing
+  errored. When a value stops reaching `gl_FragColor`, everything written into
+  it is dead code that still compiles.
+- **Guessing at the height of ground somebody else is drawing.** The terrain
+  mesh and the scenery scatter each had their own idea of where the ground was,
+  and past thirty metres from the road they disagreed by up to a dozen metres —
+  worse over a self-crossing, where one took the lowest road and the other the
+  nearest. Trees hung in the air. One `groundHeight` in `sim/terrain.ts` now,
+  called by both.
 - **Anything the player can see that the simulation does not know about.** The
   trees, boulders and houses beside every road were placed in the renderer and
   existed nowhere else, so the car drove through all of them. The comment above
@@ -462,6 +504,20 @@ generated from that. Two constraints are not obvious and are enforced in code:
 
 After changing stage data or vehicle physics, re-run `npm run stages`: it is the
 only thing that will tell you a stage stopped being completable.
+
+Where a stage passes over itself at height it gets a bridge, found rather than
+authored: `Stage.crossings` looks for the pair scan's *opposite* case to
+`selfIntersections` — overlapping road with a large height gap instead of a
+small one — and puts piers under each end of the span. Grand Traverse has two,
+at 46 m and 20 m of headroom. A hand-placed bridge would be in the wrong place
+the first time a control point moved.
+
+Scrubbed Flats is the jumps stage, and it is calibrated differently from the
+rest: the whole lap is speed against vertical geometry, so a lip half a metre
+lower is a different stage. The condition for leaving a crest is `v² / R > g`,
+which is checkable from the control points without driving anything — every jump
+on it launches the car between 78 and 92 km/h, and the AI spends 3.0 s of a 49 s
+lap in the air. Re-measure that and re-derive the medals if any of it moves.
 
 Grand Traverse is the fragile one, and its night-snow variant is the canary.
 `validateStage` drives each variant three times at rising commitment and wants

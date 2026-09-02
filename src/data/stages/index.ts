@@ -422,6 +422,130 @@ const grandTraverse: StageDef = {
   ],
 };
 
+/**
+ * The jumps stage.
+ *
+ * Every other stage in the game is about a line through a corner. This one is
+ * about a number on the way *in* to a lip: a motocross track's rhythm, where
+ * the fast way round is not the committed one but the one that arrives at each
+ * take-off at the speed its landing was built for. Too slow and the car cases
+ * the face of the next rise and stops dead; too fast and it lands long, flat
+ * and on its bump stops with the corner already there.
+ *
+ * Four kinds of jump, in the order a rider would want to meet them:
+ *
+ * - A **rhythm section** of four low crests on a fixed 22 m pitch. Taken at the
+ *   right speed the car skims them; taken too fast it lands on the face of the
+ *   next one and is thrown off line for the whole row.
+ * - A **table-top** with a flat top and a landing ramp, which is the forgiving
+ *   one: land anywhere down the ramp and it works.
+ * - A **step-down**, where the road falls away past the lip. Nothing about the
+ *   approach tells you that, which is why the corner board before it matters.
+ * - The **big one**, launching onto a long descent. Downhill landings reward
+ *   speed rather than punishing it, so this is the one place on the stage where
+ *   the brave line is also the quick one — put somewhere the driver has just
+ *   spent three jumps learning to be careful.
+ *
+ * Wide, and deliberately so. A jump taken crooked lands crooked, and a narrow
+ * road turns every landing into a save; the width is what makes speed rather
+ * than steering the thing being tested. It never comes within eighty metres of
+ * itself and finishes on a long flat run-off, because a car still settling from
+ * the last double is a car that needs road in front of it.
+ */
+const scrubbedFlats: StageDef = {
+  id: 'scrubbed-flats',
+  name: 'Scrubbed Flats',
+  biome: 'moor',
+  verge: 'dirt',
+  bank: 'dirt',
+  // Sparse, and no trees. The run-off beside a landing is where a car that got
+  // it wrong is going, and lining it with trunks makes a mistimed jump a
+  // retirement rather than a lost second.
+  hazards: { kinds: ['bale', 'pole'], spacing: 26 },
+  entryFee: 400,
+  requiresMedals: 4,
+  payouts: { author: 7400, gold: 4500, silver: 2500, bronze: 1400, finish: 820 },
+  checkpoints: 4,
+  // From a measured AI lap, not from taste: `npm run stages --stage=scrubbed-flats`
+  // drives it in 45.6 s clean, 0% off road and no rescues, and these are that
+  // time at the ratios every other stage in the game uses (0.89 / 0.97 / 1.22 /
+  // 1.60). Re-measure and re-derive them if a jump moves — the whole stage is
+  // speed against geometry, so a lip half a metre lower is a different lap.
+  medals: { author: 41, gold: 44, silver: 56, bronze: 73 },
+  controlPoints: [
+    // Start apron, then a flat run-up: the rhythm section has to be entered at
+    // a speed the driver chose rather than at whatever the start produced.
+    cp(0, 0, 0, 8.0, 'dirt'),
+    cp(0, 30, 0, 7.6, 'dirt'),
+    cp(0, 58, 0, 7.4, 'dirt'),
+    // The rhythm section. Four crests on a 22 m pitch — close enough that the
+    // landing off one is the run-up to the next, so it is one decision made
+    // early rather than four made late.
+    cp(0, 80, 1.9, 7.0, 'dirt'),
+    cp(0, 102, 0, 7.0, 'dirt'),
+    cp(0, 124, 1.9, 7.0, 'dirt'),
+    cp(0, 146, 0, 7.0, 'dirt'),
+    cp(0, 168, 1.9, 7.0, 'dirt'),
+    cp(0, 190, 0, 7.2, 'dirt'),
+    // Opening out, and climbing, into the top of the loop.
+    cp(4, 220, 0, 7.6, 'dirt'),
+    cp(14, 250, 0.8, 7.6, 'dirt'),
+    cp(38, 276, 1.6, 7.2, 'dirt'),
+    cp(74, 290, 2.0, 7.0, 'dirt'),
+    // The table-top: a lip, a flat top long enough to be in the air over, and a
+    // ramp down the far side to land on.
+    cp(110, 292, 3.6, 6.8, 'dirt'),
+    cp(134, 292, 3.8, 6.8, 'dirt'),
+    cp(162, 288, 0.4, 7.4, 'dirt'),
+    cp(196, 280, 0, 7.4, 'dirt'),
+    // South down the east side, still fast.
+    cp(228, 262, 0, 7.0, 'dirt'),
+    cp(248, 234, 0, 6.6, 'dirt'),
+    cp(256, 204, 0.6, 6.8, 'dirt'),
+    // The step-down. The lip is the last thing visible from the approach and
+    // the road is two and a half metres lower on the other side of it.
+    cp(258, 178, 2.4, 6.8, 'dirt'),
+    cp(258, 152, -1.6, 7.2, 'dirt'),
+    cp(256, 126, -2.4, 7.2, 'dirt'),
+    // A genuine corner, to take the speed back off. Without one the whole stage
+    // is a straight line with bumps in it, and the fast lap is full throttle.
+    cp(246, 98, -2.4, 5.6, 'dirt'),
+    cp(228, 74, -2.0, 5.2, 'dirt'),
+    cp(202, 58, -1.4, 5.6, 'dirt'),
+    // The big one, onto a long descent: land far down a falling road and the
+    // speed is kept, so this is the one jump where committing is also quick.
+    cp(172, 48, 1.0, 6.8, 'dirt'),
+    cp(140, 42, -2.6, 7.6, 'dirt'),
+    cp(108, 38, -4.0, 7.6, 'dirt'),
+    // A last double onto the run to the line. Sharpened after measuring it:
+    // authored at 1.4 m of rise these two crests only launched the car above
+    // 130 km/h, which nothing reaches down here, so the stage's last jump was
+    // a bump. Deepening the dips either side rather than raising the lips
+    // keeps the run-in flat and the landing low.
+    cp(80, 26, -1.8, 7.2, 'dirt'),
+    cp(56, 8, -5.4, 7.2, 'dirt'),
+    cp(38, -16, -3.0, 7.4, 'dirt'),
+    // Flat, long, and pointed away from everything: a car still settling from
+    // the last landing needs road in front of it, and the finish is not the
+    // place to discover the corridor has run out.
+    cp(26, -44, -4.4, 7.6, 'dirt'),
+    cp(20, -74, -4.4, 8.0, 'dirt'),
+  ],
+  variants: [
+    variant('dusk', 'dusk', 'clear', 1.07, 1.45, 6),
+    variant('rain', 'day', 'rain', 1.26, 1.8, 9),
+  ],
+  cameraZones: [
+    // The rhythm section is watched from the side: height off the ground is
+    // what the driver needs to read there, and a camera down the road hides it.
+    { from: 0, yaw: Math.PI * 0.5, zoom: 14 },
+    { from: 230, yaw: Math.PI * 0.15, zoom: 15 },
+    { from: 470, yaw: -Math.PI * 0.3, zoom: 14 },
+    { from: 700, yaw: -Math.PI * 0.6, zoom: 15 },
+    { from: 900, yaw: Math.PI * 0.75, zoom: 14 },
+  ],
+};
+
 import { GENERATED_STAGES } from './generated.js';
 
 /**
@@ -453,6 +577,7 @@ export const STAGES: StageDef[] = [
   ...gated,
   millstream,
   vieuxVillage,
+  scrubbedFlats,
   grandTraverse,
 ];
 

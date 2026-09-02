@@ -55,7 +55,9 @@ export type PropKind =
   | 'pole'
   /** A wall of a house. The most solid thing in the game. */
   | 'building'
-  | 'gatePost';
+  | 'gatePost'
+  | 'signPost'
+  | 'pier';
 
 /** A corner warning board standing on the verge. */
 export interface CornerSign {
@@ -65,6 +67,32 @@ export interface CornerSign {
   /** Facing, radians about Y — turned to face the camera, not the road. */
   yaw: number;
   corner: Corner;
+}
+
+/**
+ * A place where the stage passes over itself.
+ *
+ * Grand Traverse does it twice — the snow section runs 46 m above the start
+ * line and 19 m above the gravel section at 254 m — and until now nothing said
+ * so. The upper corridor is a ribbon in space with a wall down each side and
+ * open air beneath it, and the ground far below dips away under it, so from the
+ * lower road it reads as a road hanging in the sky with nothing holding it up.
+ * That is what "it needs a bridge so that it makes sense where the road crosses
+ * over" is describing: the geometry was already an overpass, it just had no
+ * structure.
+ *
+ * Found rather than authored, for the same reason the corners are: a control
+ * point moves and a hand-placed bridge is in the wrong place, silently.
+ */
+export interface Crossing {
+  /** Distance along the stage of the road passing over, metres. */
+  over: number;
+  /** Distance along the stage of the road passing under, metres. */
+  under: number;
+  /** How far the upper road is above the lower one, metres. */
+  headroom: number;
+  /** The carried span on the upper road, as distances along the stage. */
+  span: [number, number];
 }
 
 export interface StageProp {
@@ -203,6 +231,18 @@ const PROP_SHAPE: Record<PropKind, { radius: number; height: number; mass?: numb
   // The scaffolding either side of a start, checkpoint or finish gate. Drawn by
   // the gate builder rather than with the hazards, so the renderer skips it.
   gatePost: { radius: 0.28, height: 3.4 },
+  // The post under a corner board. Drawn by the sign builder, like a gate post,
+  // so the renderer skips it here.
+  //
+  // It had no collider at all: the boards were built as pure decoration, and a
+  // steel post standing two metres off the road that a car passes through is
+  // the same bug as the trees were. Static rather than knocked over, because
+  // that is what a signpost is — but it is thin, so clipping one is a bang and
+  // a mark rather than the end of a run.
+  signPost: { radius: 0.09, height: 2.0 },
+  // A bridge pier. Height is per-instance — it is however far it is from the
+  // ground to the deck — so this one is only the footprint.
+  pier: { radius: 1.5, height: 1 },
 };
 
 export { CORRIDOR } from './corridor.js';
@@ -335,6 +375,8 @@ export class Stage {
   readonly corners: Corner[];
   /** Warning boards on the verge, one per corner. */
   readonly signs: CornerSign[];
+  /** Places the stage passes over itself, and the bridges that carry it. */
+  readonly crossings: Crossing[];
   readonly start: { position: Vec3; heading: number };
   readonly length: number;
 
@@ -357,11 +399,14 @@ export class Stage {
     this.length = this.spline.length;
     this.geometry = this.buildGeometry();
     this.checkpoints = this.buildCheckpoints(def.checkpoints ?? 3);
-    this.props = this.buildProps();
-    this.scenery = scatterScenery(def.id, def.biome, this.spline);
     this.cameraZones = this.buildCameraZones();
     this.corners = findCorners(this.spline, this.length);
+    // Before the props, which take a collider for each of these boards and a
+    // pier for each end of every bridge.
     this.signs = this.buildSigns();
+    this.crossings = this.findCrossings();
+    this.props = this.buildProps();
+    this.scenery = scatterScenery(def.id, def.biome, this.spline);
 
     // Sit the car a few metres up the road from the start line, well inside the
     // geometry, and let the apron cover anything behind it.
@@ -670,7 +715,7 @@ export class Stage {
   }
 
   private buildProps(): StageProp[] {
-    const props: StageProp[] = [...this.gatePosts()];
+    const props: StageProp[] = [...this.gatePosts(), ...this.signPosts(), ...this.piers()];
     const profile = this.def.hazards;
     if (!profile || profile.kinds.length === 0) return props;
 
@@ -749,6 +794,129 @@ export class Stage {
     for (const checkpoint of this.checkpoints) at(this.spline.at(checkpoint.distance));
     at(this.spline.samples[this.spline.samples.length - 1]!);
     return posts;
+  }
+
+  /**
+   * The post under each corner board, as a thing you can hit.
+   *
+   * The boards themselves are drawn at 2.6 m, over the car; only the post is
+   * in the way, and only just — a corner board on the verge is something you
+   * brush past when you have run wide, not an obstacle you aim between.
+   */
+  private signPosts(): StageProp[] {
+    const shape = PROP_SHAPE.signPost;
+    return this.signs.map((sign) => ({
+      kind: 'signPost' as const,
+      position: v3(sign.position.x, sign.position.y, sign.position.z),
+      radius: shape.radius,
+      height: shape.height,
+      yaw: sign.yaw,
+    }));
+  }
+
+  /**
+   * Where the stage passes over itself, and how much of the upper road a bridge
+   * has to carry.
+   *
+   * The opposite question to `selfIntersections`, from the same pair scan: that
+   * one wants overlapping road at the *same* height, which is a broken stage.
+   * This one wants overlapping road at very different heights, which is a
+   * legitimate overpass and the thing that needs building.
+   *
+   * `headroom` has a floor as well as no ceiling. Below about eight metres the
+   * two corridors are inside each other — the lower one's bank stands 2.4 m and
+   * its wall 8.5 — and that is a stage fault to be reported, not a bridge to be
+   * drawn under.
+   */
+  private findCrossings(minHeadroom = 8): Crossing[] {
+    const samples = this.spline.samples;
+    const found: Crossing[] = [];
+
+    for (let i = 0; i < samples.length; i++) {
+      const a = samples[i]!;
+      for (let j = i + 1; j < samples.length; j++) {
+        const b = samples[j]!;
+        if (b.distance - a.distance < 45) continue;
+        const rise = b.position.y - a.position.y;
+        if (Math.abs(rise) < minHeadroom) continue;
+
+        const flat = Math.hypot(a.position.x - b.position.x, a.position.z - b.position.z);
+        // The upper road only needs carrying where it is actually over the
+        // lower one's corridor, not merely near it.
+        const lower = rise > 0 ? a : b;
+        if (flat > this.halfCorridor(lower.width)) continue;
+
+        const upper = rise > 0 ? b : a;
+        // One bridge per crossing, not one per sample: the pair scan reports
+        // every sample of the upper road that is over every sample of the
+        // lower, which for a shallow crossing is dozens of hits describing the
+        // same structure. They are merged by extending the span.
+        const existing = found.find((c) => Math.abs(c.over - upper.distance) < 90);
+        if (existing) {
+          existing.span[0] = Math.min(existing.span[0], upper.distance);
+          existing.span[1] = Math.max(existing.span[1], upper.distance);
+          continue;
+        }
+        found.push({
+          over: upper.distance,
+          under: lower.distance,
+          headroom: Math.abs(rise),
+          span: [upper.distance, upper.distance],
+        });
+      }
+    }
+
+    // Widen every span to clear the corridor it crosses, plus an abutment at
+    // each end. A deck that stops at the edge of the road below it is a slab
+    // with its ends in mid-air; a bridge reaches the ground on both sides.
+    for (const crossing of found) {
+      const reach = this.halfCorridor(this.spline.at(crossing.under).width) + 12;
+      crossing.span[0] = Math.max(crossing.span[0] - reach, 0);
+      crossing.span[1] = Math.min(crossing.span[1] + reach, this.length);
+      // Centre the recorded point on what is actually carried.
+      crossing.over = (crossing.span[0] + crossing.span[1]) / 2;
+    }
+    return found;
+  }
+
+  /**
+   * The columns holding each bridge up.
+   *
+   * One at each end of the span, clear of the road passing underneath — they
+   * stand outside that corridor's wall, so a car on the lower road cannot
+   * reach them. They get colliders anyway: there are four of them in the whole
+   * game, the bill is nothing, and a two-metre concrete column that a car
+   * passes through is the bug this whole round of work is about.
+   */
+  private piers(): StageProp[] {
+    const shape = PROP_SHAPE.pier;
+    const props: StageProp[] = [];
+    for (const crossing of this.crossings) {
+      const groundBelow = this.spline.at(crossing.under).position.y;
+      for (const at of crossing.span) {
+        const sample = this.spline.at(at);
+        // Two columns across the deck, under its edges, so the span reads as
+        // carried rather than balanced on a post.
+        for (const side of [-1, 1]) {
+          const offset = sample.width * 0.75;
+          const foot = groundBelow - 4;
+          const height = sample.position.y - 1.4 - foot;
+          if (height < 3) continue;
+          props.push({
+            kind: 'pier',
+            position: v3(
+              sample.position.x + sample.left.x * offset * side,
+              foot,
+              sample.position.z + sample.left.z * offset * side,
+            ),
+            radius: shape.radius,
+            height,
+            yaw: Math.atan2(sample.forward.x, sample.forward.z),
+          });
+        }
+      }
+    }
+    return props;
   }
 
   /** Total half-width of the corridor at a sample, including verge and bank. */

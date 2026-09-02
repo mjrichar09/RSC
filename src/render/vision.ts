@@ -220,7 +220,6 @@ const COMPOSITE = /* glsl */ `
     // what made every windscreen in this game look like a dirty lens.
     float cleared = uOcclusion * grain * 0.8;
     float caked = uCrust * (0.62 + 0.38 * grain) * (1.0 - swept);
-    float muck = max(caked, cleared * swept);
 
     /*
      * The blade, sweeping the arc.
@@ -228,21 +227,34 @@ const COMPOSITE = /* glsl */ `
      * It travels along the same arc it clears, which is the whole reason the
      * arc is here: a bar crossing the screen vertically reads as a wipe effect,
      * and a blade pivoting through its own clean sector reads as a wiper.
+     *
+     * Both of its products are applied to the swept-glass term, and the blade
+     * again to the colour below. That is the whole fix for a wiper nobody could
+     * see: they used to be applied to muck, which since the swept glass and the
+     * crust were split apart only feeds the *blur* term. So the stroke softened a
+     * thin arc of an otherwise unchanged picture, the screen still cleared in
+     * one snap when the sim dropped its soiling at the turn, and the blade
+     * itself was never drawn at all.
      */
+    float wipe = 0.0;
+    float blade = 0.0;
     if (uWiper >= 0.0) {
       float bladeA = mix(-0.78, 0.78, uWiper);
       // Outbound it is a line of clearing: everything it has crossed is clean.
       // On the way back it crosses glass it already cleared, so it is just the
       // blade — which is what makes the return stroke read as a wiper coming
       // back rather than as the screen dirtying itself again.
-      float passed = step(sweepA, bladeA) * (1.0 - uWiperBack) * swept;
-      muck *= mix(1.0, 0.08, passed);
+      wipe = step(sweepA, bladeA) * (1.0 - uWiperBack) * swept;
       // Distance to the blade measured across the arc, so it stays a constant
       // width from pivot to tip instead of fanning out.
-      float onBlade = (1.0 - smoothstep(0.0, 0.016, abs(sweepA - bladeA) * max(sweepR, 0.3))) * swept;
-      muck = mix(muck, 0.9, onBlade * 0.75);
+      blade = (1.0 - smoothstep(0.0, 0.016, abs(sweepA - bladeA) * max(sweepR, 0.3))) * swept;
     }
-    muck = clamp(muck, 0.0, 1.0);
+    // What the stroke has already crossed is nearly clean glass — the smear the
+    // blade leaves is the sim's business, not the shader's, so this goes most
+    // of the way to zero rather than all of it.
+    cleared *= mix(1.0, 0.08, wipe);
+
+    float muck = clamp(max(caked, cleared * swept), 0.0, 1.0);
 
     float hidden = clamp(dark + muck * (1.0 - dark * 0.4), 0.0, 1.0);
 
@@ -274,7 +286,13 @@ const COMPOSITE = /* glsl */ `
     colour.rgb = mix(colour.rgb, crustTint * (0.22 + 0.55 * (1.0 - uDarkness)), min(caked * 1.15, 0.94));
     // The bright edge of a bead, which is most of why a droplet reads as one:
     // it is a lens, and it catches whatever light there is.
-    colour.rgb += rim * uOcclusion * swept * (0.18 + 0.26 * (1.0 - uDarkness));
+    colour.rgb += rim * uOcclusion * swept * (1.0 - wipe) * (0.18 + 0.26 * (1.0 - uDarkness));
+    // The blade itself: a dark rubber edge with the thin bright line of water
+    // standing in front of it. Drawn here, on the finished picture, because it
+    // is an object in front of the glass rather than something on the glass —
+    // it is visible on a clear screen too, which is what makes the return
+    // stroke read as a wiper coming back rather than as nothing happening.
+    colour.rgb = mix(colour.rgb, vec3(0.05, 0.05, 0.06), blade * 0.85);
 
     // The grade, last, on the finished picture — the light has to colour the
     // weather on the windscreen too, not just the world behind it.
