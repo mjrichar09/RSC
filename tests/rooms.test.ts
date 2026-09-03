@@ -15,7 +15,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { RoomStore } from '../server/src/rooms.js';
+import { MemoryStorage, ROOM_TTL, RoomStore } from '../server/src/rooms.js';
 import type { Handshake, Reply, Room } from '../src/net/room.js';
 import { joinRoom, serveRoom, type Handshaker } from '../src/net/signalling.js';
 
@@ -100,7 +100,7 @@ describe('the broker', () => {
     // The property the whole service exists for. An offer belongs to one peer
     // connection; two guests answering the same one leaves the host able to
     // complete only one of them, and the other waits forever.
-    const store = new RoomStore();
+    const store = new RoomStore(new MemoryStorage());
     const room = new DirectRoom(store);
     await room.publish('K7FM29', 'the-offer');
 
@@ -117,7 +117,7 @@ describe('the broker', () => {
     // A host that gave up waiting must be able to leave a fresh offer without
     // the stale one being taken a moment later by somebody it can no longer
     // answer — its peer connection is closed.
-    const room = new DirectRoom(new RoomStore());
+    const room = new DirectRoom(new RoomStore(new MemoryStorage()));
     await room.publish('K7FM29', 'stale');
     await room.publish('K7FM29', 'fresh');
     expect((await room.claim('K7FM29'))?.offer).toBe('fresh');
@@ -125,7 +125,7 @@ describe('the broker', () => {
   });
 
   it('delivers each reply once', async () => {
-    const room = new DirectRoom(new RoomStore());
+    const room = new DirectRoom(new RoomStore(new MemoryStorage()));
     const ticket = await room.publish('K7FM29', 'o');
     await room.claim('K7FM29');
     await room.reply('K7FM29', ticket, 'r');
@@ -136,7 +136,7 @@ describe('the broker', () => {
   });
 
   it('says nothing rather than inventing a room nobody opened', async () => {
-    const room = new DirectRoom(new RoomStore());
+    const room = new DirectRoom(new RoomStore(new MemoryStorage()));
     expect(await room.claim('AAA222')).toBeNull();
     expect(await room.collect('AAA222')).toEqual([]);
     // A reply to a room with no host is a guest whose host has gone. Creating
@@ -145,15 +145,57 @@ describe('the broker', () => {
     expect(await room.collect('AAA222')).toEqual([]);
   });
 
+  it('survives the object being evicted mid-handshake', async () => {
+    // The bug this whole file exists to have caught, and did not until the
+    // deployed worker was driven directly.
+    //
+    // A Durable Object is not a process that stays running: it is evicted when
+    // idle and rebuilt on the next request, and anything held in a field goes
+    // with it. The first version kept rooms in a Map on the class, so a
+    // handshake — four requests over several seconds — could lose its room
+    // half way through. Nothing errors. `collect` simply comes back empty and
+    // the guest waits forever for a host that never saw its answer.
+    //
+    // A new `RoomStore` over the same storage is exactly what eviction and
+    // reconstruction look like from the outside.
+    const storage = new MemoryStorage();
+    const before = new DirectRoom(new RoomStore(storage));
+    const ticket = await before.publish('K7FM29', 'the-offer');
+    expect((await before.claim('K7FM29'))?.offer).toBe('the-offer');
+
+    const after = new DirectRoom(new RoomStore(storage));
+    await after.reply('K7FM29', ticket, 'the-reply');
+
+    const later = new DirectRoom(new RoomStore(storage));
+    expect(await later.collect('K7FM29')).toEqual([{ ticket, reply: 'the-reply' }]);
+  });
+
+  it('stops handing out an offer once the room has expired', async () => {
+    // The TTL has to be enforced on read, not only by the sweep: a room read
+    // two minutes later must not still be offering a handshake whose peer
+    // connection died with the browser that made it.
+    const storage = new MemoryStorage();
+    const room = new DirectRoom(new RoomStore(storage));
+    await room.publish('K7FM29', 'stale');
+
+    // Wind the room's clock back past the TTL, which is what an abandoned
+    // lobby looks like to the next request.
+    const held = (await storage.get('r:K7FM29')) as { touched: number };
+    held.touched = Date.now() - ROOM_TTL - 1_000;
+    await storage.put('r:K7FM29', held);
+
+    expect(await room.claim('K7FM29')).toBeNull();
+  });
+
   it('forgets a room when the host closes it', async () => {
-    const room = new DirectRoom(new RoomStore());
+    const room = new DirectRoom(new RoomStore(new MemoryStorage()));
     await room.publish('K7FM29', 'o');
     await room.close('K7FM29');
     expect(await room.claim('K7FM29')).toBeNull();
   });
 
   it('refuses an offer that is not a string, or is absurdly long', async () => {
-    const store = new RoomStore();
+    const store = new RoomStore(new MemoryStorage());
     const bad = async (body: unknown) =>
       (
         await store.fetch(
@@ -173,7 +215,7 @@ describe('the broker', () => {
 
 describe('the broker, driven by the game', () => {
   it('connects three guests to a host, each on its own handshake', async () => {
-    const room = new DirectRoom(new RoomStore());
+    const room = new DirectRoom(new RoomStore(new MemoryStorage()));
     const handshake = fakeHandshake();
     const links: string[] = [];
     const served = serveRoom({
@@ -196,7 +238,7 @@ describe('the broker, driven by the game', () => {
   });
 
   it('stops offering once the grid is full', async () => {
-    const room = new DirectRoom(new RoomStore());
+    const room = new DirectRoom(new RoomStore(new MemoryStorage()));
     const handshake = fakeHandshake();
     const served = serveRoom({
       room,

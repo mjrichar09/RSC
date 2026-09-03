@@ -40,19 +40,37 @@ export default {
     // room in one place where the claim is trivially atomic. If it ever became
     // one, the shard key is the room code and nothing else changes.
     const id = env.ROOMS.idFromName('rooms');
+    // The body is read here and forwarded as a string rather than piped through
+    // as a stream. Forwarding `request.body` along with the original headers
+    // means handing on a `content-length` that describes a body the runtime is
+    // now re-framing, and it killed the object mid-request. There is at most
+    // four kilobytes of it; buffering costs nothing and removes a whole class
+    // of question.
+    const body = await request.text();
     return env.ROOMS.get(id).fetch(
       new Request(`https://rooms/${code}/${parts[2]}`, {
         method: 'POST',
-        headers: request.headers,
-        body: request.body,
+        headers: { 'content-type': 'application/json' },
+        body,
       }),
     );
   },
 };
 
-/** The Durable Object. All of its behaviour is `RoomStore`. */
+/**
+ * The Durable Object.
+ *
+ * All of its behaviour is `RoomStore`, and all of its *state* is
+ * `state.storage` — deliberately not a field on this class. An object is
+ * evicted when idle and rebuilt on the next request, so anything held in a
+ * field is gone by the time the second half of a handshake arrives.
+ */
 export class Rooms {
-  private readonly store = new RoomStore();
+  private readonly store: RoomStore;
+
+  constructor(state: DurableObjectState) {
+    this.store = new RoomStore(state.storage);
+  }
 
   fetch(request: Request): Promise<Response> {
     return this.store.fetch(request);
