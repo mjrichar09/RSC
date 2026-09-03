@@ -16,7 +16,7 @@ import { DamageModel, type DamageOptions, impactPointFromForce } from './damage.
 import { DebrisModel, type DetachEvent, type PartId } from './debris.js';
 import { Ambient } from './ambient.js';
 import { DEER_MASS, Wildlife } from './wildlife.js';
-import { Markers } from './markers.js';
+import { Markers, Signs } from './markers.js';
 import { type Quat, type Vec3, add, lerpVec, rotate, rotateInverse, slerp, v3 } from './math.js';
 import { type Stage, type StageProp } from './stage.js';
 import { type SurfaceId, surface } from './surfaces.js';
@@ -200,6 +200,14 @@ export class SimWorld {
    * otherwise, and stage validation has no use for flattened posts.
    */
   readonly markers: Markers | null;
+  /**
+   * Corner boards, and which of them are lying in the verge.
+   *
+   * Knocked over by a swept check rather than by a rigid body, exactly like the
+   * marker poles — see `markers.ts` for why the rigid body that was tried first
+   * put every board on the ground before the lights went green.
+   */
+  readonly signs: Signs | null;
   readonly ambient: Ambient | null;
   readonly conditions: Conditions;
   readonly dt = 1 / SIM.hz;
@@ -372,6 +380,7 @@ export class SimWorld {
         : null;
     this.events = wantsDamage ? new RAPIER.EventQueue(true) : null;
     this.markers = this.stage ? new Markers(this.stage.spline, this.stage.length) : null;
+    this.signs = this.stage ? new Signs(this.stage.signs) : null;
 
     const tuning = resolveTuning(options.tuning);
     for (let i = 0; i < this.carCount; i++) {
@@ -552,7 +561,7 @@ export class SimWorld {
       // markers and the wildlife want the answer: asking twice put 20 µs a step
       // on the bill, which is a fifth of the whole simulation.
       const here =
-        this.markers || this.wildlife
+        this.markers || this.wildlife || this.signs
           ? this.stage.progressAt(state.position, this.splineHint)
           : null;
 
@@ -565,6 +574,16 @@ export class SimWorld {
           car.damage.applyImpact(clipped.at, clipped.impulse);
           car.debris?.applyImpact(clipped.at, clipped.impulse);
           if (local) this.lastImpact = Math.max(this.lastImpact, clipped.impulse);
+        }
+      }
+
+      if (this.signs) {
+        if (local) this.signs.update(this.dt);
+        const board = this.signs.strike(state.position, state.velocity, state.rotation);
+        if (board) {
+          car.damage.applyImpact(board.at, board.impulse);
+          car.debris?.applyImpact(board.at, board.impulse);
+          if (local) this.lastImpact = Math.max(this.lastImpact, board.impulse);
         }
       }
 
@@ -683,6 +702,7 @@ export class SimWorld {
     }
     this.wildlife?.reset();
     this.markers?.reset();
+    this.signs?.reset();
     this.ambient?.reset();
     while (this.loose.length > 0) this.removeLoose(this.loose.length - 1);
   }

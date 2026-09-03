@@ -13,6 +13,12 @@ import { Career, type RaceTarget } from './game/career.js';
 import { rollcageMitigation } from './game/garage.js';
 import { Race } from './game/race.js';
 import { ImpactDrama } from './game/drama.js';
+import {
+  CrashReel,
+  EMPTY_REEL_FRAME,
+  RecordedDamage,
+  RecordedDebris,
+} from './game/crashReel.js';
 import { TouchControls } from './ui/touch.js';
 import { type QualityTier, RenderScale, guessTier, qualityFor } from './render/quality.js';
 import { useRelay } from './net/webrtc.js';
@@ -282,6 +288,18 @@ const params = new URLSearchParams(location.search);
   const replayUi = new ReplayUi(hudRoot);
   let ghost: GhostPlayer | null = null;
   const recorder = new GhostRecorder();
+  /**
+   * The last couple of seconds, for the crash cinematic.
+   *
+   * Separate from the ghost recorder because they answer different questions. A
+   * ghost is where the car *went*, saved to disk and compared across sessions,
+   * so its format has to stay small and stable. This is what the crash *looked
+   * like* — damage, parts, the deer — and it is thrown away as soon as it has
+   * been watched.
+   */
+  const crashReel = new CrashReel();
+  const reelDamage = new RecordedDamage(EMPTY_REEL_FRAME);
+  const reelDebris = new RecordedDebris(EMPTY_REEL_FRAME);
 
   /**
    * The car's condition when this stage session began.
@@ -404,6 +422,10 @@ const params = new URLSearchParams(location.search);
     ghost = null;
     ghostView.visible = false;
     recorder.reset();
+    // With the ghost recorder: a restart must not leave the previous run's
+    // last two seconds in the reel, or the first crash of the new run replays
+    // somebody driving somewhere else.
+    crashReel.reset();
     void attachGhost(currentKey());
   };
 
@@ -471,6 +493,7 @@ const params = new URLSearchParams(location.search);
       raceHud.setSplitDeltas([]);
       raceHud.setDelta(null);
       recorder.reset();
+      crashReel.reset();
       world.damage?.reset();
       world.clearDebris();
       debrisView.clear();
@@ -564,6 +587,20 @@ const params = new URLSearchParams(location.search);
       window.setTimeout(() => host.releaseGrid(), 8000);
     }
 
+    // The crash cinematic never runs in a network race: dilating one client's
+    // clock desyncs it from the host, and holding *your* screen in slow motion
+    // while three other people are still racing is the wrong thing to do to
+    // them as well as to you.
+    //
+    // Switched off at the source rather than checked at each use. There are
+    // three consumers — the sim clock, the replay, and the ducked mix — and the
+    // third was only ever safe by consequence: `mixer.duck(drama.duck)` is
+    // ungated, and returned zero purely because `hit()` happened to be gated
+    // upstream. `strength = 0` is the contract `ImpactDrama` documents for
+    // exactly this, and it makes the other two belt and braces.
+    drama.strength = 0;
+    drama.reset();
+
     session = new MultiplayerSession(
       { ...(start.host ? { host: start.host } : {}), ...(start.guest ? { guest: start.guest } : {}) },
       {
@@ -585,6 +622,7 @@ const params = new URLSearchParams(location.search);
       session.leave();
       session = null;
       multiplayer.reset();
+      restoreDrama();
     }
     loadStage(target.def.id, target.variant.id);
   };
@@ -618,6 +656,7 @@ const params = new URLSearchParams(location.search);
       session.leave();
       session = null;
       multiplayer.reset();
+      restoreDrama();
     }
     sessionHealth = {};
     garage.setOpen(false);
@@ -660,12 +699,36 @@ const params = new URLSearchParams(location.search);
   // The crash cinematic, on the same pattern and for the same reason: some
   // people will want it off entirely, and 0 means genuinely nothing happens.
   const DRAMA_STEPS = [0, 0.5, 1];
-  drama.strength = dramaParam !== null ? Number(dramaParam) : career.profile.settings.drama;
+  /**
+   * What the player asked for, which in a network race is not what is in
+   * effect. `?drama=` outranks the profile, as everywhere else.
+   */
+  let dramaSetting = dramaParam !== null ? Number(dramaParam) : career.profile.settings.drama;
+  drama.strength = dramaSetting;
+  /**
+   * The cinematic strength this player actually asked for.
+   *
+   * Kept as a function rather than a value because a network race sets
+   * `drama.strength` to 0 and leaving one has to put back whatever the player
+   * chose — including a change they made with the K key mid-session, and
+   * including `?drama=` which outranks the profile.
+   */
+  const restoreDrama = () => {
+    drama.strength = dramaSetting;
+  };
+
   controls.onDrama = () => {
     const next =
-      DRAMA_STEPS[(DRAMA_STEPS.findIndex((v) => v >= drama.strength - 0.01) + 1) % DRAMA_STEPS.length] ?? 1;
-    drama.strength = next;
-    if (next === 0) drama.reset();
+      DRAMA_STEPS[(DRAMA_STEPS.findIndex((v) => v >= dramaSetting - 0.01) + 1) % DRAMA_STEPS.length] ?? 1;
+    dramaSetting = next;
+    // Remembered but not applied while a network race is running: turning the
+    // cinematic on mid-session would put this client's clock back under it and
+    // desync it from the host, which is the one thing the gate exists to stop.
+    // It takes effect on the way out, in `restoreDrama`.
+    if (!session) {
+      drama.strength = next;
+      if (next === 0) drama.reset();
+    }
     damagePanel.notice(next === 0 ? 'Crash slow-motion off' : `Crash slow-motion ${Math.round(next * 100)}%`);
     void save.update((profile) => {
       profile.settings.drama = next;
@@ -730,22 +793,24 @@ const params = new URLSearchParams(location.search);
     // meant the harness asked for no cinematic and got one anyway.
     if (drama.strength <= 0) return;
 
+    // The reel, not the ghost. A ghost knows where the car was and nothing
+    // else, so a cinematic built from one shows the car already wrecked on the
+    // way in and whatever it hit missing entirely.
+    const strip = crashReel.take(1.25);
+    if (!strip) return;
     const ghost = recorder.finish(currentKey(), race.time);
     const player = new GhostPlayer(ghost);
-    // Half what it was. 2.5 s back is the corner *before* the accident: by the
-    // time the crash arrives the cinematic has been running long enough to
-    // read as the game slowing down rather than as the moment being held.
-    const from = Math.max(player.duration - 1.25, 0);
     replayUi.open({
       player,
-      time: from,
+      reel: strip,
+      time: 0,
       playing: true,
       rate: 0.34,
       // Three eighths round, so the impact is seen across the car rather than
       // down the same line it was driven into.
       yaw: camera.yaw + Math.PI * 0.75,
       zoom: 8,
-      auto: { label: 'REPLAY', until: player.duration },
+      auto: { label: 'REPLAY', until: strip.duration },
     });
     // Where the race clock has to be put back to: the replay pauses the world,
     // and a crash that gave you two free seconds would be worth having.
@@ -989,7 +1054,7 @@ const params = new URLSearchParams(location.search);
     // and it is the only way they stay readable through a zone change.
     // Boards still standing turn to face the camera; ones lying in the verge
     // keep whatever attitude the physics left them in.
-    stageView?.signs.sync(world.movableProps);
+    if (world.signs) stageView?.signs.sync(world.signs);
     stageView?.signs.faceCamera(camera.yaw);
     if (world.markers && stageView) stageView.markers.sync(world.markers);
     // Saplings that have been knocked over: real bodies, so their instances
@@ -1079,12 +1144,23 @@ const params = new URLSearchParams(location.search);
     // camera frozen at the amplitude the crash set it to.
     camera.advanceShake(dt);
     const at = replayUi.advance(dt);
-    const sample = state.player.sampleAt(at);
-    if (sample) {
-      carView.updateFromGhost(sample);
+    if (state.reel) {
+      // The crash cinematic: the car as it *was*, with the damage it had at
+      // that moment and whatever it was about to hit still standing there.
+      const frame = state.reel.at(at);
+      carView.updateFromReel(frame, reelDamage.at(frame), reelDebris.at(frame));
+      wildlifeView.updateFromReel(frame.animals);
       camera.setYaw(state.yaw);
       camera.setViewSize(state.zoom);
-      camera.jumpTo(sample.position);
+      camera.jumpTo(frame.position);
+    } else {
+      const sample = state.player.sampleAt(at);
+      if (sample) {
+        carView.updateFromGhost(sample);
+        camera.setYaw(state.yaw);
+        camera.setViewSize(state.zoom);
+        camera.jumpTo(sample.position);
+      }
     }
     ghostView.visible = false;
 
@@ -1772,6 +1848,22 @@ const params = new URLSearchParams(location.search);
       } else {
         stuckFor = 0;
       }
+    }
+
+    // The crash reel: what the last couple of seconds looked like, so the
+    // cinematic can replay them rather than re-stage them. Wall time, because
+    // it is a record of what a person saw. Not while a menu is up and not in a
+    // network race, where there is no cinematic to feed.
+    if (!garage.isOpen && !session && race?.phase === 'running') {
+      const t = world.renderTransform(alpha);
+      crashReel.capture(
+        wallDt,
+        t,
+        state,
+        world.damage,
+        world.cars[0]?.debris ?? null,
+        world.wildlife?.animals ?? [],
+      );
     }
 
     // Spray, marks and sound all read straight off tyre saturation — the same

@@ -20,6 +20,7 @@ import { shapeCamber, terrainRise } from './terrain.js';
 import {
   BANK_HEIGHT,
   BANK_WIDTH,
+  CORRIDOR,
   CROWN,
   VERGE_DROP,
   VERGE_WIDTH,
@@ -56,7 +57,6 @@ export type PropKind =
   /** A wall of a house. The most solid thing in the game. */
   | 'building'
   | 'gatePost'
-  | 'signPost'
   | 'pier';
 
 /** A corner warning board standing on the verge. */
@@ -234,16 +234,6 @@ const PROP_SHAPE: Record<PropKind, { radius: number; height: number; mass?: numb
   // The post under a corner board. Drawn by the sign builder, like a gate post,
   // so the renderer skips it here.
   //
-  // It had no collider at all: the boards were built as pure decoration, and a
-  // steel post standing two metres off the road that a car passes through is
-  // the same bug as the trees were.
-  //
-  // Given a mass, so it goes over. Static was the first attempt and it is worse
-  // than it sounds: a post that stops dead and stays perfectly upright after
-  // being hit at ninety reads as scenery with a collider bolted on, which is
-  // the same complaint one layer further in. Forty-five kilos of board and
-  // pole — it barely marks the car, and it is lying in the verge afterwards.
-  signPost: { radius: 0.09, height: 2.0, mass: 45 },
   // A bridge pier. Height is per-instance — it is however far it is from the
   // ground to the deck — so this one is only the footprint.
   pier: { radius: 1.5, height: 1 },
@@ -710,7 +700,11 @@ export class Stage {
 
       signs.push({
         distance: at,
-        position: v3(base.x, base.y - VERGE_DROP, base.z),
+        // The corridor's own height at this offset, not a flat `-VERGE_DROP`:
+        // the verge slopes, so a board seven tenths of the way across it sits
+        // 0.126 m down rather than the full 0.18, and the difference buried the
+        // post five centimetres in the ground.
+        position: v3(base.x, base.y + CORRIDOR.heightAt(sample.width, offset), base.z),
         yaw,
         corner,
       });
@@ -719,7 +713,7 @@ export class Stage {
   }
 
   private buildProps(): StageProp[] {
-    const props: StageProp[] = [...this.gatePosts(), ...this.signPosts(), ...this.piers()];
+    const props: StageProp[] = [...this.gatePosts(), ...this.piers()];
     const profile = this.def.hazards;
     if (!profile || profile.kinds.length === 0) return props;
 
@@ -798,25 +792,6 @@ export class Stage {
     for (const checkpoint of this.checkpoints) at(this.spline.at(checkpoint.distance));
     at(this.spline.samples[this.spline.samples.length - 1]!);
     return posts;
-  }
-
-  /**
-   * The post under each corner board, as a thing you can hit.
-   *
-   * The boards themselves are drawn at 2.6 m, over the car; only the post is
-   * in the way, and only just — a corner board on the verge is something you
-   * brush past when you have run wide, not an obstacle you aim between.
-   */
-  private signPosts(): StageProp[] {
-    const shape = PROP_SHAPE.signPost;
-    return this.signs.map((sign) => ({
-      kind: 'signPost' as const,
-      position: v3(sign.position.x, sign.position.y, sign.position.z),
-      radius: shape.radius,
-      height: shape.height,
-      yaw: sign.yaw,
-      ...(shape.mass ? { mass: shape.mass } : {}),
-    }));
   }
 
   /**

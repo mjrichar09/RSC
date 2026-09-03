@@ -10,8 +10,43 @@
 import * as THREE from 'three';
 import { CAR } from '../data/tuning.js';
 import type { Quat, Vec3 } from '../sim/math.js';
-import type { ComponentId, DamageModel } from '../sim/damage.js';
-import type { DebrisModel, PartId } from '../sim/debris.js';
+import type { ComponentId, DamageModel, Dent } from '../sim/damage.js';
+import type { DebrisModel, PartId, PartState } from '../sim/debris.js';
+
+/**
+ * What this view actually needs of a damage model.
+ *
+ * Three questions, and a recorded crash frame can answer all three as well as
+ * the live model can. Declared structurally rather than importing the recorded
+ * types from `game/`: the renderer reads the simulation and nothing else, and
+ * a `render/ -> game/` import would be a new edge on a diagram that does not
+ * have one.
+ */
+export interface DamageLike {
+  get(id: ComponentId): number;
+  brakeGlow(index: number): number;
+  brakeTint(index: number): number;
+  /** Where the metal went. Folds are geometry, not a texture. */
+  readonly dents: readonly Dent[];
+  /** Bumped when the dent list changes, so the mesh is rebuilt only then. */
+  readonly dentVersion: number;
+}
+
+/** The same, for the parts that come off. */
+export interface DebrisLike {
+  stateOf(id: PartId): PartState;
+  isLoose(id: PartId): boolean;
+}
+
+/** One recorded frame, as much of it as the car needs. */
+export interface PosedFrame {
+  position: Vec3;
+  rotation: Quat;
+  steer: number;
+  wheelRotation: number[];
+  wheelCompression: number[];
+  wheelGrounded: boolean[];
+}
 import type { GhostSample } from '../sim/replay.js';
 import type { VehicleState } from '../sim/vehicle.js';
 import { PALETTE } from './scene.js';
@@ -611,7 +646,7 @@ export class CarView {
    * times in a race and never between them, and reshaping the whole car is not
    * something to do sixty times a second for no reason.
    */
-  private reshape(damage: DamageModel): void {
+  private reshape(damage: DamageLike): void {
     // Health is quantised into 24ths: a fold that rebuilt on every hundredth of
     // a percent of wear would rebuild every frame the car was touching anything.
     let key = damage.dentVersion * 131 + this.paintEpoch * 7;
@@ -745,7 +780,7 @@ export class CarView {
     }
   }
 
-  private applyDamage(damage: DamageModel): void {
+  private applyDamage(damage: DamageLike): void {
     /**
      * Where a damaged panel *sits*. What it looks like is `reshape`'s job.
      *
@@ -849,7 +884,7 @@ export class CarView {
    *
    * Rebuilt only when the health has actually moved, in twentieths.
    */
-  private applyGlass(damage: DamageModel): void {
+  private applyGlass(damage: DamageLike): void {
     const rest = this.restPose.get(this.screen);
     if (!rest) return;
     const health = damage.get('windscreen');
@@ -893,7 +928,7 @@ export class CarView {
    * hangs at one corner and scrapes. The dragging pose is the telegraph — it is
    * the only warning the player gets before the part finally lets go.
    */
-  private applyDebris(debris: DebrisModel): void {
+  private applyDebris(debris: DebrisLike): void {
     for (const [id, mesh] of this.parts) {
       const state = debris.stateOf(id);
       mesh.visible = state !== 'gone';
@@ -944,6 +979,40 @@ export class CarView {
       // opacity and it would cost four more floats a frame.
       view.position.set(mount.x, mount.y + CAR.suspensionRestLength * 0.5, mount.z);
       view.rotation.set(sample.wheelRotation[i]!, i < 2 ? sample.steer : 0, 0, 'YXZ');
+    }
+  }
+
+  /**
+   * Pose from a recorded crash frame: the car *as it was*, damage and all.
+   *
+   * `updateFromGhost` above is the other kind of playback and stays as it is —
+   * a ghost is a rival's line, drawn translucent, and its damage is nobody's
+   * business. This one is the crash cinematic, where the whole point is that
+   * the fold appears at the moment of the impact rather than being on the car
+   * on the way in.
+   */
+  updateFromReel(frame: PosedFrame, damage: DamageLike, debris: DebrisLike): void {
+    this.applyDamage(damage);
+    this.reshape(damage);
+    this.applyDebris(debris);
+
+    this.group.position.set(frame.position.x, frame.position.y, frame.position.z);
+    this.group.quaternion.set(
+      frame.rotation.x,
+      frame.rotation.y,
+      frame.rotation.z,
+      frame.rotation.w,
+    );
+    for (let i = 0; i < 4; i++) {
+      const mount = CAR.wheelPositions[i]!;
+      const view = this.wheels[i]!;
+      const grounded = frame.wheelGrounded[i] ?? true;
+      const compression = frame.wheelCompression[i] ?? 0.5;
+      const drop = grounded
+        ? (1 - compression) * CAR.suspensionRestLength
+        : CAR.suspensionRestLength;
+      view.position.set(mount.x, mount.y + CAR.suspensionRestLength - drop, mount.z);
+      view.rotation.set(frame.wheelRotation[i]!, i < 2 ? frame.steer : 0, 0, 'YXZ');
     }
   }
 

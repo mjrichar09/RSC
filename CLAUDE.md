@@ -331,6 +331,15 @@ scannable as it grows; it is append-only.
 
 ### Rendering
 
+- **Reaching for a rigid body for something thin that stands up.** Corner boards
+  were given a mass so they would fall when hit, and every one of them was lying
+  in the verge before the lights went green. Two metres tall and nine
+  centimetres across is marginally stable on a trimesh at the best of times, it
+  was being placed 5 cm into the ground (a flat `-VERGE_DROP` where the verge
+  actually slopes), and once tipped a cylinder rolls. `markers.ts` already had
+  the answer for exactly this shape of problem and it is not a rigid body: a
+  swept check against the car's own footprint cannot fall over on its own, costs
+  no broadphase entries, and gives the same answer.
 - **Fixing a thing in the road by making it intangible.** Scenery that landed
   on driveable road had its collider suppressed and was drawn anyway, so twelve
   conifers stood in the middle of Pine Loop, sixty boulders and fifteen firs on
@@ -397,6 +406,15 @@ scannable as it grows; it is append-only.
   harness step the world directly and never call `frame()`, so anything that
   only lives there produces nothing in any screenshot and looks broken when it
   is merely unreachable. Put per-frame effects in a function both call.
+- **A replay that reads anything live is a recreation, not a replay.** The crash
+  cinematic played a ghost — where the car *was* — and posed damage and wildlife
+  from the present, so the car was already wrecked on the way in and the deer it
+  hit was not there at all. A ghost cannot carry that and should not: it is
+  saved to disk and compared across sessions. `game/crashReel.ts` is the other
+  thing, a ring buffer of the last 2.5 s that is never saved — component health,
+  part states, dents and animal positions, copied rather than referenced,
+  because the live dent list is mutated in place and a reference gives every
+  recorded frame the *final* folds.
 - **Anything with a lifetime has to be advanced on *every* draw path**, and
   there are three: the live loop, `drawReplay`, and the harness seek. The camera
   shake decayed inside `camera.follow`, and the crash replay draws with
@@ -427,6 +445,12 @@ scannable as it grows; it is append-only.
 
 `src/net/` is the protocol, the host, the guest and the transports; `src/sim/`
 knows nothing about any of it.
+
+**The crash cinematic is off in a network race, at the source.** `drama.strength`
+is set to 0 when a session starts and restored when it ends, rather than each
+consumer checking for a session — there are three of them, and the third
+(`mixer.duck`) was only ever safe by consequence. The K key is remembered while
+a session runs and applied on the way out.
 
 **There are two ways into a race and the second does not replace the first.** A
 room code goes through the broker in `server/`; an invite code goes through the

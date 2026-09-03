@@ -144,7 +144,13 @@ if (!(await page.$('[data-act="invite"]'))) throw new Error('the invite-code fal
 console.log(`room code: ${roomCode}`);
 
 // And with no broker the lobby is exactly what it always was.
-await page.goto('http://localhost:5181/?vision=0&drama=0&screen=lobby');
+//
+// An empty `?rooms=` is how that is reached now that one is configured by
+// default: it outranks the built-in address, which is the same precedence the
+// parameter has when it points somewhere. This is the fallback the whole
+// feature sits on — a LAN with no internet, or the day the service stops being
+// paid for — so it is worth a check of its own rather than an assumption.
+await page.goto('http://localhost:5181/?vision=0&drama=0&screen=lobby&rooms=');
 await page.waitForSelector('.lobby.is-open [data-act="invite"]', { timeout: 20_000 });
 if (await page.$('.lobby-code')) throw new Error('a room code was shown with no room service');
 console.log('no broker configured: the lobby falls back to invite codes');

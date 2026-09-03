@@ -18,9 +18,19 @@
  */
 
 import type { GhostPlayer } from '../sim/replay.js';
+import type { ReelStrip } from '../game/crashReel.js';
 
 export interface ReplayHandle {
   player: GhostPlayer;
+  /**
+   * A recorded crash strip, when this is the cinematic rather than photo mode.
+   *
+   * Photo mode poses from the ghost, because a ghost is what a finished run is
+   * — the player scrubs the whole lap. The cinematic poses from this instead:
+   * it is the same seconds with the damage, the parts and the wildlife in them,
+   * which a ghost does not carry and should not be made to.
+   */
+  reel?: ReelStrip;
   /** Seconds into the run. */
   time: number;
   playing: boolean;
@@ -91,14 +101,28 @@ export class ReplayUi {
     return handle?.auto !== undefined && handle.time >= handle.auto.until;
   }
 
+  /**
+   * How long the thing being played actually is.
+   *
+   * The reel when there is one, and that distinction matters: a crash strip is
+   * a second and a quarter while the ghost beside it is the whole lap, so
+   * clamping to the ghost would leave the cinematic running for a minute after
+   * the crash it was showing.
+   */
+  private get duration(): number {
+    const handle = this.handle;
+    if (!handle) return 0;
+    return handle.reel?.duration ?? handle.player.duration;
+  }
+
   /** Advance the playhead. Returns the time to pose the car at. */
   advance(dt: number): number {
     const handle = this.handle;
     if (!handle) return 0;
     if (handle.playing) {
       handle.time += dt * handle.rate;
-      if (handle.time > handle.player.duration) {
-        handle.time = handle.player.duration;
+      if (handle.time > this.duration) {
+        handle.time = this.duration;
         handle.playing = false;
       }
     }
@@ -129,7 +153,7 @@ export class ReplayUi {
         handle.playing = false;
         break;
       case 'ArrowRight':
-        handle.time = Math.min(handle.time + step, handle.player.duration);
+        handle.time = Math.min(handle.time + step, this.duration);
         handle.playing = false;
         break;
       case 'ArrowUp':
@@ -177,7 +201,7 @@ export class ReplayUi {
   private render(): void {
     const handle = this.handle;
     if (!handle) return;
-    const progress = handle.player.duration > 0 ? handle.time / handle.player.duration : 0;
+    const progress = this.duration > 0 ? handle.time / this.duration : 0;
 
     if (handle.auto) {
       this.root.innerHTML = `

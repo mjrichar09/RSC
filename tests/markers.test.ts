@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { STAGES } from '../src/data/stages/index.js';
+import { STAGES, stageById } from '../src/data/stages/index.js';
 import { Stage } from '../src/sim/stage.js';
 import { Markers } from '../src/sim/markers.js';
 import { createWorld } from '../src/sim/world.js';
@@ -147,4 +147,69 @@ describe('in a world', () => {
     expect(damage.condition).toBeGreaterThan(0.995);
     expect(damage.repairBill().total).toBeLessThan(120);
   });
+});
+
+describe('corner boards', () => {
+  it('stands them all up and leaves them there', async () => {
+    // The regression this class exists for. The boards were given a rigid body
+    // first — forty two-metre poles nine centimetres across, on a trimesh — and
+    // every one of them was lying in the verge before the lights went green:
+    // marginally stable at best, and once tipped, a cylinder rolls. A swept
+    // check cannot fall over on its own, which is the entire point.
+    for (const id of ['pine-loop', 'north-pass', 'vieux-village']) {
+      const stage = new Stage(stageById(id));
+      const world = await createWorld({ stage });
+      expect(world.signs!.all.length, id).toBeGreaterThan(0);
+      // Ten seconds of the world simply existing, car held on the line.
+      for (let i = 0; i < 120 * 10; i++) {
+        world.step({ throttle: 0, brake: 1, steer: 0, handbrake: 1 });
+      }
+      expect(world.signs!.flattened, `${id} knocked boards over on its own`).toBe(0);
+    }
+  }, 60_000);
+
+  it('goes over when a car drives into one, and stays down', async () => {
+    const stage = new Stage(stageById('pine-loop'));
+    const world = await createWorld({ stage, damage: true });
+    const signs = world.signs!;
+    const board = stage.signs[0]!;
+
+    const hit = signs.strike(
+      { x: board.position.x, y: board.position.y, z: board.position.z },
+      { x: 0, y: 0, z: 25 },
+      { x: 0, y: 0, z: 0, w: 1 },
+    );
+    expect(hit).not.toBeNull();
+    expect(signs.flattened).toBe(1);
+
+    // It falls over about a third of a second, and then it is finished.
+    signs.update(0.5);
+    expect(signs.all[0]!.fallen).toBe(1);
+
+    // And it cannot be hit twice — it is already on the ground.
+    expect(
+      signs.strike(
+        { x: board.position.x, y: board.position.y, z: board.position.z },
+        { x: 0, y: 0, z: 25 },
+        { x: 0, y: 0, z: 0, w: 1 },
+      ),
+    ).toBeNull();
+  }, 30_000);
+
+  it('costs less than a marker pole, let alone a tree', async () => {
+    // A corner board is the cheapest thing on a stage that is still a thing: it
+    // exists so the edge of the road is somewhere real, not so that running
+    // wide ends a run.
+    const stage = new Stage(stageById('pine-loop'));
+    const world = await createWorld({ stage, damage: true });
+    const board = stage.signs[0]!;
+    const hit = world.signs!.strike(
+      { x: board.position.x, y: board.position.y, z: board.position.z },
+      { x: 0, y: 0, z: 30 },
+      { x: 0, y: 0, z: 0, w: 1 },
+    )!;
+    // Below the cheapest component's threshold at any sane speed: a mark on the
+    // paint, not a repair bill.
+    expect(hit.impulse).toBeLessThan(4000);
+  }, 30_000);
 });

@@ -14,7 +14,7 @@ import * as THREE from 'three';
 import { type PropKind, type Stage } from '../sim/stage.js';
 import { CORRIDOR } from '../sim/corridor.js';
 import { DRESSING, type SceneryItem, type SceneryKind } from '../sim/scenery.js';
-import type { Markers } from '../sim/markers.js';
+import type { Markers, Signs } from '../sim/markers.js';
 import type { Vec3 } from '../sim/math.js';
 import { SURFACES } from '../sim/surfaces.js';
 import { groundHeight } from '../sim/terrain.js';
@@ -817,7 +817,6 @@ const PROP_BASE: Record<PropKind, { radius: number; height: number }> = {
   pole: { radius: 0.16, height: 2.2 },
   building: { radius: 3.2, height: 9 },
   gatePost: { radius: 0.28, height: 3.4 },
-  signPost: { radius: 0.09, height: 2.0 },
   // Drawn a metre tall and stretched to whatever the crossing needs, which is
   // how a single instanced mesh carries piers from 18 m to 51 m.
   pier: { radius: 1.5, height: 1 },
@@ -962,12 +961,9 @@ function propParts(kind: PropKind): SceneryParts {
       band.translate(0, 1.85, 0);
       return { main: post, extra: { geometry: band, color: 0xe8552f }, casts: false };
     }
-    // Never built: gate posts are drawn by `buildGates`, banner and all, and
-    // sign posts by `buildSigns` with the board they carry.
+    // Never built: gate posts are drawn by `buildGates`, banner and all.
     case 'gatePost':
       return { main: new THREE.BoxGeometry(0.4, 3.4, 0.4), casts: false };
-    case 'signPost':
-      return { main: new THREE.BoxGeometry(0.12, 1.9, 0.12), casts: false };
     // A bridge column. Tapered and eight-sided rather than round: at this
     // camera distance a smooth cylinder has no edge to catch the light and
     // reads as a flat grey stripe, and the taper is what makes a fifty-metre
@@ -989,7 +985,6 @@ const PROP_COLOUR: Record<PropKind, number> = {
   bale: 0xb59a55,
   pole: 0xdcd6c6,
   gatePost: 0xf2c14e,
-  signPost: 0x6b7280,
   pier: 0x8a8579,
 };
 
@@ -1002,7 +997,7 @@ function buildProps(stage: Stage): PropsView {
   for (const prop of stage.props) {
     // Gate posts are props so the simulation gives them colliders; they are
     // drawn with their gate, banner and all, rather than as another hazard.
-    if (prop.kind === 'gatePost' || prop.kind === 'signPost') continue;
+    if (prop.kind === 'gatePost') continue;
     // Piers are drawn with their bridge, along with the deck they carry.
     if (prop.kind === 'pier') continue;
     const list = byKind.get(prop.kind) ?? [];
@@ -1227,57 +1222,61 @@ export class SignsView {
   /** Which of them have been knocked over and must stop facing the camera. */
   private readonly down: boolean[] = [];
 
+  /** Where each post meets the ground, which is what it pivots about. */
+  private readonly feet: THREE.Vector3[] = [];
+  /** The `Signs.version` the meshes were last posed for. */
+  private posedAt = -1;
+
   private readonly q = new THREE.Quaternion();
+  private readonly spin = new THREE.Quaternion();
   private readonly up = new THREE.Vector3();
+  private readonly across = new THREE.Vector3();
   private readonly offset = new THREE.Vector3();
 
-  add(post: THREE.Mesh, board: THREE.Mesh): void {
+  add(post: THREE.Mesh, board: THREE.Mesh, foot: THREE.Vector3): void {
     this.group.add(post, board);
     this.posts.push(post);
     this.boards.push(board);
+    this.feet.push(foot);
     this.down.push(false);
   }
 
   /**
-   * Pose each sign from the body carrying it.
+   * Lay out the boards from the simulation's knocked-over state.
    *
-   * The body is centred on the post; the meshes are not, so both are placed by
-   * rotating their own offset from that centre. Get this wrong and a knocked
-   * sign pivots about its middle in mid-air instead of falling from its foot.
+   * Posed rather than simulated: `Signs` carries a 0..1 `fallen` and the
+   * direction it went, and this rotates post and board about the *foot* of the
+   * post. Rotating about the middle, which is what a rigid body's transform
+   * would give, leaves a board pivoting in mid-air instead of falling over.
+   *
+   * Only when something has actually changed. Forty boards re-posed every frame
+   * for an event that happens once or twice a lap is work for nothing, and
+   * `version` is what the simulation bumps when one goes over.
    */
-  sync(
-    props: readonly {
-      prop: { kind: PropKind };
-      body: {
-        translation(): { x: number; y: number; z: number };
-        rotation(): { x: number; y: number; z: number; w: number };
-      };
-    }[],
-  ): void {
-    let i = 0;
-    for (const entry of props) {
-      if (entry.prop.kind !== 'signPost') continue;
-      const post = this.posts[i];
-      const board = this.boards[i];
-      if (!post || !board) break;
-      const t = entry.body.translation();
-      const r = entry.body.rotation();
-      this.q.set(r.x, r.y, r.z, r.w);
+  sync(signs: Signs): void {
+    if (signs.version === this.posedAt) return;
+    this.posedAt = signs.version;
+    for (let i = 0; i < this.posts.length; i++) {
+      const state = signs.all[i];
+      const post = this.posts[i]!;
+      const board = this.boards[i]!;
+      if (!state) break;
+      if (state.fallen <= 0) continue;
+      this.down[i] = true;
 
-      // Once it has tipped past about 25 degrees it is down, and it stays down:
-      // a board that rights itself because the body wobbled back is worse than
-      // one that never fell.
-      this.up.set(0, 1, 0).applyQuaternion(this.q);
-      if (this.up.y < 0.9) this.down[i] = true;
-
-      this.offset.set(0, -0.05, 0).applyQuaternion(this.q);
-      post.position.set(t.x + this.offset.x, t.y + this.offset.y, t.z + this.offset.z);
-      post.quaternion.copy(this.q);
-
-      this.offset.set(0, 1.6, 0).applyQuaternion(this.q);
-      board.position.set(t.x + this.offset.x, t.y + this.offset.y, t.z + this.offset.z);
-      if (this.down[i]) board.quaternion.copy(this.q);
-      i++;
+      // About the foot, in the direction the car was going.
+      const tilt = state.fallen * Math.PI * 0.5;
+      this.q.setFromAxisAngle(this.up.set(0, 1, 0), state.knockedToward);
+      this.q.multiply(this.spin.setFromAxisAngle(this.across.set(1, 0, 0), tilt));
+      for (const [mesh, height] of [
+        [post, 0.95],
+        [board, 2.6],
+      ] as const) {
+        this.offset.set(0, height, 0).applyQuaternion(this.q);
+        const foot = this.feet[i]!;
+        mesh.position.set(foot.x + this.offset.x, foot.y + this.offset.y, foot.z + this.offset.z);
+        mesh.quaternion.copy(this.q);
+      }
     }
   }
 
@@ -1321,7 +1320,7 @@ function buildSigns(stage: Stage): SignsView {
     );
     board.position.set(sign.position.x, sign.position.y + 2.6, sign.position.z);
     board.rotation.y = sign.yaw;
-    view.add(post, board);
+    view.add(post, board, new THREE.Vector3(sign.position.x, sign.position.y, sign.position.z));
   }
   return view;
 }

@@ -62,6 +62,116 @@ const HIT_HALF_LENGTH = 2.2;
 const BASE_IMPULSE = 900;
 const IMPULSE_PER_MS = 70;
 
+/**
+ * Is this thing inside the car's footprint?
+ *
+ * Shared by the marker poles and the corner boards, because it is the same
+ * question about the same rectangle. Flattened to the ground plane: a post is
+ * either in the car's way or it is not, and its height has nothing to do with
+ * which.
+ */
+function insideFootprint(at: Vec3, carPosition: Vec3, carRotation: Quat): Vec3 | null {
+  const local = rotateInverse(carRotation, {
+    x: at.x - carPosition.x,
+    y: 0,
+    z: at.z - carPosition.z,
+  });
+  if (Math.abs(local.x) > HIT_HALF_WIDTH || Math.abs(local.z) > HIT_HALF_LENGTH) return null;
+  return local;
+}
+
+/** Where on the car a roadside post came down: its side, at bumper height. */
+function contactPoint(local: Vec3): Vec3 {
+  return v3(Math.sign(local.x) * 0.8, -0.15, Math.max(Math.min(local.z, 1.9), -1.9));
+}
+
+/**
+ * A corner board that has been driven into.
+ *
+ * Same treatment as the poles, and for the same reasons — but it arrived here
+ * the long way round, so the reasoning is worth keeping.
+ *
+ * The boards were pure decoration for a long time: a post two metres off the
+ * road that the car passed straight through. Giving them a *rigid body* fixed
+ * that and introduced something worse — every sign on the stage lying in the
+ * verge before the lights went green. A two-metre pole nine centimetres across
+ * is only marginally stable on a trimesh even when it is placed perfectly, and
+ * it was not being placed perfectly; and once tipped, a cylinder rolls.
+ *
+ * A rigid body was never the right tool. Forty of them per stage is a physics
+ * bill for something that is only ever brushed, and this file already had the
+ * answer for exactly that shape of problem. A swept check costs nothing, cannot
+ * fall over on its own, and gives the same answer.
+ */
+export interface FallenSign {
+  /** 0 upright, 1 flat. */
+  fallen: number;
+  /** Direction it was knocked, radians about Y. */
+  knockedToward: number;
+}
+
+export class Signs {
+  readonly all: FallenSign[] = [];
+  /** Bumped when one goes over, so the renderer knows to re-pose. */
+  version = 0;
+
+  /** Positions come from the stage; only the knocked-over state lives here. */
+  constructor(private readonly posts: readonly { position: Vec3; yaw: number }[]) {
+    for (const _ of posts) this.all.push({ fallen: 0, knockedToward: 0 });
+  }
+
+  /**
+   * Knock over any board the car is standing in, and report what it costs.
+   *
+   * A linear scan. There are a few dozen boards on a stage against eighty
+   * poles, and unlike the poles they are not on a fixed spacing, so there is no
+   * index to jump to — but the same measurement applies: this is a handful of
+   * rejected distance tests per step for an event that happens once or twice a
+   * lap.
+   */
+  strike(
+    carPosition: Vec3,
+    carVelocity: Vec3,
+    carRotation: Quat,
+  ): { impulse: number; at: Vec3 } | null {
+    const speed = Math.hypot(carVelocity.x, carVelocity.z);
+    for (let i = 0; i < this.posts.length; i++) {
+      const sign = this.all[i]!;
+      if (sign.fallen > 0) continue;
+      const local = insideFootprint(this.posts[i]!.position, carPosition, carRotation);
+      if (!local) continue;
+
+      sign.fallen = 0.001;
+      sign.knockedToward =
+        speed > 0.1 ? Math.atan2(carVelocity.x, carVelocity.z) : this.posts[i]!.yaw;
+      this.version++;
+      return { impulse: BASE_IMPULSE + speed * IMPULSE_PER_MS, at: contactPoint(local) };
+    }
+    return null;
+  }
+
+  /** Lay the knocked ones down over about a third of a second. */
+  update(dt: number): void {
+    for (const sign of this.all) {
+      if (sign.fallen <= 0 || sign.fallen >= 1) continue;
+      sign.fallen = Math.min(sign.fallen + dt * 3.2, 1);
+      this.version++;
+    }
+  }
+
+  reset(): void {
+    for (const sign of this.all) {
+      sign.fallen = 0;
+      sign.knockedToward = 0;
+    }
+    this.version++;
+  }
+
+  get flattened(): number {
+    return this.all.reduce((n, sign) => n + (sign.fallen > 0 ? 1 : 0), 0);
+  }
+}
+
 export class Markers {
   readonly all: Marker[] = [];
   /** Bumped when one goes over, so the renderer knows to rebuild its instances. */
@@ -116,26 +226,14 @@ export class Markers {
       const marker = this.all[i]!;
       if (marker.fallen > 0) continue;
 
-      const local = rotateInverse(carRotation, {
-        x: marker.position.x - carPosition.x,
-        y: 0,
-        z: marker.position.z - carPosition.z,
-      });
-      if (Math.abs(local.x) > HIT_HALF_WIDTH || Math.abs(local.z) > HIT_HALF_LENGTH) continue;
+      const local = insideFootprint(marker.position, carPosition, carRotation);
+      if (!local) continue;
 
       marker.fallen = 0.001;
       marker.knockedToward = speed > 0.1 ? Math.atan2(carVelocity.x, carVelocity.z) : marker.yaw;
       this.version++;
 
-      return {
-        impulse: BASE_IMPULSE + speed * IMPULSE_PER_MS,
-        // Where on the car it landed: the side it came down, at bumper height.
-        at: v3(
-          Math.sign(local.x) * 0.8,
-          -0.15,
-          Math.max(Math.min(local.z, 1.9), -1.9),
-        ),
-      };
+      return { impulse: BASE_IMPULSE + speed * IMPULSE_PER_MS, at: contactPoint(local) };
     }
     return null;
   }

@@ -17,12 +17,15 @@ import type { Handshake, Reply, Room } from './room.js';
 /**
  * Where the broker lives.
  *
- * Empty until one is deployed — see `server/README.md`. With no broker the game
- * still works exactly as it always has: the lobby falls back to the invite-code
- * paste, which needs no infrastructure and never stops working. That fallback
- * is not legacy, it is the floor this feature sits on.
+ * Empty means there is none, and that is a supported state rather than a broken
+ * one: the lobby falls back to the invite-code paste, which needs no
+ * infrastructure and never stops working. That fallback is not legacy, it is
+ * the floor this feature sits on — on a LAN with no internet, or on the day
+ * this service stops being paid for, it is what multiplayer still is.
+ *
+ * The worker is in `server/`; `server/README.md` says how to deploy your own.
  */
-export const ROOM_BROKER = '';
+export const ROOM_BROKER = 'https://rsc-rooms.rsc-rooms.workers.dev';
 
 /**
  * How long any one call is allowed to take, milliseconds.
