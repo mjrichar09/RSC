@@ -7,10 +7,18 @@ compatibility_date = "2026-01-01"
 [durable_objects]
 bindings = [{ name = "ROOMS", class_name = "Rooms" }]
 
-# `new_classes` rather than `new_sqlite_classes`: rooms are sixty seconds of
-# state held in memory and never written down, so there is no storage backend
-# to choose. Nothing here survives a restart, and nothing needs to — a lobby
-# that was mid-handshake reopens with a new code.
+# `new_sqlite_classes`, and not by choice: the free plan refuses a Durable Object
+# namespace created any other way ("you must create a namespace using a
+# `new_sqlite_classes` migration", API error 10097). This said `new_classes`
+# first, reasoning that rooms are sixty seconds of in-memory state that is never
+# written down so there is no storage backend to pick. That reasoning was fine
+# and the platform does not care about it.
+#
+# It changes nothing about how this works. The class still keeps its rooms in a
+# Map and still writes nothing; the SQLite backing is simply the storage engine
+# the namespace is provisioned with, and it goes unused. Nothing here survives a
+# restart and nothing needs to — a lobby that was mid-handshake reopens with a
+# new code.
 [[migrations]]
 tag = "v1"
-new_classes = ["Rooms"]
+new_sqlite_classes = ["Rooms"]
