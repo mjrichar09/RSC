@@ -184,6 +184,27 @@ await page.waitForSelector('.lobby.is-open [data-act="invite"]', { timeout: 20_0
 if (await page.$('.lobby-code')) throw new Error('a room code was shown with no room service');
 console.log('no broker configured: the lobby falls back to invite codes');
 
+// The update bar, which must be silent unless there is something to say.
+//
+// A false alarm is the worst thing this feature can do: the only action it
+// offers is a reload, and a reload that changes nothing teaches people to
+// ignore the bar. Two ways it has gone wrong already, both caught here — the
+// signature compared tags the dev server injects and so never matched, and the
+// bar's own `display: flex` outranked the browser's `[hidden] { display: none }`
+// so it was on screen permanently whatever the check decided.
+if (!(await page.$('.update-bar'))) throw new Error('the update bar is not in the page at all');
+if (await page.isVisible('.update-bar')) {
+  throw new Error('the update bar is showing with no newer build to report');
+}
+// And it can still be shown, so the check above is not passing for the wrong
+// reason — a bar that can never appear would satisfy it just as well.
+await page.$eval('.update-bar', (el) => ((el as HTMLElement).hidden = false));
+if (!(await page.isVisible('.update-bar'))) {
+  throw new Error('the update bar cannot be shown even when asked');
+}
+await page.$eval('.update-bar', (el) => ((el as HTMLElement).hidden = true));
+console.log('update bar: silent, and able to speak');
+
 console.log('OK — career, arcade and multiplayer all open from the front door.');
 await browser.close();
 await server.close();

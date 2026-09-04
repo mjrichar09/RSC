@@ -61,6 +61,7 @@ import { DebrisView } from './render/debrisView.js';
 import { WildlifeView } from './render/wildlifeView.js';
 import { Garage } from './ui/garage.js';
 import { MultiplayerPanel } from './ui/multiplayer.js';
+import { UpdateBanner, UpdateWatch } from './ui/update.js';
 import { StartMenu } from './ui/menu.js';
 import { ReplayUi } from './ui/replay.js';
 import { MultiplayerSession } from './game/multiplayer.js';
@@ -662,8 +663,30 @@ const params = new URLSearchParams(location.search);
     garage.setOpen(false);
     loadStage(pick.def.id, pick.variant.id);
   };
+  /**
+   * Is this page running an old build?
+   *
+   * The one file that can go stale is `index.html`; everything else is
+   * content-hashed. See `ui/update.ts` for why this is a poll rather than a
+   * cache header — the case it exists for is a phone returning to a tab that
+   * has been open for hours, which makes no request at all and so cannot be
+   * fixed by anything the server says.
+   */
+  const updates = new UpdateWatch();
+  const updateBanner = new UpdateBanner();
+  updates.start();
+
   menu.onMultiplayer = () => {
     garage.setOpen(false);
+    // Checked here above anywhere else, because this is where a stale build
+    // stops being cosmetic. An older copy has no room field on its join screen
+    // at all, so a player given a room code types it into the only box there
+    // is and gets told their invite code is unreadable — which is true, and
+    // useless. Forced, so the throttle cannot swallow the one check that
+    // matters.
+    void updates.check(true).then((stale) => {
+      if (stale) updateBanner.visible = true;
+    });
     multiplayer.setOpen(true);
   };
 
@@ -1901,6 +1924,11 @@ const params = new URLSearchParams(location.search);
     precipitation.update(dt, camera.focus, window.innerHeight / (2 * camera.effectiveViewSize));
 
     celebrations.update(dt);
+    // Not while somebody is driving: a bar across the screen mid-corner is a
+    // worse bug than the one it is reporting. Set every frame rather than on an
+    // event, because it has to go up when the race *ends* as well as when the
+    // update is first noticed, and the banner ignores a value it already has.
+    updateBanner.visible = updates.stale && race?.phase !== 'running';
     drawOnce(alpha, dt);
     // The visual harness waits on this, so the live loop has to set it too or
     // a garage screenshot waits for a frame that only the seek path reports.

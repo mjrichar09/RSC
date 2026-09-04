@@ -1871,3 +1871,48 @@ textarea, input { -webkit-user-select: text; user-select: text; }
 }
 .lobby button.primary:hover { filter: brightness(1.12); }
 .lobby button.primary:disabled { filter: none; opacity: 0.45; }
+
+
+/*
+ * The "there is a newer build" bar.
+ *
+ * Along the top rather than the bottom: the bottom edge of a phone is where the
+ * throttle and brake are, and a bar that moves them mid-race is worse than a
+ * stale build. Above everything else, because the one moment it matters is when
+ * a lobby is open over the top of the game.
+ */
+/*
+ * `display: flex` below outranks the browser's own `[hidden] { display: none }`
+ * — a rule in a stylesheet beats the user-agent one — so without this the bar
+ * is on screen permanently and the `hidden` property does nothing. Same family
+ * of trap as setting an SVG `fill` with `setAttribute` and having a stylesheet
+ * quietly win.
+ */
+.update-bar[hidden] { display: none; }
+.update-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 300;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  padding: calc(8px + env(safe-area-inset-top)) 14px 8px;
+  background: rgba(242, 193, 78, 0.94);
+  color: #1b2129;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+}
+.update-bar button {
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 3px;
+  background: #1b2129;
+  color: #f2c14e;
+  font: inherit;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+}

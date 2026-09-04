@@ -436,10 +436,49 @@ scannable as it grows; it is append-only.
 - **Setting SVG `fill` with `setAttribute`.** A stylesheet rule outranks a
   presentation attribute, so the damage panel's zones stayed green however
   wrecked the car was. Use `style.fill`.
+- **A stylesheet `display` that outranks `[hidden]`.** The browser hides an
+  element with `[hidden] { display: none }` from its own stylesheet, and *any*
+  author rule setting `display` beats it. The update bar was `display: flex`, so
+  its `hidden` property did nothing and the bar was on screen permanently. Same
+  family as the SVG `fill` above: an author rule quietly winning over the thing
+  that looks like it should be authoritative. Pair every `display` on a
+  toggleable element with its own `[hidden]` rule.
+- **A version check that compares more than the build.** `ui/update.ts` compares
+  only what is under `/assets/`, because the dev server injects its own client
+  script and rewrites tags — comparing every script and link meant the two sides
+  never matched and the "newer version" bar was up before anything had been
+  deployed. A false alarm is the worst outcome for that feature: the only action
+  it offers is a reload, and a reload that changes nothing teaches people to
+  ignore it.
 - **A cache key that does not carry everything on screen.** The HUD's split
   strip was rebuilt only when the split *count* changed, so a run stayed looking
   clean after driving round the outside of a checkpoint. If the markup depends
   on two things, the key has both.
+
+## Staying current
+
+The game is a static site with content-hashed assets, so the only file that can
+go stale is `index.html` — a fresh document guarantees fresh code, because a
+hashed filename nobody has requested cannot come from a cache.
+
+That is not really a caching problem though. GitHub Pages sends `max-age=600`,
+so an HTTP cache corrects itself in ten minutes; the case that actually caught
+somebody was a phone with the game open in a *background tab*, which makes no
+request at all on return and kept running hours-old JavaScript. No header fixes
+that, so `ui/update.ts` asks: it fetches the document with `cache: 'no-store'`
+and compares the hashed assets it names against the ones this page is running.
+
+- **A plain `location.reload()` is enough** — no hard refresh, which matters
+  because a hard refresh on a phone means digging through Settings. A reload
+  always revalidates the top-level document, and the new document names asset
+  URLs this browser has never requested. (`location.reload(true)` is deprecated
+  and ignored everywhere.)
+- **Checked on `visibilitychange`**, which is the case it exists for, and forced
+  when the lobby opens, which is where a stale build stops being cosmetic: an
+  older copy has no room field at all, so a player given a room code types it
+  into the invite box and is told their invite code is unreadable.
+- **Never automatic.** The bar offers a reload and waits; `main.ts` keeps it off
+  screen while a race is running.
 
 ## Multiplayer
 
