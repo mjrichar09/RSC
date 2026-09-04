@@ -468,6 +468,9 @@ export class MultiplayerPanel {
     if (this.busy) return;
     const code = normaliseRoomCode(typed);
     if (!code) {
+      // And the other way round: an invite code pasted into the room box. They
+      // are not close in length, so this is never a guess.
+      if (typed.trim().length > 20) return this.join(typed);
       this.say('That is not a room code — six characters, like K7F-M29.');
       return;
     }
@@ -494,6 +497,22 @@ export class MultiplayerPanel {
 
   private async join(code: string): Promise<void> {
     if (this.busy) return;
+    // A room code in the invite box is not a mistake worth an error message.
+    //
+    // The two are told apart trivially — one is six characters and the other is
+    // ninety-six — and a player who has been handed "RMX-2XU" and types it into
+    // whichever box is in front of them has done nothing wrong. Reported as
+    // "that invite code was not readable: invalid characters", which is true,
+    // useless, and says nothing about the box six lines above.
+    const asRoom = normaliseRoomCode(code);
+    if (asRoom) {
+      if (this.broker) return this.joinByRoom(asRoom);
+      this.say(
+        `${formatRoomCode(asRoom)} is a room code, and this copy of the game has no room ` +
+          'service to look it up in. Ask the host for an invite code instead.',
+      );
+      return;
+    }
     this.busy = true;
     this.say('Reading the invite…');
     try {

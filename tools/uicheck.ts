@@ -143,6 +143,35 @@ if (!(await page.$('[data-act="send-room"]'))) throw new Error('no way to send t
 if (!(await page.$('[data-act="invite"]'))) throw new Error('the invite-code fallback is gone');
 console.log(`room code: ${roomCode}`);
 
+// A room code typed into the *invite* box.
+//
+// This is not a hypothetical. It is what happens to anyone whose browser is
+// still serving a cached build with no room field, to anyone who opens the
+// fallback out of habit, and to anyone handed six characters who types them
+// into whichever box is in front of them. It used to answer "that invite code
+// was not readable: invalid characters" — true, useless, and silent about the
+// field six lines above it.
+// `screen=lobby` opens the host's side; the join screen is reached the way a
+// player reaches it.
+await page.goto('http://localhost:5181/?vision=0&drama=0&rooms=http://127.0.0.1:9/none');
+await page.waitForSelector('[data-action="multiplayer"]', { timeout: 20_000 });
+await page.click('[data-action="multiplayer"]');
+await page.waitForSelector('.lobby.is-open [data-act="join"]', { timeout: 10_000 });
+await page.click('[data-act="join"]');
+await page.waitForSelector('[data-act="room-in"]', { timeout: 10_000 });
+await page.$$eval('details', (els) => els.forEach((d) => ((d as HTMLDetailsElement).open = true)));
+await page.fill('[data-act="invite-in"]', 'RMX-2XU');
+await page.click('[data-act="use-invite"]');
+await page.waitForTimeout(600);
+const routed = ((await page.textContent('.lobby-status')) ?? '').trim();
+if (/not readable|invalid/i.test(routed)) {
+  throw new Error(`a room code in the invite box was rejected: "${routed}"`);
+}
+if (!/room/i.test(routed)) {
+  throw new Error(`a room code in the invite box went somewhere unexpected: "${routed}"`);
+}
+console.log(`room code in the invite box: ${routed}`);
+
 // And with no broker the lobby is exactly what it always was.
 //
 // An empty `?rooms=` is how that is reached now that one is configured by

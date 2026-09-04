@@ -452,6 +452,14 @@ consumer checking for a session — there are three of them, and the third
 (`mixer.duck`) was only ever safe by consequence. The K key is remembered while
 a session runs and applied on the way out.
 
+**Either code goes in either box.** A room code is six characters and an invite
+code is ninety-six, so telling them apart is trivial and refusing to is a real
+support cost: a player handed "RMX-2XU" types it into whichever field is in
+front of them, and the honest answer to that is to accept it, not to say "that
+invite code was not readable: invalid characters". It matters most for a client
+on a *cached* build whose join screen has no room field at all — the two paths
+have to stay usable from either end while a deploy propagates.
+
 **There are two ways into a race and the second does not replace the first.** A
 room code goes through the broker in `server/`; an invite code goes through the
 players, as it always did. The paste path is the floor — no infrastructure, works
