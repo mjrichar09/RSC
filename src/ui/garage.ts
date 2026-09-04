@@ -73,6 +73,9 @@ function stageThumb(def: StageDef): StageThumb {
 
 const money = (n: number): string => `${n < 0 ? '−' : ''}${Math.abs(n).toLocaleString('en-GB')}`;
 
+/** Which of the garage panels a narrow screen is showing. */
+type GarageTab = 'stages' | 'repairs' | 'car';
+
 export class Garage {
   private readonly root: HTMLElement;
   private readonly career: Career;
@@ -81,6 +84,16 @@ export class Garage {
   private open = false;
   /** Two-step, because there is no undo behind it. */
   private confirmingReset = false;
+  /**
+   * Which panel is on screen on a narrow one.
+   *
+   * Only ever consulted by the stylesheet — on a desktop all three sections are
+   * side by side and the tab bar is not rendered at all. That is deliberate:
+   * deciding by CSS media query rather than by measuring the window in
+   * JavaScript means there is no width to keep in sync, nothing to recompute on
+   * a rotate, and the wide layout is untouched by any of this.
+   */
+  private tab: GarageTab = 'stages';
 
   /** Raised when the player commits to a stage under particular conditions. */
   onEnter: ((target: RaceTarget) => void) | null = null;
@@ -108,6 +121,11 @@ export class Garage {
 
   private async handle(action: string, id: string): Promise<void> {
     switch (action) {
+      case 'tab': {
+        this.tab = id as GarageTab;
+        this.render();
+        return;
+      }
       case 'enter': {
         const target = this.career.targets().find((t) => this.career.keyFor(t) === id);
         if (target && this.career.canEnter(target).allowed) {
@@ -206,10 +224,11 @@ export class Garage {
           <div class="garage-money"><span>FUNDS</span><b>${money(this.career.money)}</b></div>
         </header>
         ${this.warningsPanel()}
-        <div class="garage-cols">
-          <section>${this.stagesPanel()}</section>
-          <section>${this.repairsPanel()}</section>
-          <section>${this.upgradesPanel()}${this.progressPanel()}${this.paintPanel()}</section>
+        ${this.tabBar()}
+        <div class="garage-cols" data-tab-active="${this.tab}">
+          <section data-tab="stages">${this.stagesPanel()}</section>
+          <section data-tab="repairs">${this.repairsPanel()}</section>
+          <section data-tab="car">${this.upgradesPanel()}${this.progressPanel()}${this.paintPanel()}</section>
         </div>
         <footer class="garage-foot">
           <span><b>1</b>–<b>${Math.min(9, this.career.targets().length)}</b> enter stage · <b>Esc</b> close · <b>drag</b> the car to turn it</span>
@@ -243,6 +262,33 @@ export class Garage {
    * end in an overheat. The player has to be able to make the repair decision
    * knowing what declining it costs.
    */
+  /**
+   * The tab bar, on a phone.
+   *
+   * Rendered always and hidden by the stylesheet above the breakpoint, so a
+   * window being resized needs no help from here. Stages first because it is
+   * the thing a player came to the garage to do; repairs second because it is
+   * the thing they cannot leave without.
+   */
+  private tabBar(): string {
+    const tabs: [GarageTab, string][] = [
+      ['stages', 'Next stage'],
+      ['repairs', 'Repairs'],
+      ['car', 'Car'],
+    ];
+    // The repair bill on the tab itself: on a phone the repairs panel is off
+    // screen, and "you owe 4 200" is exactly the thing that must not be.
+    const owed = this.career.repairBill().total;
+    return `<nav class="garage-tabs">${tabs
+      .map(([id, label]) => {
+        const badge = id === 'repairs' && owed > 0 ? ` <b>${money(owed)}</b>` : '';
+        return `<button data-action="tab" data-id="${id}" class="${
+          this.tab === id ? 'on' : ''
+        }">${label}${badge}</button>`;
+      })
+      .join('')}</nav>`;
+  }
+
   private warningsPanel(): string {
     const warnings = this.career.warnings();
     if (warnings.length === 0) return '';

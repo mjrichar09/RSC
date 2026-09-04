@@ -36,6 +36,21 @@ import {
 } from './math.js';
 
 const RPM_PER_RAD_S = 60 / (2 * Math.PI);
+/**
+ * How much of the brake the swapped pedal reaches in reverse.
+ *
+ * See `updateSteering`'s neighbour in the tire pass. Enough to stop a reversing
+ * car promptly, far short of an emergency stop, because in reverse the throttle
+ * and the brake trade places and a driver pressing on to drive away is not
+ * asking for one.
+ */
+const REVERSE_BRAKE = 0.45;
+
+/** Where reverse starts running out of pull, m/s. */
+const REVERSE_MAX_MPS = 4.5;
+/** How far past that it fades to nothing, m/s. */
+const REVERSE_FADE_MPS = 3.5;
+
 /** Rotational inertia of one wheel+hub assembly, kg·m². */
 const WHEEL_INERTIA = 1.2;
 /**
@@ -425,7 +440,20 @@ export class Vehicle {
     // Without this swap the car engages reverse and then brakes itself in place
     // forever, because any throttle input immediately reselects first gear.
     const inReverse = this.gearIndex === 0;
-    const driveInput = inReverse ? input.brake : input.throttle;
+    // Reverse is a manoeuvre, and it has to be limited like one. The reverse
+    // ratio is as short as first, so nothing stopped a driver holding the pedal
+    // and reaching 42 km/h backwards in three seconds — after which pressing on
+    // to drive away is an emergency stop from 42 km/h, and the discs recorded
+    // it honestly at several hundred degrees. Backing out of a ditch should not
+    // cook the brakes, and the fix is not to soften the brakes: it is to stop
+    // the car reaching a speed that needs them.
+    //
+    // Eased out rather than cut, so it reads as a car running out of gear
+    // instead of the throttle being taken away.
+    const reverseFade = inReverse
+      ? 1 - clamp((Math.abs(speed) - REVERSE_MAX_MPS) / REVERSE_FADE_MPS, 0, 1)
+      : 1;
+    const driveInput = (inReverse ? input.brake : input.throttle) * reverseFade;
     const brakeInput = inReverse ? input.throttle : input.brake;
 
     // A stalled engine makes nothing and brakes nothing: it is disconnected,
@@ -461,7 +489,15 @@ export class Vehicle {
       w.steer = front ? this.steerAngle : 0;
 
       const driveTorque = driveTorques[i]!;
-      const axleBrake = brakeInput * (front ? t.brakeBias : 1 - t.brakeBias) * 2;
+      // Reverse halves it. In reverse the pedals are swapped, so the throttle
+      // *is* the brake — and a driver shuffling backwards out of a ditch and
+      // then pressing on to leave was applying a full-pressure emergency stop
+      // to a car doing 15 m/s backwards. Physically that is real braking work
+      // and the discs recorded it honestly: 373 C from a manoeuvre nobody
+      // thought of as braking at all. Backing up is not a stop, and this is the
+      // one place in the game where the pedal does not mean what it says.
+      const pressure = inReverse ? brakeInput * REVERSE_BRAKE : brakeInput;
+      const axleBrake = pressure * (front ? t.brakeBias : 1 - t.brakeBias) * 2;
       const brakeTorque =
         t.brakeTorque * clamp(axleBrake, 0, 1) * fx.wheelBrake[i]! +
         (front ? 0 : t.handbrakeTorque * input.handbrake);

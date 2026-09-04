@@ -15,7 +15,13 @@
 import type { Spline } from './spline.js';
 import { type Quat, type Vec3, add, rotateInverse, scale, v3 } from './math.js';
 
-export type AnimalState = 'grazing' | 'alert' | 'bolting' | 'gone';
+/**
+ * `struck` is the one that lasts. A hit animal used to become `gone` in the
+ * same frame — it simply stopped being drawn, so the thing you just destroyed
+ * your car on vanished at the moment of impact and the replay showed a car
+ * crumpling for no reason. It is thrown now, and it stays where it lands.
+ */
+export type AnimalState = 'grazing' | 'alert' | 'bolting' | 'struck' | 'gone';
 
 export interface Animal {
   /** Distance along the stage where it started, metres. */
@@ -29,6 +35,20 @@ export interface Animal {
   yaw: number;
   /** 0..1 across the road, once bolting. */
   crossed: number;
+  /** Metres per second, while it is being thrown. */
+  velocity: Vec3;
+  /**
+   * Tumble about its own long axis, radians.
+   *
+   * A struck deer does not stay upright, and lying it flat is most of what
+   * makes the aftermath read as an aftermath. Kept separate from `yaw` so the
+   * renderer can turn it and tip it independently.
+   */
+  roll: number;
+  /** Tumble rate while airborne, radians per second. */
+  spin: number;
+  /** Where the ground is under it, so a thrown one knows when it has landed. */
+  groundY: number;
 }
 
 export interface WildlifeOptions {
@@ -126,6 +146,13 @@ export function strikeImpulse(speed: number): number {
   return STRIKE_KNEE + room * (1 - Math.exp(-(raw - STRIKE_KNEE) / room));
 }
 
+/** Upward kick given to a struck animal, m/s: enough to clear the bonnet. */
+const LAUNCH_UP = 3.5;
+/** Gravity for the throw, m/s². The world's own, since it is the same world. */
+const GRAVITY = 9.81;
+/** How fast a landed animal slides to a stop, per second. */
+const GROUND_DRAG = 3.2;
+
 /** How far ahead a deer notices the car and lifts its head, metres. */
 const ALERT_RANGE = 60;
 /** Distance at which a bolt would be pointless — it has already been passed. */
@@ -181,6 +208,10 @@ export class Wildlife {
         // coming up is a tell you can read at a glance.
         yaw: Math.atan2(sample.left.x * side, sample.left.z * side),
         crossed: 0,
+        velocity: v3(0, 0, 0),
+        roll: 0,
+        spin: 0,
+        groundY: sample.position.y,
       });
     }
   }
@@ -195,6 +226,11 @@ export class Wildlife {
   update(dt: number, carDistance: number, carSpeed: number): void {
     for (const animal of this.animals) {
       if (animal.state === 'gone') continue;
+
+      if (animal.state === 'struck') {
+        this.fly(animal, dt);
+        continue;
+      }
 
       const ahead = animal.distance - carDistance;
       const sample = this.spline.at(animal.distance);
@@ -246,7 +282,11 @@ export class Wildlife {
     carRotation: Quat,
   ): { impulse: number; push: Vec3 } | null {
     for (const animal of this.animals) {
-      if (animal.state === 'gone') continue;
+      // Already hit, or gone. A struck animal is scenery from that moment: it
+      // is thrown down the road ahead of you and may well land on the racing
+      // line, and being billed for it a second time on the way past is not a
+      // second accident.
+      if (animal.state === 'struck' || animal.state === 'gone') continue;
       // The car's actual footprint, not a circle around its centre: a circle
       // wide enough to reach the nose also "hits" a deer standing a metre clear
       // of the door, which is a strike the player can see they avoided.
@@ -257,8 +297,21 @@ export class Wildlife {
       });
       if (Math.abs(local.x) > HIT_HALF_WIDTH || Math.abs(local.z) > HIT_HALF_LENGTH) continue;
 
-      animal.state = 'gone';
       const speed = Math.hypot(carVelocity.x, carVelocity.z);
+      animal.state = 'struck';
+      // Thrown along the car's own direction and up over the bonnet. A deer
+      // weighs a fraction of a car, so it leaves considerably faster than the
+      // car arrived — but not so much faster that it disappears before anyone
+      // has seen what happened.
+      const along = speed > 0.1 ? speed : 4;
+      animal.velocity = v3(
+        (carVelocity.x / Math.max(speed, 0.001)) * along * 0.75,
+        LAUNCH_UP + along * 0.18,
+        (carVelocity.z / Math.max(speed, 0.001)) * along * 0.75,
+      );
+      // Tumbling. Signed off the seed so a replay throws it the same way twice.
+      animal.spin = (this.random() - 0.5) * 9;
+      animal.groundY = animal.position.y;
       return {
         impulse: strikeImpulse(speed),
         // Pushed along the car's own travel: the deer goes over the bonnet.
@@ -266,6 +319,36 @@ export class Wildlife {
       };
     }
     return null;
+  }
+
+  /**
+   * A struck animal, in the air and then on the ground.
+   *
+   * Ballistic and then still. Deliberately not a rigid body: it is scenery from
+   * the moment it is hit — nothing collides with it again, nothing reads its
+   * position, and one more body in the broadphase for something that lands once
+   * and lies there would be a physics bill for a visual.
+   */
+  private fly(animal: Animal, dt: number): void {
+    const landed = animal.position.y <= animal.groundY + 0.01 && animal.velocity.y <= 0;
+    if (landed) {
+      // Down, and settling. It keeps sliding for a moment because it arrived
+      // with a great deal of speed, then stops for good.
+      animal.position.y = animal.groundY;
+      animal.velocity.y = 0;
+      const drag = Math.max(1 - GROUND_DRAG * dt, 0);
+      animal.velocity.x *= drag;
+      animal.velocity.z *= drag;
+      animal.spin *= drag;
+      // Flat on its side, reached quickly and then held.
+      animal.roll += (Math.PI / 2 - animal.roll) * Math.min(6 * dt, 1);
+    } else {
+      animal.velocity.y -= GRAVITY * dt;
+      animal.roll += animal.spin * dt;
+    }
+    animal.position.x += animal.velocity.x * dt;
+    animal.position.y += animal.velocity.y * dt;
+    animal.position.z += animal.velocity.z * dt;
   }
 
   /** Animals worth drawing: everything that has not left the scene. */
@@ -279,6 +362,10 @@ export class Wildlife {
       const offset = sample.width * VERGE_OFFSET;
       animal.state = 'grazing';
       animal.crossed = 0;
+      animal.velocity = v3(0, 0, 0);
+      animal.roll = 0;
+      animal.spin = 0;
+      animal.groundY = sample.position.y;
       animal.position = add(sample.position, scale(sample.left, offset * animal.side));
       animal.yaw = Math.atan2(sample.left.x * animal.side, sample.left.z * animal.side);
     }

@@ -657,8 +657,50 @@ html, body {
   margin-top: 22px;
   align-items: start;
 }
+/*
+ * On a narrow screen the three columns become three *views* rather than one
+ * long stack. Stacked, the garage was several screens of scrolling to get from
+ * the repair bill to the stage list — on a phone, the two things you came for
+ * were the furthest apart.
+ *
+ * Switched entirely in CSS, from one attribute the panel sets. Nothing here
+ * measures the window, so a rotate needs no handler and the wide layout is
+ * untouched.
+ */
+.garage-tabs { display: none; }
+
 @media (max-width: 1000px) {
   .garage-cols { grid-template-columns: 1fr; }
+
+  .garage-tabs {
+    display: flex;
+    gap: 6px;
+    margin-top: 16px;
+  }
+  .garage-tabs button {
+    flex: 1;
+    padding: 11px 6px;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.25);
+    color: var(--dim);
+  }
+  .garage-tabs button.on {
+    background: rgba(242, 193, 78, 0.14);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  /* The amount owed, on the tab, because the panel saying so is off screen. */
+  .garage-tabs button b { color: var(--bad, #e8552f); font-weight: 700; }
+
+  .garage-cols > section { display: none; }
+  .garage-cols[data-tab-active='stages'] > [data-tab='stages'],
+  .garage-cols[data-tab-active='repairs'] > [data-tab='repairs'],
+  .garage-cols[data-tab-active='car'] > [data-tab='car'] {
+    display: block;
+  }
 }
 
 .garage h3 {

@@ -596,6 +596,14 @@ Two lifetime bugs, both of which read as "multiplayer is broken":
 
 ## Mobile
 
+**The garage is three tabbed views below 1000 px, not one long stack.** Stacked,
+the two things a player comes to the garage for — the repair bill and the stage
+list — were the furthest apart on the page. The switch is entirely in CSS from
+one attribute, so nothing measures the window and the wide layout is untouched;
+`mobilecheck` asserts exactly one panel is visible at a time and that each tab
+reaches its own.
+
+
 The game is played on a phone in landscape, and the checks for it live in
 `npm run mobilecheck`: an 844x390 viewport, real touch events, no keyboard.
 Three things there are easy to get wrong:
@@ -614,6 +622,13 @@ Three things there are easy to get wrong:
   the simulation, so drawing fewer on a phone leaves invisible things to hit.
   A stage is the same stage on every device; the levers are shadows, pixels,
   particles and the windscreen pass.
+- **`setViewportSize` is not a way to test another orientation.** It drives the
+  real browser window and headless Chrome refuses it outright — "to resize
+  minimized/maximized/fullscreen window, restore it to normal state first" —
+  which killed the whole `mobilecheck` run before it reported anything. Open a
+  second context at the size you want. And the touch layer stays off until a
+  `pointerdown` with `pointerType: 'touch'` arrives, so a fresh context has no
+  thumb controls and no rotate prompt until one is dispatched.
 - **Fill rate is what a phone runs out of first**, so the adaptive
   `RenderScale` multiplies the *pixel ratio* rather than the CSS size — the
   canvas stays put and is drawn into fewer pixels. It counts *consecutive*

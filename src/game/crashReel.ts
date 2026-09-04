@@ -53,6 +53,8 @@ const PART_STATE: PartState[] = ['attached', 'dragging', 'gone'];
 export interface ReelAnimal {
   position: Vec3;
   yaw: number;
+  /** Tumble, so a struck animal is lying down in the replay as it was. */
+  roll: number;
   /** True once it has been hit, so the renderer can drop it as the sim does. */
   gone: boolean;
 }
@@ -230,6 +232,7 @@ export class CrashReel {
       animals: animals.map((a) => ({
         position: { ...a.position },
         yaw: a.yaw,
+        roll: a.roll,
         gone: a.state === 'gone',
       })),
     };

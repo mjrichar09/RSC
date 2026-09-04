@@ -202,17 +202,75 @@ try {
     }
   }
   console.log(`menus fit or scroll: ${panels.map((p) => p.sel).join(', ') || 'none open'}`);
+
+  // The garage becomes three views on a phone rather than one long stack.
+  //
+  // Stacked, the two things a player comes to the garage for — the repair bill
+  // and the stage list — were the furthest apart on the page, several screens
+  // of scrolling between them. Worth checking here because the desktop layout
+  // shows all three at once and would never notice this breaking.
+  // Into the garage, which is where the tabs are. The menu is what opens on the
+  // pause button; career is one tap further in.
+  if (await page.$('[data-action="career"]')) {
+    await page.locator('[data-action="career"]').tap();
+    await page.waitForSelector('.garage.is-open', { timeout: 8000 });
+  }
+  if (await page.$('.garage.is-open')) {
+    const tabs = await page.$$('.garage-tabs button');
+    if (tabs.length !== 3) fail(`the garage shows ${tabs.length} tabs on a phone, not 3`);
+    const shown = async () =>
+      page.evaluate(`(() => Array.from(document.querySelectorAll('.garage-cols > section'))
+        .filter((el) => getComputedStyle(el).display !== 'none')
+        .map((el) => el.getAttribute('data-tab')))()`) as Promise<string[]>;
+    if ((await shown()).length !== 1) {
+      fail(`the garage is showing ${(await shown()).length} panels at once on a phone`);
+    }
+    // And each tab reaches its own panel.
+    for (const want of ['repairs', 'car', 'stages']) {
+      await page.locator(`.garage-tabs button[data-id="${want}"]`).tap();
+      const now = await shown();
+      if (now.length !== 1 || now[0] !== want) {
+        fail(`tapping "${want}" showed ${JSON.stringify(now)}`);
+      }
+    }
+    console.log('garage: three tabs, one panel at a time, each reachable');
+  }
   await page.screenshot({ path: 'shots/mobile-menu.png' });
 
   // Portrait. There is no layout for it and there should not be — a portrait
   // phone is narrower than the car is on screen — so the one thing that has to
   // happen is that the player is told which way up to hold it.
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.waitForTimeout(300);
-  const rotate = await page.locator('.rotate-me.is-on').isVisible();
-  if (!rotate) fail('a portrait phone gets no prompt to turn it');
+  //
+  // A second context rather than resizing this one. `setViewportSize` drives
+  // the browser window, and headless Chrome refuses it outright — "to resize
+  // minimized/maximized/fullscreen window, restore it to normal state first" —
+  // so this check has been killing the whole run before it could report
+  // anything. A context is created at the size it wants and never resized.
+  const upright = await browser.newContext({
+    ...phone,
+    viewport: { width: 390, height: 844 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  const tall = await upright.newPage();
+  await tall.goto('http://localhost:5185/?drama=0&quality=low', { waitUntil: 'domcontentloaded' });
+  await tall.waitForSelector('#view', { timeout: 20_000 });
+  // The touch layer stays off until something touches it — a desktop with a
+  // mouse should never get thumb controls — so the prompt does not exist until
+  // the player has actually touched the screen. One tap is what a real player
+  // does first anyway.
+  // A `pointerdown` with `pointerType: 'touch'`, which is exactly what
+  // `main.ts` listens for. Dispatched rather than aimed, because in portrait
+  // the menu covers the canvas and the point is only to tell the game a finger
+  // exists — which on a real phone the first tap does anyway.
+  await tall.evaluate(`(() => {
+    window.dispatchEvent(new PointerEvent('pointerdown', { pointerType: 'touch', bubbles: true }));
+  })()`);
+  await tall.waitForSelector('.rotate-me.is-on', { timeout: 15_000 }).catch(() => {
+    fail('a portrait phone gets no prompt to turn it');
+  });
   console.log('portrait asks for the phone to be turned');
-  await page.setViewportSize({ width: 844, height: 390 });
+  await upright.close();
 
   console.log('OK — it plays on a phone. shots/mobile.png');
 } finally {

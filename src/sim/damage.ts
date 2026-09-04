@@ -380,12 +380,29 @@ export function impactPointFromForce(localForceDirection: Vec3): Vec3 {
  * 145 km/h puts about 300 kJ into each front disc, which is a 110 K rise, and
  * two or three of those in quick succession is what it takes to see any glow.
  */
-const DISC_HEAT_CAPACITY = 1500;
+// 1500 before. Lower is hotter for the same work, and the discs needed to be:
+// fade begins at 520 C and a full `--trace=stops` run peaked at 175, so the
+// fade model existed and could not be reached by driving.
+const DISC_HEAT_CAPACITY = 950;
+
+/**
+ * The hottest a disc is allowed to get, °C.
+ *
+ * Iron gives up long before this and the model has nothing to say past it, so
+ * without a ceiling an unusual case just runs away — a reverse manoeuvre was
+ * reading 1484 C, which is a number about nothing. Above the glow's own top end
+ * so a disc can still saturate the effect before it saturates the model.
+ */
+const DISC_MAX_C = 900;
 /** Fraction of the friction work that lands in the disc rather than the pad, air and tyre. */
 const DISC_ABSORPTION = 0.85;
 /** Convective loss, watts per kelvin: a standing term plus airflow with speed. */
-const DISC_COOL_BASE = 4;
-const DISC_COOL_PER_MPS = 0.35;
+// Both raised: 4 and 0.35 before. A disc that has been worked hard should come
+// back within a corner or two of not using it, and the old pair left heat
+// sitting there for most of a stage — so the first hard braking zone decided
+// how the rest of the lap went.
+const DISC_COOL_BASE = 7;
+const DISC_COOL_PER_MPS = 0.85;
 /** Ambient air, °C, at the two ends of `ambientTemperature()`. */
 const AMBIENT_COLD = 0;
 const AMBIENT_HOT = 30;
@@ -810,9 +827,10 @@ export class DamageModel {
       const c = corners[i];
       const power = c ? Math.abs(c.torque * c.spin) * DISC_ABSORPTION : 0;
       const loss = (this.brakeTemp[i]! - this.ambientC) * airflow;
-      this.brakeTemp[i] = Math.max(
-        this.ambientC,
+      this.brakeTemp[i] = clamp(
         this.brakeTemp[i]! + ((power - loss) / DISC_HEAT_CAPACITY) * dt,
+        this.ambientC,
+        DISC_MAX_C,
       );
     }
   }

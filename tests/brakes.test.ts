@@ -50,15 +50,33 @@ describe('brake heat', () => {
     expect(run.temps[0]!).toBeGreaterThan(run.temps[2]!);
   });
 
-  it('cools on the straight that follows, and slowly', () => {
-    // Time constant is mass over airflow: about 80 s at 40 m/s. A disc that
-    // shed its heat in a corner's worth of straight could never accumulate
-    // over a stage, which is the whole point of modelling it.
+  it('cools on the straight that follows, without wiping the slate', () => {
+    // Both halves matter and they pull against each other. Discs that shed
+    // everything in one straight can never accumulate over a stage, which is
+    // the whole point of modelling them — but the old rate was so slow that the
+    // first braking zone decided how the rest of the lap went, and heat sat
+    // there for most of a stage with nothing the driver could do about it.
+    //
+    // Twenty seconds at 40 m/s is a long straight. It should take a real bite
+    // out of a hot disc and still leave it hot.
     const damage = new DamageModel({ ambient: 0.8 });
     damage.brakeTemp.fill(400);
     for (let i = 0; i < 120 * 20; i++) damage.updateBrakes(1 / 120, [], 40);
-    expect(damage.brakeTemp[0]!).toBeLessThan(340);
-    expect(damage.brakeTemp[0]!).toBeGreaterThan(250);
+    expect(damage.brakeTemp[0]!).toBeLessThan(240);
+    expect(damage.brakeTemp[0]!).toBeGreaterThan(120);
+    // And it is nowhere near cold: the next braking zone starts from here.
+    expect(damage.brakeTemp[0]!).toBeGreaterThan(damage.ambientC + 60);
+  });
+
+  it('never runs away past what a disc can physically reach', () => {
+    // Unbounded, a reverse manoeuvre was reading 1484 C — a number about
+    // nothing. Iron gives up long before this and the model has nothing to say
+    // past it.
+    const damage = new DamageModel({ ambient: 0.8 });
+    for (let i = 0; i < 120 * 60; i++) {
+      damage.updateBrakes(1 / 120, [0, 1, 2, 3].map(() => ({ torque: 2400, spin: 120 })), 40);
+    }
+    for (const t of damage.brakeTemp) expect(t).toBeLessThanOrEqual(900);
   });
 
   it('makes no heat in a locked wheel, because the caliper does no work', () => {

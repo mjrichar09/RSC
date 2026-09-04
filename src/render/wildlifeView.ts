@@ -76,7 +76,9 @@ export class WildlifeView {
    * a car swerving at nothing and crumpling for no reason. The reel keeps where
    * each animal stood; this puts them back.
    */
-  updateFromReel(animals: readonly { position: Vec3; yaw: number; gone: boolean }[]): void {
+  updateFromReel(
+    animals: readonly { position: Vec3; yaw: number; roll: number; gone: boolean }[],
+  ): void {
     for (let i = 0; i < this.deer.length; i++) {
       const view = this.deer[i]!;
       const animal = animals[i];
@@ -89,7 +91,7 @@ export class WildlifeView {
       }
       view.root.visible = true;
       view.root.position.set(animal.position.x, animal.position.y, animal.position.z);
-      view.root.rotation.y = animal.yaw;
+      view.root.rotation.set(0, animal.yaw, animal.roll, 'YZX');
       // Head up. An animal in the second before a crash has seen the car; a
       // grazing deer in a crash replay would be the wrong picture even if the
       // reel recorded the pose, which it deliberately does not.
@@ -109,7 +111,11 @@ export class WildlifeView {
 
       view.root.visible = true;
       view.root.position.set(animal.position.x, animal.position.y, animal.position.z);
-      view.root.rotation.y = animal.yaw;
+      // Yaw then roll: a struck animal tumbles about its own long axis and ends
+      // up lying on its side, which is most of what makes the aftermath read as
+      // one. `rotation.order` matters here — applied the other way round it
+      // spins about the world's axis and cartwheels.
+      view.root.rotation.set(0, animal.yaw, animal.roll, 'YZX');
 
       // Head down to graze, up the moment it has seen you. The tint shifts with
       // it, because a silhouette alone is hard to read against a dark verge at
