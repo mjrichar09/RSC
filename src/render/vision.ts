@@ -134,7 +134,12 @@ const COMPOSITE = /* glsl */ `
     float alignment = dot(direction, normalize(vec2(uForward.x * uAspect, uForward.y)));
     float angle = acos(clamp(alignment, -1.0, 1.0));
     float inCone = 1.0 - smoothstep(uAngle * 0.55, uAngle, angle);
-    float inRange = 1.0 - smoothstep(uReach * 0.45, uReach, distance);
+    // The max() is not a nicety. Dead headlights send uReach to exactly 0,
+    // and smoothstep(0.0, 0.0, d) divides by zero — GLSL says nothing about
+    // the result, and a driver that returns 0 there would make inRange 1
+    // everywhere and light the *whole screen* at the moment the lights failed.
+    // Same family as the crossed-edge trap this file already carries.
+    float inRange = 1.0 - smoothstep(uReach * 0.45, max(uReach, 1e-4), distance);
     // The car itself. Not a pool of light — a hole in the whole effect: the
     // car has to stay sharp and legible whatever the weather is doing, because
     // its bodywork is where damage is read, and a blurred dark car in the rain

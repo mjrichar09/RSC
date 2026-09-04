@@ -186,8 +186,13 @@ describe('the headlight cone', () => {
     const broken = run(new Vision(), 1, { ...night, lightHealth: 0 });
     expect(broken.coneReach).toBeLessThan(good.coneReach);
     expect(broken.coneAngle).toBeLessThan(good.coneAngle);
-    // Never nothing: a car with dead lights still sees the road under itself.
-    expect(broken.coneReach).toBeGreaterThan(0.2);
+    // And dead lights leave *nothing*. This used to floor at a third of a cone,
+    // so a car with both headlights destroyed still lit forty metres of road on
+    // a night stage — which made the lights the one component whose loss cost
+    // the driver nothing at all. The screen does not go black: the windscreen
+    // shader keeps a floor under it, because a driver's eyes adapt and an unlit
+    // rectangle is not difficulty.
+    expect(broken.coneReach).toBe(0);
   });
 });
 

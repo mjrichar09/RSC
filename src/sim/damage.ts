@@ -52,6 +52,20 @@ export interface ComponentDef {
   scale: number;
   /** Cost to repair from destroyed to new. */
   repairCost: number;
+  /**
+   * True when the body is not between this and the outside world.
+   *
+   * The wheel corners — suspension, hub, tyre, brake — are loaded straight
+   * through the tyre contact patch, so a landing or a kerb reaches them with no
+   * panel in the way. Everything else on the car is behind bodywork, and the
+   * bodywork absorbs for it.
+   *
+   * Missed on the first pass, and `tests/debris.test.ts` caught it: shielding
+   * the whole caged set meant a landing hard enough to fold a corner did no
+   * damage at all, because a wing it never touched had soaked up the entire
+   * impact.
+   */
+  exposed?: boolean;
   /** Whether a rollcage protects it. Panels and glass are not protected. */
   caged: boolean;
 }
@@ -81,7 +95,8 @@ const corner = (
   scale: number,
   repairCost: number,
   reach = 1.0,
-): ComponentDef => ({ id, label, at, reach, threshold, scale, repairCost, caged: true });
+  exposed = false,
+): ComponentDef => ({ id, label, at, reach, threshold, scale, repairCost, caged: true, exposed });
 
 /**
  * Thresholds and scales are in newton-seconds, calibrated with `npm run crash`
@@ -95,26 +110,34 @@ const corner = (
  */
 export const COMPONENTS: ComponentDef[] = [
   // Drivetrain. Deep in the car, so it takes a serious hit to reach.
-  corner('engine', 'Engine', v3(0, -0.1, 1.5), 17000, 17000, 4200, 1.8),
+  // Scale 14000 rather than 17000. With the body now absorbing the first seven
+  // thousand newton-seconds, a flat-out frontal at the fastest speed any stage
+  // reaches left the engine alive at 14% — so ending a race outright required
+  // an impact the game could not actually produce. It seizes from about
+  // 118 km/h now, which is a straight taken flat into something solid: rare,
+  // reachable, and entirely the driver's doing.
+  corner('engine', 'Engine', v3(0, -0.1, 1.5), 17000, 14000, 3150, 1.8),
   // The radiator sits in front of everything and is made of foil.
-  corner('cooling', 'Radiator', v3(0, -0.15, 1.92), 7500, 16000, 620, 1.1),
-  corner('turbo', 'Turbo', v3(0.4, 0.05, 1.25), 16000, 28000, 1800, 0.9),
-  corner('transmission', 'Gearbox', v3(0, -0.2, 0.6), 19000, 34000, 2600, 1.1),
-  corner('driveshaft', 'Driveshaft', v3(0, -0.32, 0), 26000, 22000, 1400, 1.6),
-  corner('differential', 'Differential', v3(0, -0.3, -1.25), 19000, 34000, 1900, 1.0),
+  corner('cooling', 'Radiator', v3(0, -0.15, 1.92), 7500, 16000, 465, 1.1),
+  corner('turbo', 'Turbo', v3(0.4, 0.05, 1.25), 16000, 28000, 1350, 0.9),
+  corner('transmission', 'Gearbox', v3(0, -0.2, 0.6), 19000, 34000, 1950, 1.1),
+  corner('driveshaft', 'Driveshaft', v3(0, -0.32, 0), 26000, 22000, 1050, 1.6),
+  corner('differential', 'Differential', v3(0, -0.3, -1.25), 19000, 34000, 1425, 1.0),
   // The rack was tough enough to be theoretical: measured with `npm run crash`
   // it survived a 95 km/h nose-on impact at 87%, which is a 1.5° pull nobody
   // will ever notice. It sits across the front subframe behind a radiator made
   // of foil, and a hit hard enough to fold the nose bends it. Widened too, so a
   // corner strike on a front wheel reaches it — that is how racks actually die.
-  corner('steering', 'Steering rack', v3(0, -0.24, 1.15), 8500, 17000, 1100, 1.45),
-  corner('fuelLine', 'Fuel line', v3(0, -0.32, -0.8), 15000, 26000, 340, 1.0),
-  corner('lights', 'Lights', v3(0, 0.12, 1.94), 4000, 9000, 260, 0.9),
+  corner('steering', 'Steering rack', v3(0, -0.24, 1.15), 8500, 17000, 825, 1.45),
+  corner('fuelLine', 'Fuel line', v3(0, -0.32, -0.8), 15000, 26000, 255, 1.0),
+  corner('lights', 'Lights', v3(0, 0.12, 1.94), 4000, 9000, 195, 0.9),
 
   // Suspension, hubs, tyres and brakes: one of each per corner, all clustered
   // at the wheel so a corner impact takes several of them together.
   ...(['FL', 'FR', 'RL', 'RR'] as const).flatMap((c) => [
-    corner(`suspension${c}` as ComponentId, `Suspension ${c}`, WHEEL_AT[c], 9000, 20000, 880, 0.95),
+    // The wheel corners take their load through the contact patch, so `exposed`:
+    // no panel stands between a kerb or a landing and any of them.
+    corner(`suspension${c}` as ComponentId, `Suspension ${c}`, WHEEL_AT[c], 9000, 20000, 660, 0.95, true),
     // 24000/24000 before, which made losing a wheel theoretical. Measured: no
     // impact under about 50 000 N·s destroyed a hub, the hardest wall strike
     // the game can produce is 45 000 at 130 km/h, and every impulse that did
@@ -125,36 +148,46 @@ export const COMPONENTS: ComponentDef[] = [
     // finish on three wheels, not another way to be told the race has ended.
     // A nose-on shunt still kills the engine first, because the engine is
     // where the nose is.
-    corner(`hub${c}` as ComponentId, `Hub ${c}`, WHEEL_AT[c], 15000, 14000, 1250, 1.0),
-    corner(`tyre${c}` as ComponentId, `Tyre ${c}`, WHEEL_AT[c], 7000, 16000, 310, 0.85),
-    corner(`brake${c}` as ComponentId, `Brake ${c}`, WHEEL_AT[c], 13000, 26000, 540, 0.85),
+    // 15000/14000 before, and the body shield then put another 7000 in front of
+    // it — so a wheel came off only in impacts that had already seized the
+    // engine, which is a wheel nobody ever drives away without. Set so a hard
+    // corner strike takes that corner and leaves the car running.
+    corner(`hub${c}` as ComponentId, `Hub ${c}`, WHEEL_AT[c], 15000, 13000, 938, 1.05, true),
+    corner(`tyre${c}` as ComponentId, `Tyre ${c}`, WHEEL_AT[c], 7000, 16000, 232, 0.85, true),
+    corner(`brake${c}` as ComponentId, `Brake ${c}`, WHEEL_AT[c], 13000, 26000, 405, 0.85, true),
   ]),
 
   // Body panels: cheap, fragile, and the first thing you notice.
-  { id: 'panelFront', label: 'Front panel', at: v3(0, 0, 1.9), reach: 1.5, threshold: 4200, scale: 20000, repairCost: 520, caged: false },
-  { id: 'panelRear', label: 'Rear panel', at: v3(0, 0, -1.9), reach: 1.5, threshold: 4200, scale: 20000, repairCost: 480, caged: false },
-  { id: 'panelLeft', label: 'Left flank', at: v3(0.84, 0, 0), reach: 1.25, threshold: 4200, scale: 20000, repairCost: 420, caged: false },
-  { id: 'panelRight', label: 'Right flank', at: v3(-0.84, 0, 0), reach: 1.25, threshold: 4200, scale: 20000, repairCost: 420, caged: false },
-  { id: 'panelRoof', label: 'Roof', at: v3(0, 0.46, 0), reach: 1.6, threshold: 5000, scale: 21000, repairCost: 560, caged: false },
-  { id: 'panelFloor', label: 'Floor', at: v3(0, -0.46, 0), reach: 1.6, threshold: 9000, scale: 28000, repairCost: 700, caged: false },
+  { id: 'panelFront', label: 'Front panel', at: v3(0, 0, 1.9), reach: 1.5, threshold: 4200, scale: 20000, repairCost: 390, caged: false },
+  { id: 'panelRear', label: 'Rear panel', at: v3(0, 0, -1.9), reach: 1.5, threshold: 4200, scale: 20000, repairCost: 360, caged: false },
+  { id: 'panelLeft', label: 'Left flank', at: v3(0.84, 0, 0), reach: 1.25, threshold: 4200, scale: 20000, repairCost: 315, caged: false },
+  { id: 'panelRight', label: 'Right flank', at: v3(-0.84, 0, 0), reach: 1.25, threshold: 4200, scale: 20000, repairCost: 315, caged: false },
+  { id: 'panelRoof', label: 'Roof', at: v3(0, 0.46, 0), reach: 1.6, threshold: 5000, scale: 21000, repairCost: 420, caged: false },
+  { id: 'panelFloor', label: 'Floor', at: v3(0, -0.46, 0), reach: 1.6, threshold: 9000, scale: 28000, repairCost: 525, caged: false },
 
   // Bolt-on panels: cheaper than the structure behind them, fragile, and each
   // one is somewhere you can point at on the car. A bonnet is a bigger target
   // than a mirror and takes more to shift; a mirror goes if you brush anything.
-  { id: 'bonnet', label: 'Bonnet', at: v3(0, 0.3, 1.25), reach: 1.15, threshold: 4000, scale: 15000, repairCost: 380, caged: false },
-  { id: 'boot', label: 'Boot lid', at: v3(0, 0.28, -1.35), reach: 1.1, threshold: 4000, scale: 15000, repairCost: 340, caged: false },
-  { id: 'wingFL', label: 'Front wing L', at: v3(0.82, 0.05, 1.3), reach: 1.0, threshold: 3600, scale: 14000, repairCost: 300, caged: false },
-  { id: 'wingFR', label: 'Front wing R', at: v3(-0.82, 0.05, 1.3), reach: 1.0, threshold: 3600, scale: 14000, repairCost: 300, caged: false },
-  { id: 'quarterRL', label: 'Rear quarter L', at: v3(0.82, 0.05, -1.3), reach: 1.0, threshold: 3600, scale: 14000, repairCost: 300, caged: false },
-  { id: 'quarterRR', label: 'Rear quarter R', at: v3(-0.82, 0.05, -1.3), reach: 1.0, threshold: 3600, scale: 14000, repairCost: 300, caged: false },
-  { id: 'doorL', label: 'Left door', at: v3(0.86, 0.08, -0.05), reach: 1.0, threshold: 4400, scale: 16000, repairCost: 460, caged: false },
-  { id: 'doorR', label: 'Right door', at: v3(-0.86, 0.08, -0.05), reach: 1.0, threshold: 4400, scale: 16000, repairCost: 460, caged: false },
-  { id: 'mirrorL', label: 'Mirror L', at: v3(0.95, 0.4, 0.5), reach: 0.7, threshold: 1800, scale: 6000, repairCost: 90, caged: false },
-  { id: 'mirrorR', label: 'Mirror R', at: v3(-0.95, 0.4, 0.5), reach: 0.7, threshold: 1800, scale: 6000, repairCost: 90, caged: false },
-  { id: 'windscreen', label: 'Windscreen', at: v3(0, 0.5, 0.55), reach: 1.0, threshold: 5200, scale: 18000, repairCost: 520, caged: false },
-  { id: 'exhaust', label: 'Exhaust', at: v3(0.35, -0.42, -1.7), reach: 0.9, threshold: 5000, scale: 15000, repairCost: 240, caged: false },
+  { id: 'bonnet', label: 'Bonnet', at: v3(0, 0.3, 1.25), reach: 1.15, threshold: 4000, scale: 15000, repairCost: 285, caged: false },
+  { id: 'boot', label: 'Boot lid', at: v3(0, 0.28, -1.35), reach: 1.1, threshold: 4000, scale: 15000, repairCost: 255, caged: false },
+  { id: 'wingFL', label: 'Front wing L', at: v3(0.82, 0.05, 1.3), reach: 1.0, threshold: 3600, scale: 14000, repairCost: 225, caged: false },
+  { id: 'wingFR', label: 'Front wing R', at: v3(-0.82, 0.05, 1.3), reach: 1.0, threshold: 3600, scale: 14000, repairCost: 225, caged: false },
+  { id: 'quarterRL', label: 'Rear quarter L', at: v3(0.82, 0.05, -1.3), reach: 1.0, threshold: 3600, scale: 14000, repairCost: 225, caged: false },
+  { id: 'quarterRR', label: 'Rear quarter R', at: v3(-0.82, 0.05, -1.3), reach: 1.0, threshold: 3600, scale: 14000, repairCost: 225, caged: false },
+  { id: 'doorL', label: 'Left door', at: v3(0.86, 0.08, -0.05), reach: 1.0, threshold: 4400, scale: 16000, repairCost: 345, caged: false },
+  { id: 'doorR', label: 'Right door', at: v3(-0.86, 0.08, -0.05), reach: 1.0, threshold: 4400, scale: 16000, repairCost: 345, caged: false },
+  { id: 'mirrorL', label: 'Mirror L', at: v3(0.95, 0.4, 0.5), reach: 0.7, threshold: 1800, scale: 6000, repairCost: 68, caged: false },
+  { id: 'mirrorR', label: 'Mirror R', at: v3(-0.95, 0.4, 0.5), reach: 0.7, threshold: 1800, scale: 6000, repairCost: 68, caged: false },
+  // Reach 1.7 rather than 1.0, and it is not a bigger pane — it is that glass
+  // breaks when the *shell* around it folds, not only when something touches
+  // it. At 1.0 a nose-first impact was 1.44 m away and never reached it at all
+  // until 130 km/h, so the shatter the renderer can draw was effectively
+  // unreachable. Now a heavy frontal crazes it and a rollover, where the roof
+  // is half a metre away, breaks it outright.
+  { id: 'windscreen', label: 'Windscreen', at: v3(0, 0.5, 0.55), reach: 1.7, threshold: 4200, scale: 16000, repairCost: 390, caged: false },
+  { id: 'exhaust', label: 'Exhaust', at: v3(0.35, -0.42, -1.7), reach: 0.9, threshold: 5000, scale: 15000, repairCost: 180, caged: false },
   // Cheap, fragile, and on a wet night the most important part on the car.
-  { id: 'wipers', label: 'Wipers', at: v3(0, 0.34, 0.95), reach: 0.8, threshold: 2600, scale: 9000, repairCost: 120, caged: false },
+  { id: 'wipers', label: 'Wipers', at: v3(0, 0.34, 0.95), reach: 0.8, threshold: 2600, scale: 9000, repairCost: 90, caged: false },
 ];
 
 export const COMPONENT_BY_ID = new Map(COMPONENTS.map((c) => [c.id, c]));
@@ -209,7 +242,43 @@ const MAX_DENTS = 10;
  * Roughly an 85 km/h flat impact. Below it the car absorbs the blow where it
  * lands; above it the shell folds and the whole car is in the accident.
  */
+/**
+ * Normal running temperature, normalised against the gauge's 120 degree top.
+ *
+ * 0.75 is 90 C, which is where a warmed engine sits. The steam threshold is
+ * 0.82 and the failure is at 1.15, so a healthy car runs with the needle
+ * comfortably in its normal range rather than at either end of it.
+ */
+const OPERATING_TEMP = 0.75;
+
+/** Where the engine gives up, normalised. 138 C on the gauge. */
+const OVERHEAT_AT = 1.15;
+/** The hottest the model will aim for, so a failure takes seconds not instants. */
+const COOLANT_CEILING = 1.4;
+/** How fast temperature moves toward its balance point, per second. */
+const COOLANT_RATE = 0.032;
+
 const STRUCTURAL = 30_000;
+
+/**
+ * How much of an impact an intact body panel soaks up, newton-seconds.
+ *
+ * A crumple zone is the point of a body shell, and the model had none: every
+ * component took its share of an impact by proximity alone, so a wing and the
+ * hub behind it were damaged as if the wing were not there. The first scrape of
+ * a stage went straight through to the mechanicals.
+ *
+ * A *capacity*, not a percentage, and that distinction is the whole design. A
+ * panel can only absorb so much before it is crushed flat, so a small hit is
+ * stopped entirely and a big one goes through almost undiminished — which is
+ * how a shell actually behaves, and it is what keeps a genuinely huge accident
+ * able to end a race from a car that started at 100%.
+ *
+ * It also makes the second hit worse than the first: what is left of the panel
+ * is what is left of the protection, so a corner taken into the same bank twice
+ * gets through the second time.
+ */
+const PANEL_ABSORB = 7_000;
 
 export interface DamageEvent {
   component: ComponentId;
@@ -359,8 +428,15 @@ export class DamageModel {
   /** Health per component, 1 = new, 0 = destroyed. */
   readonly health = new Map<ComponentId, number>();
 
-  /** Coolant temperature, 0 = cold, 1 = boiling. */
-  temperature = 0;
+  /**
+   * Coolant temperature, normalised: the gauge reads this times 120 in degrees.
+   *
+   * Starts at operating temperature, because a rally car arrives at the start
+   * line warmed up in service — and because a car that has to spend the first
+   * minute of a stage warming up is a car whose gauge is wrong for the part of
+   * the stage anyone is looking at it.
+   */
+  temperature = OPERATING_TEMP;
   /** Where the car has been hit, in its own frame. Read by the renderer. */
   readonly dents: Dent[] = [];
   /**
@@ -406,6 +482,28 @@ export class DamageModel {
   }
 
   /** True once the car can no longer complete the stage. */
+  /**
+   * Where the coolant settles for a given state of the car.
+   *
+   * Demand over capacity, times operating temperature. One function because two
+   * callers need it — `update` steps toward it and `secondsToOverheat` solves
+   * for when it will cross the line — and they have already drifted apart once.
+   */
+  private coolantTarget(cooling: number, rpmFraction: number, speed: number): number {
+    // Airflow deliberately barely matters when the radiator is intact. A first
+    // pass let it swing 0.8 to 1.0 and the car ran *cooler* the harder it was
+    // driven, because speed was beating revs. A working cooling system holds
+    // temperature; what a fast lap does to a healthy car is very little, and
+    // what it does to a holed one is everything.
+    const airflow = 0.92 + 0.08 * Math.min(Math.abs(speed) / 40, 1);
+    const capacity = (0.15 + cooling * 0.85) * airflow;
+    const demand = 0.85 + 0.18 * rpmFraction;
+    // Capped well above the failure point but not absurdly: uncapped, a holed
+    // radiator boils the car in two seconds rather than the half minute that
+    // makes it a race to the finish instead of an announcement.
+    return clamp((OPERATING_TEMP * demand) / Math.max(capacity, 0.05), 0.1, COOLANT_CEILING);
+  }
+
   /**
    * How hard the cooling system is boiling over, 0..1.
    *
@@ -456,24 +554,37 @@ export class DamageModel {
     this.peakImpulse = Math.max(this.peakImpulse, impulse);
     this.dent(localPoint, impulse);
 
-    // Past `STRUCTURAL` the hit stops being local. Measured before this
-    // existed, a 95 km/h wall strike left the car at 88% condition with all
-    // four hubs untouched: the damage all landed inside a metre and a half of
-    // the nose and the back half of the car did not know it had happened. A
-    // real one folds the shell, so the reach grows with the excess until the
-    // far corners are inside it, and everything it reaches takes a share of
-    // the energy on top of its own local crush. That is what puts the hubs
-    // through their threshold and the wheels on the road behind you.
-    const excess = Math.max(impulse - STRUCTURAL, 0) / STRUCTURAL;
+    // What the body soaks up before the structure behind it feels anything.
+    // Panels themselves take the full hit — they are the thing being crushed.
+    const shield = this.bodyShield(localPoint);
 
     for (const def of COMPONENTS) {
+      // Panels take the whole hit — they are the thing being crushed — and so do
+      // the wheel corners, which are loaded through the contact patch with no
+      // bodywork in the way.
+      const felt = def.caged && !def.exposed ? Math.max(impulse - shield, 0) : impulse;
+      if (felt <= def.threshold) continue;
+
+      // Past `STRUCTURAL` the hit stops being local. Measured before this
+      // existed, a 95 km/h wall strike left the car at 88% condition with all
+      // four hubs untouched: the damage all landed inside a metre and a half of
+      // the nose and the back half of the car did not know it had happened. A
+      // real one folds the shell, so the reach grows with the excess until the
+      // far corners are inside it, and everything it reaches takes a share of
+      // the energy on top of its own local crush. That is what puts the hubs
+      // through their threshold and the wheels on the road behind you.
+      //
+      // Computed from what this component *feels*, not from the raw impulse:
+      // energy the body absorbed is energy that is not folding the shell around
+      // the engine either.
+      const excess = Math.max(felt - STRUCTURAL, 0) / STRUCTURAL;
       const reach = def.reach * (1 + excess * 2.5);
       const distance = length(sub(def.at, localPoint));
       if (distance > reach) continue;
 
       // Linear falloff to the edge of the component's reach.
       const proximity = 1 - distance / reach;
-      const over = impulse - def.threshold;
+      const over = felt - def.threshold;
       if (over <= 0) continue;
 
       const mitigation = def.caged ? 1 - this.rollcage : 1;
@@ -487,6 +598,35 @@ export class DamageModel {
 
       if (after <= 0) this.registerFailure(def.id);
     }
+  }
+
+  /**
+   * How much this impact the body takes before the mechanicals do.
+   *
+   * The nearest panel to where it landed, scaled by how much of that panel is
+   * left. A wrecked wing protects nothing, which is what makes a second hit in
+   * the same place so much more expensive than the first.
+   *
+   * Nearest rather than a sum: the shell is not a single crumple zone, and a
+   * hit on the nose should not be softened by an intact boot lid.
+   */
+  private bodyShield(at: Vec3): number {
+    let best: ComponentDef | null = null;
+    let nearest = Infinity;
+    for (const def of COMPONENTS) {
+      // Only the outer skin. The `caged` components are what it is protecting.
+      if (def.caged) continue;
+      const distance = length(sub(def.at, at));
+      if (distance < nearest) {
+        nearest = distance;
+        best = def;
+      }
+    }
+    if (!best) return 0;
+    // Beyond its own reach the panel is not in the way at all — an impact under
+    // the floor is not slowed down by the bonnet.
+    if (nearest > best.reach * 1.5) return 0;
+    return PANEL_ABSORB * this.get(best.id);
   }
 
   /**
@@ -611,10 +751,25 @@ export class DamageModel {
     // holed one boils it in about half a minute. If overheating took longer
     // than a stage the failure could never actually bite, which would make the
     // radiator the cheapest and least interesting component on the car.
-    const generated = 0.05 * (0.25 + load.rpmFraction);
-    const shed = 0.055 * (0.15 + cooling * 0.85) * (0.5 + Math.min(Math.abs(load.speed) / 40, 1));
-    this.temperature = clamp(this.temperature + (generated - shed) * dt, 0, 1.2);
-    if (this.temperature >= 1.15) this.failures.add('overheated');
+    // Where the cooling system settles, rather than a race between a heat term
+    // and a cooling term. The old model was generated-minus-shed with a healthy
+    // radiator always shedding more, so it pinned at the bottom of its range and
+    // the gauge read 0 degrees on a running engine — a car that has never been
+    // warm. Temperature is a balance point: demand over capacity, approached
+    // slowly, and a healthy system's balance point is simply operating
+    // temperature.
+    // Airflow deliberately barely matters when the radiator is intact — a first
+    // pass let it swing 0.8 to 1.0 and the car ran *cooler* the harder it was
+    // driven, because speed was beating revs. A working cooling system holds
+    // temperature; what a fast lap does to a healthy car is very little, and
+    // what it does to a holed one is everything.
+    const target = this.coolantTarget(cooling, load.rpmFraction, load.speed);
+    this.temperature = clamp(
+      this.temperature + (target - this.temperature) * COOLANT_RATE * dt,
+      0,
+      COOLANT_CEILING,
+    );
+    if (this.temperature >= OVERHEAT_AT) this.failures.add('overheated');
 
     // Consumption rises with revs; a holed fuel line dumps the rest overboard.
     const burn = (0.0022 + 0.011 * load.rpmFraction) * (1 + (1 - engine) * 0.4);
@@ -766,12 +921,17 @@ export class DamageModel {
    * of step with what actually happens.
    */
   secondsToOverheat(rpmFraction = 0.62, speed = 26): number | null {
-    const cooling = this.get('cooling');
-    const generated = 0.05 * (0.25 + rpmFraction);
-    const shed = 0.055 * (0.15 + cooling * 0.85) * (0.5 + Math.min(Math.abs(speed) / 40, 1));
-    const net = generated - shed;
-    if (net <= 0) return null;
-    return Math.max((1.15 - this.temperature) / net, 0);
+    // The same balance `update` settles toward, solved for time rather than
+    // stepped. It has to be the same arithmetic: a warning that disagrees with
+    // what then happens is worse than no warning, and this is the second time
+    // these two have been written separately — the first version was still
+    // running the old generated-minus-shed model after `update` had stopped.
+    const target = this.coolantTarget(this.get('cooling'), rpmFraction, speed);
+    if (target <= OVERHEAT_AT) return null;
+    const now = this.temperature;
+    if (now >= OVERHEAT_AT) return 0;
+    // Exponential approach: temp(t) = target - (target - now) * e^(-k t).
+    return Math.max(Math.log((target - now) / (target - OVERHEAT_AT)) / COOLANT_RATE, 0);
   }
 
   /** Seconds of racing before the tank runs dry at the given pace. */
@@ -859,7 +1019,7 @@ export class DamageModel {
     for (const c of COMPONENTS) this.health.set(c.id, 1);
     this.failures.clear();
     this.pending = [];
-    this.temperature = 0;
+    this.temperature = OPERATING_TEMP;
     for (let i = 0; i < 4; i++) this.brakeTemp[i] = this.ambientC;
     this.fuel = this.fuelCapacity;
     this.peakImpulse = 0;

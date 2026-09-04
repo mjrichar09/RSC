@@ -79,7 +79,11 @@ export interface Visibility {
   headlightWeight: number;
 }
 
-const DARKNESS: Record<TimeOfDay, number> = { dawn: 0.45, day: 0, dusk: 0.5, night: 1 };
+// Dusk raised a quarter, from 0.5. It was reading as a slightly grey afternoon
+// rather than as the light going, which made every dusk variant a day stage
+// with a filter on it — and dusk is supposed to be the one where you start
+// wanting the headlights before you strictly need them.
+const DARKNESS: Record<TimeOfDay, number> = { dawn: 0.45, day: 0, dusk: 0.625, night: 1 };
 
 /** Fog distances and headlight importance for these conditions. */
 export function visibility(conditions: Conditions): Visibility {

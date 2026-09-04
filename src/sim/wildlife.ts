@@ -56,11 +56,17 @@ export const DEER_MASS = 130;
  * this number never followed. At 9.0 the strike does what it was always
  * described as doing:
  *
- *   20 km/h   a cracked lamp, ~110                        a fright
- *   40 km/h   lights out, nose dented, ~740                a bill
- *   60 km/h   lights gone, front panel folded, ~1900       a bad accident
- *   90 km/h   radiator holed, front end gone, ~4100        written off
- *  200 km/h   the same, ~4800                              see STRIKE_CEILING
+ *   20 km/h   a cracked lamp                              a fright
+ *   40 km/h   lights out, nose dented                     a bill
+ *   60 km/h   lights gone, front panel folded             a bad accident
+ *   90 km/h   front end gone, radiator holed, ~2600       written off
+ *  200 km/h   the glass goes too, ~4700                   see STRIKE_CEILING
+ *
+ * The ceiling and the knee were both raised when the body started absorbing the
+ * first seven thousand newton-seconds of any impact: the deer was landing on a
+ * panel that now soaks up a quarter of it, and without that adjustment a strike
+ * at open-road speed had quietly become half the accident it was calibrated to
+ * be.
  *
  * Re-measure with `npm run crash -- --deer=...` after any change to the damage
  * thresholds, because that is precisely how this drifted the first time.
@@ -91,7 +97,7 @@ export const STRIKE_CONCENTRATION = 9.0;
  * quarter before the fairness rule silently stops holding. `tests/wildlife`
  * asserts that margin directly, so it fails loudly instead.
  */
-export const STRIKE_CEILING = 27_000;
+export const STRIKE_CEILING = 34_000;
 
 /**
  * Below this the strike is simply its raw impulse; above it, it bends.
@@ -104,7 +110,7 @@ export const STRIKE_CEILING = 27_000;
  * the cheap end cheap and spends the whole soft region where it is needed,
  * which is the last few thousand newton-seconds before the engine.
  */
-const STRIKE_KNEE = 22_000;
+const STRIKE_KNEE = 27_000;
 
 /**
  * Impulse a strike actually delivers, after the ceiling.

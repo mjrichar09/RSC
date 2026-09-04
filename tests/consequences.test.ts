@@ -61,7 +61,12 @@ describe('steering damage', () => {
     // Measured with `npm run crash`: the rack used to survive a 95 km/h
     // nose-on hit at 87% health, which is a pull of about a degree and a half.
     const world = await createWorld({ baseSurface: 'tarmac', damage: true });
-    world.damage!.applyImpact({ x: 0, y: -0.2, z: 1.9 }, 18_000);
+    // 26 000 rather than 18 000, because the body absorbs the first seven
+    // thousand now and 18 000 no longer *folds the nose* — it crushes the front
+    // panel to a third and stops there, which is the whole point of having a
+    // body. This is a 75 km/h impact: the panel is gone and the rack is next.
+    world.damage!.applyImpact({ x: 0, y: -0.2, z: 1.9 }, 26_000);
+    expect(world.damage!.get('panelFront')).toBeLessThan(0.1);
     expect(world.damage!.get('steering')).toBeLessThan(0.85);
   });
 });

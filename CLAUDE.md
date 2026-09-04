@@ -236,6 +236,20 @@ scannable as it grows; it is append-only.
 
 ### Simulation, determinism and units
 
+- **A model that can only subtract pins at its own floor.** Coolant temperature
+  was generated-minus-shed, and a healthy radiator always shed more — so it sat
+  at zero and the gauge read 0 °C on a running engine. It is a balance point
+  now: demand over capacity, approached slowly, and a healthy car's balance
+  point *is* operating temperature. `coolantTarget` is one function because the
+  gauge and the "will overheat in about Ns" warning both need it and had already
+  drifted apart once.
+- **Shielding a component that is not behind the thing shielding it.** An intact
+  body absorbs the first `PANEL_ABSORB` newton-seconds before the mechanicals
+  feel anything — but the wheel corners are loaded through the contact patch,
+  with no panel in the way. Shielding those too meant a landing hard enough to
+  fold a corner did nothing at all, because a wing it never touched had soaked
+  up the impact. `exposed` marks them; `tests/debris.test.ts` caught it.
+
 - **`process.env` anywhere under `src/`.** It is undefined in the browser and
   throws. One debug line inside a Rapier contact callback silently killed every
   impact in the game while the headless tests stayed green.
@@ -387,6 +401,10 @@ scannable as it grows; it is append-only.
   laid on the ground want `side: THREE.DoubleSide` unless you have checked the
   winding — and the way to check is one frame with the fragment shader forced to
   solid red, which took three guesses off the list in one shot.
+- **`smoothstep` with both edges equal.** Undefined, not zero: it divides by
+  `edge1 - edge0`. Dead headlights take the light cone's reach to exactly 0, and
+  `smoothstep(0.0, 0.0, d)` on a driver that answers 0 would have lit the entire
+  screen at the moment the lights failed. `max(uReach, 1e-4)`.
 - **`smoothstep` with its edges crossed over.** Adding noise to the far edge of
   a band (`smoothstep(a, b + lumps, x)`) can push it past the near one, and GLSL
   says nothing about what happens then — here it was crust blooming in the

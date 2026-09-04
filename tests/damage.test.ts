@@ -275,7 +275,16 @@ describe('heat and fuel', () => {
   it('never overheats with a healthy radiator', () => {
     const d = new DamageModel();
     race(d, 300);
-    expect(d.temperature).toBeLessThan(0.1);
+    // Warm, not cold. `< 0.1` here used to pass because the model could only
+    // subtract: a healthy radiator always shed more than the engine made, so
+    // temperature pinned at the bottom and the gauge read 0 degrees on a
+    // running engine. It settles at a balance point now, and what "healthy"
+    // means is that the balance point is a normal operating temperature — five
+    // minutes of racing must land in the band a real gauge sits in and stay
+    // clear of the steam threshold at 0.82.
+    expect(d.temperature).toBeGreaterThan(0.66); // ~80 C
+    expect(d.temperature).toBeLessThan(0.8); // ~96 C
+    expect(d.boiling).toBe(0);
     expect(d.failures.has('overheated')).toBe(false);
   });
 
@@ -337,7 +346,10 @@ describe('repair bills', () => {
     d.reset();
     expect(d.condition).toBe(1);
     expect(d.retired).toBe(false);
-    expect(d.temperature).toBe(0);
+    // Operating temperature, not zero: a rally car reaches the start line warmed
+    // up in service, and a repaired one is no different.
+    expect(d.temperature).toBeGreaterThan(0.7);
+    expect(d.boiling).toBe(0);
     expect(d.fuel).toBe(d.fuelCapacity);
   });
 });

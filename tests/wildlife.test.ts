@@ -154,7 +154,10 @@ describe('a strike', () => {
     expect(bill(20)).toBeGreaterThan(0);
     expect(bill(20)).toBeLessThan(200);
     // A written-off front end at open-road speed.
-    expect(bill(90)).toBeGreaterThan(3000);
+    // Lowered with every other repair cost by a quarter; still a written-off
+    // front end rather than a bill you shrug at.
+    expect(bill(90)).toBeGreaterThan(2200);
+    expect(bill(90)).toBeLessThan(3200);
     // Always monotonic. The ceiling is approached, never reached, so faster is
     // always worse — a hard clamp would make 120 and 200 identical.
     expect(bill(120)).toBeGreaterThan(bill(90));

@@ -235,14 +235,20 @@ export class Vision {
     }
 
     const view = visibility(conditions);
-    const lit = 0.35 + 0.65 * lightHealth;
 
     return {
       darkness: view.headlightWeight,
       // A damaged lamp both dims and narrows: the cone is the thing you steer
       // by at night, so losing half of it is felt immediately.
-      coneReach: 0.34 + 0.42 * lit,
-      coneAngle: 0.34 + 0.14 * lit,
+      //
+      // And losing all of it leaves *nothing*. This used to floor at 0.35 of a
+      // cone, so a car with both headlights destroyed still lit forty metres of
+      // road on a night stage — which made the lights the one component with no
+      // consequence worth avoiding. Straight through zero now: the shader's own
+      // floor still keeps the screen off pure black, because a driver's eyes
+      // adapt and an unlit rectangle is not difficulty.
+      coneReach: 0.76 * lightHealth,
+      coneAngle: 0.34 + 0.14 * lightHealth,
       occlusion: this.soiling,
       crust: this.caked,
       kind,
