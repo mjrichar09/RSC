@@ -67,6 +67,8 @@ export interface Settings {
    * a night stage is merely dim, at 1 you drive by the headlights alone.
    */
   vision: number;
+  /** Master volume, 0..1. */
+  volume: number;
   /**
    * How much of the crash cinematic to apply, 0..1.
    *
@@ -92,7 +94,7 @@ export interface Settings {
   practice: boolean;
 }
 
-export const DEFAULT_SETTINGS: Settings = { vision: 0.6, drama: 1, practice: true };
+export const DEFAULT_SETTINGS: Settings = { vision: 0.6, drama: 1, practice: true, volume: 1 };
 
 /** Exposed for tests: bringing a stored profile up to date and making it safe. */
 export { migrate as migrateProfile };
@@ -154,6 +156,7 @@ function migrate(stored: unknown): Profile {
     settings: isObject(stored.settings)
       ? {
           vision: clamp01(number(stored.settings.vision, DEFAULT_SETTINGS.vision)),
+          volume: clamp01(number(stored.settings.volume, DEFAULT_SETTINGS.volume)),
           drama: clamp01(number(stored.settings.drama, DEFAULT_SETTINGS.drama)),
           practice:
             typeof stored.settings.practice === 'boolean'

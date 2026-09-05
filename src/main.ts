@@ -717,6 +717,22 @@ const params = new URLSearchParams(location.search);
 
   controls.onMute = () => mixer.toggleMute();
 
+  // The volume slider on the front screen. Applied live as it moves and saved
+  // when it settles — writing the profile on every pixel of a drag would be a
+  // few hundred writes for one adjustment.
+  menu.setVolume(career.profile.settings.volume);
+  mixer.setVolume(career.profile.settings.volume);
+  let volumeSave: number | undefined;
+  menu.onVolume = (value) => {
+    mixer.setVolume(value);
+    window.clearTimeout(volumeSave);
+    volumeSave = window.setTimeout(() => {
+      void save.update((profile) => {
+        profile.settings.volume = value;
+      });
+    }, 400);
+  };
+
   // The windscreen effect is a taste setting, so it is cycled from the keyboard
   // and remembered: at 0 a night stage is merely dim, at 1 you drive by the
   // headlights alone. The URL parameter still wins, for the visual harness.

@@ -26,6 +26,16 @@ const SURFACE_VOICE: Record<SurfaceId, { frequency: number; q: number; gain: num
   water: { frequency: 480, q: 0.35, gain: 1.4 },
 };
 
+/**
+ * Loudest the master gain goes, at a volume of 1.
+ *
+ * Below unity on purpose: the limiter after it has to have something to work
+ * with, and a game that arrives at full scale has nowhere to put a crash.
+ */
+const MAX_GAIN = 0.9;
+/** Where the slider starts for somebody who has never touched it. */
+export const DEFAULT_VOLUME = 1;
+
 export class Mixer {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
@@ -50,6 +60,15 @@ export class Mixer {
   private skidGain: GainNode | null = null;
 
   private muted = false;
+  /**
+   * Master volume, 0 to 1.
+   *
+   * Separate from the mute, and both survive each other: turning the sound down
+   * to a tenth and then muting and unmuting has to come back at a tenth, not at
+   * whatever the code happened to hard-code. That constant used to be written
+   * out in three places, which is exactly how a setting gets lost.
+   */
+  private volume = DEFAULT_VOLUME;
 
   /** True once audio is actually running. */
   get running(): boolean {
@@ -72,7 +91,7 @@ export class Mixer {
     this.ctx = ctx;
 
     this.master = ctx.createGain();
-    this.master.gain.value = this.muted ? 0 : 0.9;
+    this.master.gain.value = this.level;
 
     // A gentle limiter keeps a big impact from clipping the whole mix.
     const limiter = ctx.createDynamicsCompressor();
@@ -148,10 +167,34 @@ export class Mixer {
 
   toggleMute(): boolean {
     this.muted = !this.muted;
-    if (this.master && this.ctx) {
-      this.master.gain.setTargetAtTime(this.muted ? 0 : 0.9, this.ctx.currentTime, 0.05);
-    }
+    this.applyLevel();
     return this.muted;
+  }
+
+  /**
+   * Set the master volume, 0 to 1.
+   *
+   * Unmutes on the way, because a player who has just dragged the slider up and
+   * heard nothing has been given a puzzle rather than a control.
+   */
+  setVolume(value: number): void {
+    this.volume = Math.min(Math.max(value, 0), 1);
+    if (this.volume > 0) this.muted = false;
+    this.applyLevel();
+  }
+
+  get level(): number {
+    return this.muted ? 0 : this.volume * MAX_GAIN;
+  }
+
+  get currentVolume(): number {
+    return this.volume;
+  }
+
+  /** Ramped, never set: a gain that jumps is a click in the speakers. */
+  private applyLevel(): void {
+    if (!this.master || !this.ctx) return;
+    this.master.gain.setTargetAtTime(this.level, this.ctx.currentTime, 0.05);
   }
 
   get isMuted(): boolean {

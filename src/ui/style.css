@@ -2002,3 +2002,34 @@ textarea, input { -webkit-user-select: text; user-select: text; }
 .lobby-results .out { color: var(--dim); font-style: italic; }
 .lobby-results li.mine .who { color: var(--accent); }
 .lobby-waiting { color: var(--dim); font-size: 12px; margin: 10px 0; }
+
+
+/*
+ * The volume slider on the front screen.
+ *
+ * A real range input rather than a row of buttons: it is the one setting people
+ * expect to be able to drag, and a native range is the only control that works
+ * with a thumb, a mouse and a keyboard without any help.
+ */
+.menu-volume {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 18px auto 0;
+  max-width: 340px;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: var(--dim);
+}
+.menu-volume input[type='range'] {
+  flex: 1;
+  accent-color: var(--accent);
+  /* Big enough to grab with a thumb; the default is about eight pixels tall. */
+  height: 22px;
+}
+.menu-volume b {
+  min-width: 52px;
+  text-align: right;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}

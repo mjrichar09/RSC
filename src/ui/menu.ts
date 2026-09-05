@@ -31,6 +31,16 @@ export class StartMenu {
   onCareer: (() => void) | null = null;
   onArcade: ((pick: ArcadePick) => void) | null = null;
   onMultiplayer: (() => void) | null = null;
+  /** Raised as the volume slider moves, 0..1. */
+  onVolume: ((value: number) => void) | null = null;
+
+  /** Where the slider sits. Set from the saved profile at startup. */
+  private volume = 1;
+
+  /** Put the slider where the saved setting says, without raising a change. */
+  setVolume(value: number): void {
+    this.volume = Math.min(Math.max(value, 0), 1);
+  }
 
   private readonly root: HTMLElement;
   private readonly career: Career;
@@ -42,6 +52,20 @@ export class StartMenu {
     this.root = document.createElement('div');
     this.root.className = 'menu';
     parent.appendChild(this.root);
+
+    // `input` rather than `change`, so the sound follows the thumb instead of
+    // waiting for it to be let go — a volume slider you cannot hear while
+    // dragging is a volume slider you have to guess at.
+    this.root.addEventListener('input', (event) => {
+      const target = event.target as HTMLInputElement | null;
+      if (target?.dataset.act !== 'volume') return;
+      this.volume = Number(target.value) / 100;
+      const readout = this.root.querySelector('.menu-volume b');
+      if (readout) {
+        readout.textContent = this.volume === 0 ? 'muted' : `${Math.round(this.volume * 100)}%`;
+      }
+      this.onVolume?.(this.volume);
+    });
 
     this.root.addEventListener('click', (event) => {
       const target = (event.target as HTMLElement).closest('[data-action]') as HTMLElement | null;
@@ -130,10 +154,31 @@ export class StartMenu {
             <em>direct connection, no server</em>
           </button>
         </div>
+        ${this.volumeRow()}
         <div class="menu-foot">
           <span><b>Esc</b> menu · <b>R</b> restart · <b>Q</b> rescue · <b>T</b> tuning · <b>V</b> visibility · <b>K</b> slow-mo</span>
         </div>
       </div>`;
+  }
+
+  /**
+   * The volume, on the front screen.
+   *
+   * Here rather than behind a key, because the M key mutes and nothing else
+   * existed — which on a phone means there was no way to turn the sound down at
+   * all, only off, and only if you had a keyboard. The menu is reachable from
+   * anywhere with Escape or the pause button, which makes it the one place that
+   * works on both.
+   */
+  private volumeRow(): string {
+    const percent = Math.round(this.volume * 100);
+    return `
+      <label class="menu-volume">
+        <span>Volume</span>
+        <input type="range" min="0" max="100" step="1" value="${percent}" data-act="volume"
+               aria-label="Volume">
+        <b>${percent === 0 ? 'muted' : `${percent}%`}</b>
+      </label>`;
   }
 
   private arcadeScreen(): string {

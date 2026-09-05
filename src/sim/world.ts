@@ -158,6 +158,14 @@ export interface Car {
   readonly loose: LooseBody[];
 }
 
+/**
+ * How far apart cars sit on the grid, metres, where the road allows it.
+ *
+ * A car is about 1.7 m across, so this is a clear metre between them — close
+ * enough to be a grid, far enough that nobody is touching before the lights.
+ */
+const GRID_SPACING = 2.8;
+
 export class SimWorld {
   readonly world: RAPIER.World;
   /**
@@ -424,27 +432,40 @@ export class SimWorld {
   /**
    * Where car `index` starts.
    *
-   * Cars line up across the road rather than one behind the other: a rally
-   * start is one at a time, but a race between four of them that begins with
-   * three of them staring at a bumper is not a race.
+   * One row, across the road, every nose on the same line. A rally start is one
+   * car at a time, but a race between four of them that begins with three
+   * staring at a bumper is not a race — and the previous grid staggered each
+   * rank 5.5 m back, which is a head start of a car length and a half for
+   * whoever happened to be car zero. Nobody agreed to that, and on a stage
+   * decided by tenths it is the whole result.
+   *
+   * Centred on the racing line rather than grown outward from it, because a row
+   * that starts at the centre and extends one way puts the last car in the
+   * ditch. Car zero no longer has the line to itself, which is the point:
+   * everyone gets the same start.
    */
   private gridSlot(
     spawn: { position: Vec3; heading?: number },
     index: number,
   ): { position: Vec3; heading?: number } {
+    if (this.carCount === 1) return spawn;
     const slot = this.slots[index] ?? index;
-    if (slot === 0 || this.carCount === 1) return spawn;
     const heading = spawn.heading ?? 0;
-    // Alternate sides so the grid grows outward from the racing line.
-    const side = slot % 2 === 0 ? 1 : -1;
-    const rank = Math.ceil(slot / 2);
-    const across = side * rank * 3.0;
-    const back = rank * 5.5;
+
+    // Spread to fit the road actually under them. A fixed spacing is fine on a
+    // wide start apron and puts an outside car on the verge of a narrow one,
+    // where it is in the scenery before the lights have gone green.
+    const half = this.stage ? this.stage.spline.at(5).width : 6;
+    // Half a car, plus enough that a wheel is not on the line.
+    const room = Math.max(half - 1.2, 0.6);
+    const spacing = Math.min(GRID_SPACING, (room * 2) / Math.max(this.carCount - 1, 1));
+    const across = (slot - (this.carCount - 1) / 2) * spacing;
+
     return {
       position: {
-        x: spawn.position.x + Math.cos(heading) * across - Math.sin(heading) * back,
+        x: spawn.position.x + Math.cos(heading) * across,
         y: spawn.position.y,
-        z: spawn.position.z - Math.sin(heading) * across - Math.cos(heading) * back,
+        z: spawn.position.z - Math.sin(heading) * across,
       },
       heading,
     };

@@ -226,6 +226,21 @@ if (contrast.gap < 0.35) {
 }
 console.log(`dropdown options: ${contrast.fg} on ${contrast.bg}`);
 
+// The volume slider on the front screen. There was only a mute before — the M
+// key, all or nothing, and on a phone with no keyboard not even that.
+await page.goto('http://localhost:5181/?vision=0&drama=0');
+await page.waitForSelector('.menu.is-open [data-act="volume"]', { timeout: 20_000 });
+const slider = await page.locator('[data-act="volume"]').boundingBox();
+// Tall enough for a thumb: a native range defaults to about eight pixels.
+if (!slider || slider.height < 18) {
+  throw new Error(`the volume slider is ${slider?.height ?? 0}px tall — not thumb-sized`);
+}
+await page.locator('[data-act="volume"]').fill('30');
+await page.locator('[data-act="volume"]').dispatchEvent('input');
+const reads = (await page.textContent('.menu-volume b'))?.trim();
+if (reads !== '30%') throw new Error(`the volume readout says "${reads}", not 30%`);
+console.log(`volume slider: ${slider.width.toFixed(0)}x${slider.height.toFixed(0)}px, reads ${reads}`);
+
 // The update bar, which must be silent unless there is something to say.
 //
 // A false alarm is the worst thing this feature can do: the only action it
