@@ -49,6 +49,15 @@ export interface LobbyStart {
 export class MultiplayerPanel {
   /** Raised when the race is agreed and the world should be built. */
   onRace: ((start: LobbyStart) => void) | null = null;
+  /**
+   * Raised when the player leaves the lobby for good.
+   *
+   * Closing the panel is not leaving: the lobby stays open behind it and the
+   * connection stays up, which is right for glancing at the stage list
+   * mid-lobby and wrong as the only way out. There was no other way out — a
+   * host or a guest who wanted to stop had to reload the page.
+   */
+  onLeave: (() => void) | null = null;
 
   private readonly root: HTMLElement;
   private screen: Screen = 'choose';
@@ -92,6 +101,16 @@ export class MultiplayerPanel {
   private pick: { stageId: string; variantId: string } | null = null;
   /** Who has crossed the line in the current race, in the order they did. */
   private readonly finished = new Map<number, number>();
+  /**
+   * Every result of the race just run, whoever reported it.
+   *
+   * The host already broadcasts each `result` to everybody, so both sides can
+   * build the classification from what is already on the wire — no new message,
+   * and a guest sees the same table the host does.
+   */
+  private readonly results = new Map<number, { time: number | null; retired: boolean }>();
+  /** True once the last car is in and the table is worth showing. */
+  private showingResults = false;
   /** What to do when the grid is released. Set by whoever starts the race. */
   private go: (() => void) | null = null;
 
@@ -139,6 +158,8 @@ export class MultiplayerPanel {
     this.players = [];
     this.pick = null;
     this.finished.clear();
+    this.results.clear();
+    this.showingResults = false;
     this.screen = 'choose';
     this.render();
   }
@@ -389,11 +410,83 @@ export class MultiplayerPanel {
    * nothing outside the room.
    */
   private noteResult(player: number, time: number | null, retired: boolean): void {
-    if (!this.host || retired || time === null) return;
-    if (this.finished.has(player)) return;
-    this.finished.set(player, time);
-    if (this.finished.size === 1) this.host.creditWin(player);
-    this.players = this.host.players;
+    // Recorded by *everyone*. The win tally is still the host's business — it is
+    // the only side that hears from all of them in one place — but the
+    // classification is built from the same broadcast on both, so a guest is
+    // told who won rather than being returned to the lobby to guess.
+    if (!this.results.has(player)) this.results.set(player, { time, retired });
+
+    if (this.host && !retired && time !== null && !this.finished.has(player)) {
+      this.finished.set(player, time);
+      if (this.finished.size === 1) this.host.creditWin(player);
+      this.players = this.host.players;
+    }
+
+    if (this.everyoneIn) {
+      this.showingResults = true;
+      this.setOpen(true);
+    }
+    this.render();
+  }
+
+  /** Has every car on the grid reported, one way or the other? */
+  private get everyoneIn(): boolean {
+    if (this.players.length === 0) return false;
+    return this.players.every((p) => this.results.has(p.id));
+  }
+
+  /**
+   * The classification: finishers by time, then whoever did not finish.
+   *
+   * A retirement has no time and cannot be ordered against one, so it goes to
+   * the bottom rather than being given an invented number.
+   */
+  private classification(): { player: PlayerInfo; time: number | null; retired: boolean }[] {
+    const rows = this.players.map((player) => ({
+      player,
+      time: this.results.get(player.id)?.time ?? null,
+      retired: this.results.get(player.id)?.retired ?? false,
+    }));
+    rows.sort((a, b) => {
+      if (a.time === null && b.time === null) return 0;
+      if (a.time === null) return 1;
+      if (b.time === null) return -1;
+      return a.time - b.time;
+    });
+    return rows;
+  }
+
+  /** The finished-race panel, shown in place of the lobby until it is dismissed. */
+  private resultsBody(): string {
+    const rows = this.classification();
+    const winner = rows.find((r) => r.time !== null)?.time ?? null;
+    const mine = this.guest ? this.guest.you : this.host?.players.find((p) => p.host)?.id;
+    const list = rows
+      .map((row, i) => {
+        const time =
+          row.time === null
+            ? `<span class="out">${row.retired ? 'retired' : 'did not finish'}</span>`
+            : `<span class="at">${row.time.toFixed(2)}s</span>`;
+        const gap =
+          row.time !== null && winner !== null && row.time > winner
+            ? `<span class="gap">+${(row.time - winner).toFixed(2)}</span>`
+            : '';
+        return `<li class="${row.player.id === mine ? 'mine' : ''}">
+          <span class="pos">${row.time === null ? '—' : i + 1}</span>
+          <span class="who">${row.player.name}</span>${time}${gap}
+        </li>`;
+      })
+      .join('');
+    const waiting = this.everyoneIn
+      ? ''
+      : `<p class="lobby-waiting">Waiting for ${
+          this.players.length - this.results.size
+        } more to finish…</p>`;
+    return `
+      <h3>Finished</h3>
+      ${waiting}
+      <ul class="lobby-results">${list}</ul>
+      <button class="wide primary" data-act="to-lobby">Back to the lobby</button>`;
   }
 
   /**
@@ -403,8 +496,21 @@ export class MultiplayerPanel {
    * race, look at the tally, pick a different stage, race again — going back
    * to the garage instead would end the evening after one stage.
    */
+  /**
+   * The race has ended for this player; show the panel with the results in it.
+   *
+   * Not the same as everybody being finished — the table fills in as the rest
+   * come in, and says how many are still out.
+   */
+  showFinish(): void {
+    this.showingResults = true;
+    this.setOpen(true);
+  }
+
   returnToLobby(): void {
     this.finished.clear();
+    this.results.clear();
+    this.showingResults = false;
     this.host?.reopen();
     if (this.host) this.players = this.host.players;
     this.setOpen(true);
@@ -430,6 +536,23 @@ export class MultiplayerPanel {
   }
 
   /**
+   * The same grid, with the race just finished, for the harness.
+   *
+   * A classification is only reachable by getting four browsers to the end of a
+   * stage together, so without this nobody ever looks at it — and the panel
+   * nobody looks at is the one that quietly stops fitting on a phone.
+   */
+  demoResults(): void {
+    this.demo();
+    this.results.set(0, { time: 41.62, retired: false });
+    this.results.set(1, { time: 39.88, retired: false });
+    this.results.set(2, { time: 44.05, retired: false });
+    this.results.set(3, { time: null, retired: true });
+    this.showingResults = true;
+    this.render();
+  }
+
+  /**
    * Open straight onto somebody's invite.
    *
    * The link the host sends carries the code, so the guest's whole side of the
@@ -448,6 +571,20 @@ export class MultiplayerPanel {
     this.roomEntry = code;
     this.setOpen(true);
     void this.joinByRoom(code);
+  }
+
+  /**
+   * Hang up and go back to the menu.
+   *
+   * The guest tells the host, the host tells its guests, and both then tear the
+   * whole thing down — `reset` is what already knows how to do that, including
+   * closing the room so a stale code stops working.
+   */
+  private leave(): void {
+    const wasIn = this.inLobby;
+    this.reset();
+    this.setOpen(false);
+    if (wasIn) this.onLeave?.();
   }
 
   /** Whether there is a lobby to go back to at all. */
@@ -576,6 +713,7 @@ export class MultiplayerPanel {
         });
       },
       onGo: () => this.go?.(),
+      onResult: (player, time, retired) => this.noteResult(player, time, retired),
       onClose: () => this.say('The host disconnected.'),
     });
     this.say('Connected. Waiting for the host to start.');
@@ -595,6 +733,7 @@ export class MultiplayerPanel {
             <div class="lobby-title">MULTIPLAYER</div>
             <div class="lobby-sub">Up to ${MAX_PLAYERS} cars, contact and all</div>
           </div>
+          ${this.inLobby ? '<button data-act="leave">Leave</button>' : ''}
           <button data-act="close">Close</button>
         </div>
         ${this.body()}
@@ -604,6 +743,9 @@ export class MultiplayerPanel {
   }
 
   private body(): string {
+    // The classification outranks everything: a race has just ended and the one
+    // thing anybody wants is who won.
+    if (this.showingResults) return this.resultsBody();
     if (this.screen === 'choose') {
       return `
         <p class="lobby-hint">
@@ -799,6 +941,8 @@ export class MultiplayerPanel {
       pick(act)?.addEventListener('click', handler);
 
     on('close', () => this.setOpen(false));
+    on('leave', () => this.leave());
+    on('to-lobby', () => this.returnToLobby());
     on('host', () => this.startHosting());
     on('join', () => {
       this.screen = 'join';

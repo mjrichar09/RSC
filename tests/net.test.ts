@@ -35,11 +35,12 @@ const SETUP = {
 };
 
 /** A host and one guest, wired together, both with a world of `cars` cars. */
-async function pair(options: { latency?: number; loss?: number; cars?: number } = {}) {
+async function pair(options: { latency?: number; loss?: number; jitter?: number; cars?: number } = {}) {
   const cars = options.cars ?? 2;
   const wire = new LoopbackWire({
     latency: options.latency ?? 0,
     loss: options.loss ?? 0,
+    jitter: options.jitter ?? 0,
     // Seeded, so a run that fails fails again.
     random: (() => {
       let s = 12345;
@@ -556,5 +557,48 @@ describe('invite codes', () => {
     );
     const back = await codec.decode(await codec.encode({ type: 'offer', sdp: v6 }));
     expect(back.sdp).toContain('2001:db8:0:0:0:0:0:1 51820 typ srflx');
+  });
+});
+
+describe('a guest whose device hitches', () => {
+  it('coasts instead of driving itself off the road', async () => {
+    // The whole of the "other players drift off course" report. The host held a
+    // guest's last input unchanged for five seconds before neutralising it, so a
+    // guest mid-corner whose phone stalled had their car *kept turning* by the
+    // host: measured, two seconds of silence swung it 90 degrees and three swung
+    // it 134, which is a car driving itself in a circle off the stage while its
+    // driver watches. It fades now, steering first.
+    const { host, hostWorld, run } = await pair({ latency: 40 });
+    const turning: DriverInput = { throttle: 1, brake: 0, steer: 0.7, handbrake: 0 };
+    const idle: DriverInput = { throttle: 0, brake: 0, steer: 0, handbrake: 0 };
+    run(120 * 4, idle, turning);
+
+    const heading = () => {
+      const q = hostWorld.cars[1]!.vehicle.body.rotation();
+      return Math.atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.z * q.z));
+    };
+    const before = heading();
+
+    // The guest stops stepping and stops sending; the host carries on alone.
+    for (let i = 0; i < 120 * 3; i++) {
+      host.step(idle, DT);
+      host.maybeSnapshot(DT, () => 0);
+    }
+    const turned =
+      Math.abs(((heading() - before + Math.PI * 3) % (Math.PI * 2)) - Math.PI) * (180 / Math.PI);
+    // A little residual swing while the lock unwinds is right — a dropped packet
+    // must not stab the wheel straight — but the car must end up coasting.
+    expect(turned).toBeLessThan(30);
+  });
+
+  it('still ignores ordinary loss and jitter', async () => {
+    // The fade must not fire on a healthy connection: inputs arrive at 60 Hz and
+    // the fresh window is nine of them, so normal loss never reaches it.
+    const { hostWorld, guestWorld, run } = await pair({ latency: 60, loss: 0.05, jitter: 30 });
+    const drive: DriverInput = { throttle: 1, brake: 0, steer: 0.3, handbrake: 0 };
+    const idle: DriverInput = { throttle: 0, brake: 0, steer: 0, handbrake: 0 };
+    run(120 * 10, idle, drive);
+    // The guest's own car, as the host has it, against the guest's prediction.
+    expect(disagreement(hostWorld, guestWorld, 1, 0)).toBeLessThan(5);
   });
 });

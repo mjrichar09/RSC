@@ -184,6 +184,48 @@ await page.waitForSelector('.lobby.is-open [data-act="invite"]', { timeout: 20_0
 if (await page.$('.lobby-code')) throw new Error('a room code was shown with no room service');
 console.log('no broker configured: the lobby falls back to invite codes');
 
+// The classification, and the way out of a lobby.
+//
+// Neither is reachable without a whole grid finishing a stage together, so
+// without a check here nobody looks at either until it is broken. A race used
+// to drop you back into the lobby four seconds after *you* finished, which
+// threw away the only thing anybody wanted from it.
+await page.goto('http://localhost:5181/?vision=0&drama=0&screen=results');
+await page.waitForSelector('.lobby.is-open .lobby-results li', { timeout: 20_000 });
+const table = await page.$$eval('.lobby-results li', (rows) =>
+  rows.map((r) => (r.textContent ?? '').trim().replace(/\s+/g, ' ')),
+);
+if (table.length !== 4) throw new Error(`the classification lists ${table.length} cars, not 4`);
+// Ordered by time, with the retirement last and unplaced.
+if (!table[0]!.startsWith('1 ')) throw new Error(`the winner is not first: ${table[0]}`);
+if (!table[3]!.startsWith('—')) throw new Error(`a retirement was given a position: ${table[3]}`);
+if (!table[1]!.includes('+')) throw new Error('no gap to the winner is shown');
+if (!(await page.$('[data-act="to-lobby"]'))) throw new Error('no way back to the lobby');
+if (!(await page.$('[data-act="leave"]'))) throw new Error('no way to leave the lobby');
+console.log(`classification: ${table.join(' | ')}`);
+
+// The stage and conditions dropdowns must not be text-on-text.
+//
+// A `select` with an `rgba()` background gets its open list composited by the
+// platform, not the page, so the options came out on a near-white sheet with
+// this panel's light text on them — invisible, and only once opened.
+await page.goto('http://localhost:5181/?vision=0&drama=0&screen=lobby');
+await page.waitForSelector('.lobby-field select', { timeout: 20_000 });
+// Evaluated as a string, not a function: esbuild rewrites named inner
+// functions with a `__name` helper that does not exist in the page.
+const contrast = (await page.evaluate(`(() => {
+  const s = getComputedStyle(document.querySelector('.lobby-field select option'));
+  const lum = (c) => {
+    const p = (c.match(/[0-9]+/g) || ['0','0','0']).map(Number);
+    return (0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]) / 255;
+  };
+  return { bg: s.backgroundColor, fg: s.color, gap: Math.abs(lum(s.backgroundColor) - lum(s.color)) };
+})()`)) as { bg: string; fg: string; gap: number };
+if (contrast.gap < 0.35) {
+  throw new Error(`dropdown options are ${contrast.fg} on ${contrast.bg} — unreadable`);
+}
+console.log(`dropdown options: ${contrast.fg} on ${contrast.bg}`);
+
 // The update bar, which must be silent unless there is something to say.
 //
 // A false alarm is the worst thing this feature can do: the only action it

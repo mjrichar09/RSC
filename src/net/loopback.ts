@@ -16,6 +16,15 @@ import type { Link, NetMessage } from './protocol.js';
 export interface LoopbackOptions {
   /** One-way delay in milliseconds. */
   latency?: number;
+  /**
+   * Variation either side of that delay, milliseconds, on the unordered
+   * traffic only.
+   *
+   * Without it the wire delivers strictly in send order and every test written
+   * against it is quietly asserting that reordering never happens — which is
+   * exactly what the `fast` channel does not promise.
+   */
+  jitter?: number;
   /** Fraction of messages to drop, 0..1. */
   loss?: number;
   /** Deterministic stream for the loss rolls. */
@@ -45,11 +54,13 @@ export class LoopbackWire {
   private queue: Pending[] = [];
   private clock = 0;
   private readonly latency: number;
+  private readonly jitter: number;
   private readonly loss: number;
   private readonly random: () => number;
 
   constructor(options: LoopbackOptions = {}) {
     this.latency = options.latency ?? 0;
+    this.jitter = options.jitter ?? 0;
     this.loss = options.loss ?? 0;
     this.random = options.random ?? (() => 0.5);
     this.a = new LoopbackLink(this);
@@ -68,7 +79,13 @@ export class LoopbackWire {
     // the transport's reliability, not a case the game logic should handle.
     const droppable = message.t === 'input' || message.t === 'snap';
     if (droppable && this.loss > 0 && this.random() < this.loss) return;
-    this.queue.push({ at: this.clock + this.latency, message, to });
+    // Jitter applies only to the unordered traffic, and that is the whole point
+    // of it: `control` is an ordered, reliable channel and cannot reorder, while
+    // `fast` is unordered with no retransmits and routinely does. A wire with
+    // fixed latency can never deliver out of order, so every test written
+    // against one was quietly asserting that reordering does not happen.
+    const spread = droppable && this.jitter > 0 ? (this.random() - 0.5) * 2 * this.jitter : 0;
+    this.queue.push({ at: this.clock + Math.max(this.latency + spread, 0), message, to });
   }
 
   /** Move time forward and deliver everything that has arrived. */
@@ -76,7 +93,10 @@ export class LoopbackWire {
     this.clock += milliseconds;
     const due = this.queue.filter((entry) => entry.at <= this.clock);
     this.queue = this.queue.filter((entry) => entry.at > this.clock);
-    // In arrival order, which with a fixed latency is send order.
+    // In arrival order, which with jitter is *not* send order — a packet posted
+    // later can be due earlier, and the client has to cope with that because the
+    // real data channel does exactly this.
+    due.sort((x, y) => x.at - y.at);
     for (const entry of due) entry.to.deliver(entry.message);
   }
 

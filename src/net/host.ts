@@ -55,6 +55,51 @@ export interface HostOptions {
 /** Seconds of silence before a guest's car stops being driven by them. */
 const SILENT_TIMEOUT = 5;
 
+/**
+ * How long a guest's last input is trusted completely, seconds.
+ *
+ * Inputs arrive at 60 Hz, so this is nine of them: long enough that ordinary
+ * loss and jitter never register, short enough that a device hitch does.
+ */
+const INPUT_FRESH = 0.15;
+
+/**
+ * How long it then takes to fade to nothing, seconds.
+ *
+ * The old behaviour was to hold the last input unchanged for five seconds and
+ * then drop it. Measured, that is catastrophic and it is the whole of the
+ * "other players drift off course" report: a guest mid-corner at full throttle
+ * on three quarters of a turn of lock, whose phone hitches for one second, has
+ * their car driven 29.8 m by the host — and 197 m over the full five. The car
+ * does not stop doing what it was doing; it keeps doing it, which on a corner
+ * means leaving the road entirely while its driver watches.
+ *
+ * Holding *something* is still right — a single dropped packet must not stab
+ * the brakes — so this is a fade rather than a cliff.
+ */
+const INPUT_DECAY = 0.35;
+
+/**
+ * What a guest's last input is worth once it has stopped being refreshed.
+ *
+ * Steering decays fastest, squared against the rest, because it is the only
+ * channel that changes a car's *course*: a stale throttle makes a car go
+ * somewhere too fast, a stale lock makes it go somewhere else entirely. Brake
+ * is held to the end, because the safe way to be wrong about a car nobody is
+ * currently driving is for it to be slowing down.
+ */
+function stale(input: DriverInput, silent: number): DriverInput {
+  const gone = Math.min(Math.max((silent - INPUT_FRESH) / INPUT_DECAY, 0), 1);
+  if (gone <= 0) return input;
+  const keep = 1 - gone;
+  return {
+    throttle: input.throttle * keep,
+    brake: input.brake,
+    steer: input.steer * keep * keep,
+    handbrake: input.handbrake * keep,
+  };
+}
+
 export class RaceHost {
   readonly players: PlayerInfo[] = [];
   private readonly guests = new Map<PlayerId, Guest>();
@@ -256,10 +301,10 @@ export class RaceHost {
   /**
    * Advance one fixed step, using whatever each guest last sent.
    *
-   * A guest who has gone quiet keeps their last input briefly — a dropped
-   * packet should not stab the brakes — and is then neutralised, because a car
-   * driving itself into the scenery on a stuck throttle is worse than one that
-   * coasts to a halt.
+   * Faded rather than held: see `stale`. A guest who has gone quiet keeps their
+   * last input for a ninth of a second and then loses it over a third of one,
+   * steering first — because a car driving itself off the road on a stuck lock
+   * is exactly what "the other players drift off course" turned out to be.
    */
   step(localInput: DriverInput, dt: number): void {
     if (!this.world) return;
@@ -269,9 +314,11 @@ export class RaceHost {
 
     for (const guest of this.guests.values()) {
       guest.silent += dt;
+      // Past the timeout it is not a hitch, it is a player who has gone. Their
+      // input is cleared outright so nothing lingers if they come back.
       if (guest.silent > SILENT_TIMEOUT) guest.input = { ...NEUTRAL_INPUT };
       const car = guest.info.car;
-      if (car < inputs.length) inputs[car] = guest.input;
+      if (car < inputs.length) inputs[car] = stale(guest.input, guest.silent);
     }
 
     this.world.step(inputs);

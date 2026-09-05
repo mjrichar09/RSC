@@ -540,6 +540,27 @@ of a race. Two things about it are not negotiable:
   that found a genuine bug was an unhandled rejection on an abandoned invite —
   eight errors beside ten passes, in a suite that runs in a second.
 
+**A held input is not a safe default.** The host drives a guest's car from the
+last input it received, and holding that unchanged for five seconds before
+neutralising it was the whole of "other players drift off course": measured, a
+guest mid-corner at full throttle on 0.7 of lock whose device hitched for two
+seconds had their car turned **90°** by the host, and 134° over three. It fades
+now — steering first and squared, because steering is the only channel that
+changes a car's *course* — and the brake is held to the end, since a car nobody
+is driving should be slowing down.
+
+**`LoopbackWire` had fixed latency, so it could never reorder**, and every test
+written against it was quietly asserting that reordering does not happen — which
+is exactly what the unordered `fast` channel does not promise. It takes a
+`jitter` now. Worth knowing that adding jitter found *nothing*: the interpolation
+holds to 0.19 m off-path at 120 ms, 8% loss and 80 ms of jitter. The bug was
+never in the wire.
+
+**A constant input hides every input bug.** The first desync probe drove steady
+throttle and steering, where a stale packet and a fresh one are the same packet
+— so loss and reordering were invisible by construction and the test reported
+everything healthy. Drive a slalom.
+
 Three things about the transport are easy to get wrong twice:
 
 - **`npm run netcheck` drives both directions.** It used to drive only the host

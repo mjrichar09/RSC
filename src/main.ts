@@ -676,6 +676,17 @@ const params = new URLSearchParams(location.search);
   const updateBanner = new UpdateBanner();
   updates.start();
 
+  // Leaving a lobby drops the session and goes back to the front door. Without
+  // it the only way out of a race you had joined was to reload the page.
+  multiplayer.onLeave = () => {
+    if (session) {
+      session.leave();
+      session = null;
+    }
+    sessionHealth = {};
+    menu.setOpen(true);
+  };
+
   menu.onMultiplayer = () => {
     garage.setOpen(false);
     // Checked here above anywhere else, because this is where a stale build
@@ -1691,6 +1702,11 @@ const params = new URLSearchParams(location.search);
       // the paint picker and the tally without two browsers and a handshake.
       multiplayer.setOpen(true);
       multiplayer.demo();
+    } else if (screen === 'results') {
+      // The classification, which is otherwise only reachable by getting a
+      // whole grid to the end of a stage together.
+      multiplayer.setOpen(true);
+      multiplayer.demoResults();
     }
     else if (params.has('stage')) garage.setOpen(false);
     else menu.setOpen(true);
@@ -1841,9 +1857,11 @@ const params = new URLSearchParams(location.search);
         // stage, race again — and being dropped into the garage after one
         // stage ends it instead. Given a few seconds so the finish is on
         // screen before the panel covers it.
-        if (session && multiplayer.inLobby) {
-          window.setTimeout(() => multiplayer.returnToLobby(), 4000);
-        }
+        // Straight to the lobby panel, which now shows the classification and
+        // waits. Returning after a fixed four seconds threw away the only thing
+        // anybody wanted from the race — who won, and by how much — and did it
+        // before the slower half of the grid had even finished.
+        if (session && multiplayer.inLobby) multiplayer.showFinish();
       }
 
       raceHud.update(race);
