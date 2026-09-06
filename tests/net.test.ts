@@ -540,6 +540,24 @@ describe('invite codes', () => {
     expect(back.sdp).toBe(OFFER);
   });
 
+  it('keeps everything when the code does not have to be short', async () => {
+    // The compact form buys its 96 characters by dropping candidates, and the
+    // expensive one is Chrome's `.local` mDNS host candidate — which it drops
+    // whenever STUN worked, i.e. always. That candidate *is* the local network:
+    // two players in the same room were having the one path that would have
+    // connected them in a millisecond stripped out, and were reaching each
+    // other through their router's public address instead.
+    //
+    // Over the room broker nobody copies the code, and the worker takes four
+    // kilobytes, so there is nothing to buy. `decode` has always read this
+    // format, so only the sender changes.
+    const full = await codec.encodeFull({ type: 'offer', sdp: OFFER });
+    const back = await codec.decode(full);
+    expect(back.sdp).toBe(OFFER);
+    expect(back.sdp).toContain('.local');
+    expect(back.sdp).toContain('203.0.113.7 51820 typ srflx');
+  });
+
   it('keeps the mDNS name when there is nothing else to go on', async () => {
     // Two players on the same wifi with STUN blocked have only these, and they
     // do resolve — on that network. Dropping them outright broke LAN play.
@@ -601,4 +619,58 @@ describe('a guest whose device hitches', () => {
     // The guest's own car, as the host has it, against the guest's prediction.
     expect(disagreement(hostWorld, guestWorld, 1, 0)).toBeLessThan(5);
   });
+});
+
+describe('a guest predicting its own car', () => {
+  /** Mean distance between the host's copy of the guest car and the guest's own. */
+  const drive = async (latency: number, loss = 0, jitter = 0) => {
+    const { host, guest, hostWorld, guestWorld, wire } = await pair({ latency, loss, jitter });
+    const idle: DriverInput = { throttle: 1, brake: 0, steer: 0, handbrake: 0 };
+    let sum = 0;
+    let n = 0;
+    for (let i = 0; i < 120 * 20; i++) {
+      const t = i / 120;
+      host.step(idle, DT);
+      host.maybeSnapshot(DT, (c) => hostWorld.cars[c]!.vehicle.body.translation().z);
+      // A slalom. With a constant input a stale packet and a fresh one are the
+      // same packet, and every timing mistake in here is invisible.
+      guest.step({ throttle: 1, brake: 0, steer: Math.sin(t * 2.2) * 0.55, handbrake: 0 }, DT);
+      wire.advance(DT * 1000);
+      if (t > 3) {
+        sum += disagreement(hostWorld, guestWorld, 1, 0);
+        n++;
+      }
+    }
+    return { mean: sum / n, snaps: guest.stats.snaps };
+  };
+
+  it('does not get further out the further away the host is', async () => {
+    // The property that matters, and the one that was wrong. `reconcile` used
+    // to compare the authority's position against where the guest was *now*
+    // rather than at the snapshot's own timestamp, so the guest's entire lead —
+    // one-way delay plus snapshot age — was counted as error and corrected
+    // away. Measured before the fix: 0.25 m of mean error at no latency, 1.23 m
+    // at 60 ms, 2.23 m at 120 ms, 3.72 m at 200 ms. A straight line through the
+    // latency, which is a clock mistake rather than the physics disagreeing.
+    const near = await drive(0);
+    const far = await drive(200, 0.1, 100);
+    expect(near.mean).toBeLessThan(0.6);
+    // The one that matters: a fifth of a second of latency with ten per cent
+    // loss used to cost 3.72 m of standing error. Asserted in absolute metres
+    // rather than as a ratio to `near`, because `near` is small enough that a
+    // ratio against it swings on seed noise alone.
+    expect(far.mean).toBeLessThan(1.5);
+    // And still a guard against the proportionality coming back: it used to be
+    // about fifteen times worse at distance.
+    expect(far.mean).toBeLessThan(near.mean * 10);
+  }, 60_000);
+
+  it('stops teleporting the car on a poor connection', async () => {
+    // `HARD_SNAP` is 2.5 m, and the manufactured error above crossed it past
+    // about 100 ms — so the guest's own car was being *snapped* rather than
+    // nudged, 39 times in thirty seconds at 120 ms and 57 at 200 ms. That is
+    // the jolt a player feels, and it is entirely self-inflicted.
+    const { snaps } = await drive(120, 0.08, 80);
+    expect(snaps).toBeLessThan(5);
+  }, 60_000);
 });

@@ -63,6 +63,28 @@ export const INTERP_DELAY = 0.1;
 /** Seconds over which a prediction error is blended away. */
 const BLEND_TIME = 0.25;
 
+/** How much of our own past to keep, seconds. Comfortably over a round trip. */
+const HISTORY_SECONDS = 1;
+
+/**
+ * How far past the newest snapshot a remote car may be carried, seconds.
+ *
+ * Two snapshot intervals. Long enough to cover a lost packet, short enough that
+ * a car whose owner has genuinely stopped sending does not sail off across the
+ * scenery on a velocity from a third of a second ago.
+ */
+const EXTRAPOLATE_LIMIT = 0.1;
+/**
+ * How fast the best-round-trip estimate is allowed to rot, ms per pong.
+ *
+ * Without it one lucky early packet pins the clock offset for the whole race
+ * and a route that gets slower is never noticed. Pings are one a second, so
+ * this forgets a good sample over about half a minute.
+ */
+const CLOCK_DECAY_MS = 30;
+
+
+
 /**
  * Metres of disagreement beyond which the correction stops being a nudge.
  *
@@ -150,8 +172,42 @@ export class RaceGuest {
   /** Outstanding prediction error for our own car, in world metres. */
   private correction: Vec3 = { x: 0, y: 0, z: 0 };
 
+  /**
+   * Where we thought we were, stamped with the host's clock.
+   *
+   * The whole point of this class is to be ahead of the host — that is what
+   * makes the wheel respond in the frame it was turned. So comparing the
+   * authority's position against where we are *now* measures the lead as
+   * though it were error, and the lead is one-way delay plus snapshot age
+   * worth of entirely legitimate motion. Measured on the loopback harness at
+   * 30 m/s: 0.25 m of mean error at no latency, 2.23 m at 120 ms, 3.72 m at
+   * 200 ms — a straight line through the latency, which is the signature of a
+   * timing mistake rather than of the physics disagreeing.
+   *
+   * Worse, `HARD_SNAP` is 2.5 m, so past about 100 ms that manufactured error
+   * crosses the teleport threshold and the car is *snapped* rather than nudged
+   * — 39 times in thirty seconds at 120 ms, 57 at 200 ms. That is the jolt.
+   *
+   * So we keep our own past. A snapshot stamped host-time T is compared with
+   * where we thought we were at T, and the difference is the only thing that
+   * is really error.
+   */
+  private readonly history: { t: number; p: Vec3; q: Quat }[] = [];
+
+  /**
+   * Host clock minus our clock, in seconds, or null until a pong lands.
+   *
+   * From the *lowest-RTT* pong rather than the most recent. A round trip can
+   * only ever be delayed, never hurried, so the quickest exchange seen is the
+   * one least polluted by queueing — taking the latest instead would make the
+   * offset jitter by exactly the amount of jitter on the link, which is the
+   * thing being corrected for.
+   */
+  private hostOffset: number | null = null;
+  private bestRtt = Infinity;
+
   /** Corrections applied so far, for the tests and the netgraph. */
-  readonly stats = { snapshots: 0, blends: 0, snaps: 0, worstError: 0 };
+  stats = { snapshots: 0, blends: 0, snaps: 0, worstError: 0 };
 
   constructor(link: Link, options: GuestOptions = {}) {
     this.link = link;
@@ -207,6 +263,15 @@ export class RaceGuest {
     this.world = world;
     this.buffers.clear();
     this.correction = { x: 0, y: 0, z: 0 };
+    // Our own past belongs to the world that made it: a new stage restarts the
+    // relationship between the two clocks, and a stale entry would be compared
+    // against a snapshot from somewhere else entirely.
+    this.history.length = 0;
+    // The counters are a readout of *this* race now that something reads them.
+    // `worstError` kept a lifetime maximum across every race in the session, so
+    // one bad moment in practice made the connection look broken for the
+    // evening.
+    this.stats = { snapshots: 0, blends: 0, snaps: 0, worstError: 0 };
   }
 
   /**
@@ -285,9 +350,22 @@ export class RaceGuest {
       case 'result':
         this.options.onResult?.(message.player, message.time, message.retired);
         break;
-      case 'pong':
-        this.rtt = Math.max(0, this.clock * 1000 - message.sent);
+      case 'pong': {
+        const rtt = Math.max(0, this.clock * 1000 - message.sent);
+        this.rtt = rtt;
+        // `hostTime` has always been on the wire and was always thrown away.
+        // The host stamped it on the way back, so it was current half a round
+        // trip ago.
+        if (rtt <= this.bestRtt || this.hostOffset === null) {
+          this.bestRtt = rtt;
+          this.hostOffset = message.hostTime + rtt / 2000 - this.clock;
+        } else {
+          // Let the best decay, or one lucky early packet pins the estimate for
+          // the rest of the race and a route change is never picked up.
+          this.bestRtt += CLOCK_DECAY_MS;
+        }
         break;
+      }
       case 'bye':
         if (message.player === undefined) {
           this.open = false;
@@ -352,27 +430,35 @@ export class RaceGuest {
 
     const body = car.vehicle.body;
     const here = body.translation() as Vec3;
-    // The error we would still have after the blend in flight lands.
-    const error = sub(latest.p, { x: here.x + this.correction.x, y: here.y + this.correction.y, z: here.z + this.correction.z });
+
+    // Like for like: what the authority says about host-time T against what we
+    // thought at host-time T, not against where we have since driven to. Before
+    // the first pong there is no clock to line them up with, so this falls back
+    // to the old comparison — wrong, but wrong for a fraction of a second at
+    // the very start rather than for the whole race.
+    const then = this.predictedAt(latest.time);
+    const mine = then ? then.p : { x: here.x + this.correction.x, y: here.y + this.correction.y, z: here.z + this.correction.z };
+    const error = sub(latest.p, mine);
     const off = length(error);
     this.stats.worstError = Math.max(this.stats.worstError, off);
 
-    const turned = angleBetween(body.rotation() as Quat, latest.q);
+    // The heading at the same moment, for the same reason.
+    const turned = angleBetween(then ? then.q : (body.rotation() as Quat), latest.q);
     if (off > HARD_SNAP || turned > HARD_SNAP_ANGLE) {
       body.setTranslation(latest.p, true);
       body.setRotation(latest.q, true);
       body.setLinvel(latest.v, true);
       body.setAngvel(latest.w, true);
       this.correction = { x: 0, y: 0, z: 0 };
+      this.history.length = 0;
       this.stats.snaps++;
       return;
     }
 
-    this.correction = {
-      x: this.correction.x + error.x,
-      y: this.correction.y + error.y,
-      z: this.correction.z + error.z,
-    };
+    // Replaces rather than accumulates: `error` is measured against our own
+    // past, so it already accounts for everything still in flight.
+    this.correction = error;
+
     this.stats.blends++;
   }
 
@@ -404,8 +490,54 @@ export class RaceGuest {
     inputs[0] = localInput;
     world.step(inputs);
 
+    this.remember();
     this.applyCorrection(dt);
     this.playRemotes(dt);
+  }
+
+  /**
+   * File where we ended this step, on the host's clock.
+   *
+   * After the physics and before the correction, because what the host is
+   * about to disagree with is our *prediction* — folding the previous
+   * correction back in would be comparing the authority against itself.
+   */
+  private remember(): void {
+    const car = this.world?.cars[0];
+    if (!car || this.hostOffset === null) return;
+    const body = car.vehicle.body;
+    this.history.push({
+      t: this.clock + this.hostOffset,
+      p: { ...(body.translation() as Vec3) },
+      q: { ...(body.rotation() as Quat) },
+    });
+    // A second is far more than a round trip and costs a few kilobytes.
+    const cutoff = this.clock + this.hostOffset - HISTORY_SECONDS;
+    while (this.history.length > 2 && this.history[0]!.t < cutoff) this.history.shift();
+  }
+
+  /** Where we thought we were at a host time, or null if it is off the end. */
+  private predictedAt(time: number): { p: Vec3; q: Quat } | null {
+    if (this.history.length < 2) return null;
+    const first = this.history[0]!;
+    const last = this.history[this.history.length - 1]!;
+    // Clamped at both ends rather than refused. Falling back to "where we are
+    // now" costs a whole round trip of manufactured error — the very thing this
+    // exists to remove — while clamping costs only however far past the end the
+    // request landed, which is a step or two whenever the clock estimate is
+    // roughly right. Measured at 200 ms and 100 ms of jitter, refusing here was
+    // still producing 58 teleports in thirty seconds; clamping removes them.
+    if (time <= first.t) return { p: first.p, q: first.q };
+    if (time >= last.t) return { p: last.p, q: last.q };
+    for (let i = 1; i < this.history.length; i++) {
+      const b = this.history[i]!;
+      if (b.t < time) continue;
+      const a = this.history[i - 1]!;
+      const span = b.t - a.t;
+      const k = span > 1e-6 ? (time - a.t) / span : 0;
+      return { p: lerpVec(a.p, b.p, k), q: slerp(a.q, b.q, k) };
+    }
+    return { p: last.p, q: last.q };
   }
 
   /** Walk our own car toward the authority, a slice at a time. */
@@ -413,6 +545,24 @@ export class RaceGuest {
     const world = this.world;
     const car = world?.cars[0];
     if (!car) return;
+
+    // Position only, deliberately.
+    //
+    // Blending *rotation* was tried and removed, and the way it failed is worth
+    // keeping: slerping the current heading toward the authority's repeats the
+    // exact timing mistake this class was just fixed for, one field over. The
+    // snapshot's heading is from half a round trip ago, and during a slalom the
+    // car has legitimately turned since — so the blend drags the nose backwards
+    // and makes things worse the higher the latency. Measured, it added twenty
+    // teleports in thirty seconds at 200 ms. Doing it properly means applying
+    // the *rotational delta* measured at the snapshot's own timestamp, which
+    // needs quaternion multiply and inverse that this project does not have.
+    // A gross heading error is still caught by the snap branch, as before.
+    //
+    // Velocity is left alone for a different reason: the vehicle model
+    // re-derives suspension, load and slip from the body every step, so writing
+    // a velocity from a stale snapshot fights the tyre model rather than
+    // helping it.
     const remaining = length(this.correction);
     if (remaining < 1e-4) return;
 
@@ -460,12 +610,27 @@ export class RaceGuest {
     }
   }
 
-  /** Interpolate a buffer at a host time, holding the ends. */
+  /** Interpolate a buffer at a host time, extrapolating a little past the end. */
   private sampleAt(buffer: readonly Sample[], time: number): Sample {
     const first = buffer[0]!;
     const last = buffer[buffer.length - 1]!;
     if (time <= first.time) return first;
-    if (time >= last.time) return last;
+    if (time >= last.time) {
+      // Carried forward on its last known velocity rather than stopped dead. A
+      // car that freezes and then jumps reads as a far bigger fault than one
+      // that keeps going and is quietly corrected — and a frozen car is also
+      // the wrong thing to try to overtake. Capped hard, because a car held on
+      // a stale velocity through a corner ends up somewhere it never went.
+      const ahead = Math.min(time - last.time, EXTRAPOLATE_LIMIT);
+      return {
+        ...last,
+        p: {
+          x: last.p.x + last.v.x * ahead,
+          y: last.p.y + last.v.y * ahead,
+          z: last.p.z + last.v.z * ahead,
+        },
+      };
+    }
     for (let i = 1; i < buffer.length; i++) {
       const b = buffer[i]!;
       if (b.time < time) continue;

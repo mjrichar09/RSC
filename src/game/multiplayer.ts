@@ -71,6 +71,18 @@ export class MultiplayerSession {
     return this.guest?.rtt ?? null;
   }
 
+  /**
+   * How hard the guest is having to argue with the authority.
+   *
+   * `snaps` is the one that matters: a snap is the car being *teleported*
+   * rather than nudged, and it is what a player feels as a jolt. These counters
+   * have existed since the netcode was written and nothing ever read them, so a
+   * connection quietly falling apart looked exactly like a connection working.
+   */
+  get netQuality(): { snaps: number; blends: number; worstError: number } | null {
+    return this.guest ? { ...this.guest.stats } : null;
+  }
+
   /** Local car index to the host's numbering. */
   toHost(index: number): number {
     if (!this.guest) return index;

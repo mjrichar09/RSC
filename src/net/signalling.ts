@@ -51,8 +51,13 @@ export interface Handshaker<L = RtcLink> {
 }
 
 const REAL: Handshaker = {
-  createInvite: realCreate,
-  acceptInvite: (code) => realAccept(code),
+  // Lossless, both directions. Nothing here is copied by a person, so there is
+  // no length to save and the compact form's dropped candidates — including
+  // every local-network one — are pure loss. This is what lets two players on
+  // the same wifi actually connect across it rather than out through their
+  // router.
+  createInvite: () => realCreate({ full: true }),
+  acceptInvite: (code) => realAccept(code, undefined, { full: true }),
 };
 
 export interface ServeOptions<L = RtcLink> {

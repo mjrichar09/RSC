@@ -1501,6 +1501,7 @@ const params = new URLSearchParams(location.search);
               players: session.names,
               connected: session.connected,
               ping: session.ping,
+              quality: session.netQuality,
             }
           : null,
       };

@@ -357,6 +357,32 @@ function unpackAddress(bytes: Uint8Array): string {
   return groups.join(':');
 }
 
+/**
+ * The whole description, losslessly, for a channel that is not a human.
+ *
+ * The 96-character code exists because somebody has to copy it into a chat
+ * window, and every byte of that is paid for by dropping candidates: TCP ones,
+ * component 2, and — the expensive one — Chrome's `.local` mDNS host
+ * candidates whenever a numeric STUN address exists, which is whenever STUN
+ * works. Those *are* the local network. Two players in the same room, both on
+ * Chrome, were having the one path that would have connected them in a
+ * millisecond stripped out of the offer, and were talking to each other via
+ * their router's public address instead — or failing outright on a router with
+ * no hairpin.
+ *
+ * The room broker has no length budget at all (the worker accepts four
+ * kilobytes; a full SDP deflates to well under one), so on that path there is
+ * nothing to buy and the compaction is pure loss. `decode` has always read this
+ * format — it is the fallback for a description the compact form cannot
+ * express — so nothing on the receiving side needs to know which was used.
+ */
+export async function encodeFull(description: RTCSessionDescriptionInit): Promise<string> {
+  const text = JSON.stringify({ t: description.type, s: description.sdp });
+  const bytes = new TextEncoder().encode(text);
+  const packed = await squeeze(bytes, 'pack');
+  return (packed ? 'Z' : 'P') + base64(packed ?? bytes);
+}
+
 async function encode(description: RTCSessionDescriptionInit): Promise<string> {
   const compact = pullApart(description);
   if (compact) return `C${base64(pack(compact))}`;
@@ -364,10 +390,7 @@ async function encode(description: RTCSessionDescriptionInit): Promise<string> {
   // Fallback: the whole SDP, deflated. Only reached if a browser's description
   // is missing something the compact form needs, which should not happen — but
   // an unreadable invite code is a worse failure than a long one.
-  const text = JSON.stringify({ t: description.type, s: description.sdp });
-  const bytes = new TextEncoder().encode(text);
-  const packed = await squeeze(bytes, 'pack');
-  return (packed ? 'Z' : 'P') + base64(packed ?? bytes);
+  return encodeFull(description);
 }
 
 async function decode(code: string): Promise<RTCSessionDescriptionInit> {
@@ -581,8 +604,14 @@ export interface Invite {
   cancel: () => void;
 }
 
-/** Host side: make an invite for one guest. Call it once per player you want. */
-export async function createInvite(): Promise<Invite> {
+/**
+ * Host side: make an invite for one guest. Call it once per player you want.
+ *
+ * `full` asks for the lossless encoding. Pass it whenever the code is going
+ * over a wire rather than through a person — it keeps the local-network
+ * candidates that the short form has to throw away.
+ */
+export async function createInvite(options: { full?: boolean } = {}): Promise<Invite> {
   const pc = new RTCPeerConnection(config());
   const control = pc.createDataChannel('control', { ordered: true });
   const fast = pc.createDataChannel('fast', { ordered: false, maxRetransmits: 0 });
@@ -594,7 +623,7 @@ export async function createInvite(): Promise<Invite> {
   await gathered(pc);
 
   const invite: Invite = {
-    code: await encode(pc.localDescription!),
+    code: await (options.full ? encodeFull : encode)(pc.localDescription!),
     addresses: candidateSummary(pc.localDescription!),
     onPhase: null,
     get spent(): boolean {
@@ -633,6 +662,7 @@ export async function createInvite(): Promise<Invite> {
 export async function acceptInvite(
   code: string,
   onPhase?: (phase: LinkPhase, detail: string) => void,
+  options: { full?: boolean } = {},
 ): Promise<{ reply: string; addresses: string; link: Promise<RtcLink>; connected: Promise<void> }> {
   const pc = new RTCPeerConnection(config());
   if (onPhase) watch(pc, onPhase);
@@ -652,7 +682,7 @@ export async function acceptInvite(
   await gathered(pc);
 
   return {
-    reply: await encode(pc.localDescription!),
+    reply: await (options.full ? encodeFull : encode)(pc.localDescription!),
     addresses: candidateSummary(pc.localDescription!),
     link: withTimeout(ready, 'could not reach the host'),
     connected: ready.then((link) => withTimeout(link.opened, 'could not reach the host')),
@@ -660,4 +690,4 @@ export async function acceptInvite(
 }
 
 /** Exposed for the tests: the codes are a pure encoding of a description. */
-export const codec = { encode, decode };
+export const codec = { encode, encodeFull, decode };
