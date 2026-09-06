@@ -756,15 +756,29 @@ html, body {
 .repair-list { max-height: 210px; overflow-y: auto; }
 .repair-row {
   display: grid;
-  grid-template-columns: 1fr auto 46px;
+  grid-template-columns: 1fr 54px 40px auto 46px;
   gap: 8px;
   align-items: center;
   font-size: 12px;
   padding: 4px 0;
   font-variant-numeric: tabular-nums;
 }
-.repair-row span { color: var(--dim); }
+.repair-row .repair-name { color: var(--dim); }
 .repair-row button { padding: 3px 8px; font-size: 10px; }
+/* The bar carries the colour; the number beside it carries the precision. On a
+   phone the bar is the only one of the two that survives a glance. */
+.repair-health {
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+.repair-health i { display: block; height: 100%; border-radius: 3px; }
+.repair-row em { font-style: normal; font-size: 10.5px; font-weight: 700; text-align: right; }
+/* A failed part is not a worse percentage, it is a different state: the car
+   will not start. Dimming the name and letting FAILED carry full weight stops
+   it reading as just another 0%. */
+.repair-row.dead .repair-name { color: var(--text); font-weight: 700; }
 .repair-total {
   display: flex;
   justify-content: space-between;

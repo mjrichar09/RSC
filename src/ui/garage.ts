@@ -15,6 +15,7 @@ import { UPGRADES, levelOf, maxLevel, nextCost } from '../game/garage.js';
 import { LIVERIES } from '../data/liveries.js';
 import { sweepProgress } from '../game/awards.js';
 import { formatTime } from './raceHud.js';
+import { healthColor } from './damagePanel.js';
 
 const MEDAL_TINT: Record<string, string> = {
   author: '#b06bff',
@@ -455,15 +456,27 @@ export class Garage {
     }
 
     const affordable = bill.total <= this.career.money;
+    // Cost answers "can I afford it"; health answers "does this end my next
+    // race". They are not the same question and the list only ever answered the
+    // first — a destroyed exhaust is cheap and sorts to the bottom, while the
+    // engine at 40% sits above it looking like the bigger problem because it
+    // costs more. The bar is the fix: the sort stays by cost, and the state of
+    // each part is readable without doing arithmetic on a price.
     const rows = bill.lines
-      .map(
-        (line) => `
-        <div class="repair-row">
-          <span>${line.label}</span>
+      .map((line) => {
+        const pct = Math.round(line.health * 100);
+        const dead = line.health <= 0;
+        return `
+        <div class="repair-row${dead ? ' dead' : ''}">
+          <span class="repair-name">${line.label}</span>
+          <span class="repair-health" title="${dead ? 'failed' : `${pct}% health`}">
+            <i style="width:${Math.max(line.health * 100, 2).toFixed(0)}%;background:${healthColor(line.health)}"></i>
+          </span>
+          <em style="color:${healthColor(line.health)}">${dead ? 'FAILED' : `${pct}%`}</em>
           <b>${money(line.cost)}</b>
           <button data-action="repair" data-id="${line.id}" ${line.cost <= this.career.money ? '' : 'disabled'}>fix</button>
-        </div>`,
-      )
+        </div>`;
+      })
       .join('');
 
     // Fixing only what stops the car starting is the move when money is tight.

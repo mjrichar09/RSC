@@ -268,6 +268,14 @@ export interface StageGeometry {
    * read at a glance on every biome.
    */
   vertexShade: Float32Array;
+  /**
+   * Road gradient at each vertex: rise over run, signed, uphill positive.
+   *
+   * Here rather than in the renderer because it is a property of the geometry
+   * — the same reason `vertexShade` is. What is *done* with it is the
+   * renderer's business; what it measures is the stage's.
+   */
+  vertexGrade: Float32Array;
 }
 
 export interface Checkpoint {
@@ -465,10 +473,14 @@ export class Stage {
     const vertices = new Float32Array(samples.length * columns * 3);
     const vertexSurfaces: SurfaceId[] = [];
     const vertexShade = new Float32Array(samples.length * columns);
+    const vertexGrade = new Float32Array(samples.length * columns);
     const indices = new Uint32Array((samples.length - 1) * (columns - 1) * 6);
 
     let v = 0;
     for (const s of samples) {
+      // `forward` is a unit tangent, so its vertical component is the sine of
+      // the pitch — which for any gradient a car can climb is the gradient.
+      const grade = s.forward.y;
       for (const p of this.profile(s.width)) {
         const point = add(add(s.position, scale(s.left, p.offset)), scale(s.up, p.height));
         vertices[v * 3] = point.x;
@@ -476,6 +488,7 @@ export class Stage {
         vertices[v * 3 + 2] = point.z;
         vertexSurfaces.push(this.surfaceForOffset(Math.abs(p.offset), s.width, s.surface));
         vertexShade[v] = this.shadeForOffset(Math.abs(p.offset), s.width);
+        vertexGrade[v] = grade;
         v++;
       }
     }
@@ -496,7 +509,7 @@ export class Stage {
       }
     }
 
-    return { vertices, indices, vertexSurfaces, vertexShade };
+    return { vertices, indices, vertexSurfaces, vertexShade, vertexGrade };
   }
 
   /** Brightness multiplier for a lateral offset, darkening away from the road. */

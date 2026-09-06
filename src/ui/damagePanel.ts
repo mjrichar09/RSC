@@ -41,12 +41,16 @@ const LABEL: Record<string, string> = {
 /**
  * Green through amber to red as a component's health falls.
  *
+ * Exported because the garage's repair list uses the same ramp. Two readouts of
+ * the same number that disagree about what colour it is are worse than one, and
+ * the silhouette and the list are read within a second of each other.
+ *
  * The ramp is deliberately steep. A linear hue mapping leaves a part at 80%
  * health looking healthy green, which hides exactly the damage the player most
  * needs to notice — the kind that is degrading the car right now without having
  * broken anything yet.
  */
-function healthColor(health: number): string {
+export function healthColor(health: number): string {
   const h = Math.max(health, 0);
   const hue = 130 * Math.pow(h, 2.4);
   const light = 30 + 20 * h;

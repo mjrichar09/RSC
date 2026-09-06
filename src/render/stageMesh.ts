@@ -28,7 +28,8 @@ function mottle(index: number): number {
 export interface StageView {
   group: THREE.Group;
   /**
-   * Corner boards, which have to be turned to face the camera every frame.
+   * The corner boards, which turn to face the camera until they are knocked
+   * over — and so have to be re-aimed every frame.
    *
    * A board facing down the road is seen edge-on from an isometric view — it
    * renders as a bright sliver a few pixels wide and reads as nothing. Facing
@@ -36,7 +37,6 @@ export interface StageView {
    * the zone at the board is not the zone at the car, so a board goes edge-on
    * exactly when the car is far enough away for it to matter.
    */
-  /** The corner boards, which turn to face the camera until they are knocked over. */
   signs: SignsView;
   /** The marker poles, which have to be re-synced whenever one goes over. */
   markers: MarkerView;
@@ -50,6 +50,56 @@ export interface StageView {
 }
 
 /**
+ * How hard the gradient tint is pushed. 0 disables it entirely.
+ *
+ * `GRADE_REFERENCE` is the gradient at which the tint reaches full strength.
+ * Measured across all thirteen stages rather than guessed: the steepest pitch
+ * anywhere is 22% (gen-forest, pine-loop and quarry-run all reach 20%), but the
+ * *mean* is only 3.5–6%. So a reference set at the peak leaves the gradient a
+ * player actually spends the stage on tinted by about 0.03, which is nothing —
+ * the cue has to be sized for the ordinary road, not the extreme one, or it
+ * only appears where it was already obvious.
+ */
+const GRADE_STRENGTH = 0.34;
+const GRADE_REFERENCE = 0.09;
+
+/** Warm and light going up, cool and dark coming down. */
+const UPHILL = new THREE.Color(0xffd9a0);
+const DOWNHILL = new THREE.Color(0x5f7fa8);
+
+/**
+ * Make the road's slope readable from a camera that cannot show it.
+ *
+ * The camera is orthographic and close to overhead, which is exactly the view
+ * that destroys gradient information: a 10% climb is under 6° of tilt, so the
+ * surface normal barely moves and `N·L` changes by a couple of percent. No
+ * amount of work on the *lights* fixes that — the signal is not weak, it is
+ * almost absent, and a shadow harsh enough to reveal it would be a shadow that
+ * ruins everything else in the frame. Hence tinting the geometry rather than
+ * relighting it.
+ *
+ * Two colours, chosen so the cue survives being wrong. Warm-and-lighter reads
+ * as *toward* the viewer and cool-and-darker as away in every painting since
+ * the fifteenth century, so a player who never notices the effect still reads
+ * the hill correctly; and because the shift rides on the surface's own colour
+ * rather than replacing it, tarmac still looks like tarmac and gravel like
+ * gravel. A flat road is untouched, which keeps most of every stage exactly as
+ * it was.
+ */
+function shadeByGrade(color: THREE.Color, grade: number, scratch: THREE.Color): void {
+  const t = Math.max(-1, Math.min(1, grade / GRADE_REFERENCE));
+  if (Math.abs(t) < 0.02) return;
+  // Slightly superlinear so gentle undulation stays quieter than a real hill,
+  // but not squared — squaring is what made the typical 4% road invisible. The
+  // sign is put back afterwards.
+  const amount = Math.pow(Math.abs(t), 1.5) * GRADE_STRENGTH;
+  color.lerp(scratch.copy(t > 0 ? UPHILL : DOWNHILL), amount);
+  // And a matching swing in brightness, which is the half of the cue that
+  // survives a colourblind viewer and a phone in sunlight.
+  color.multiplyScalar(1 + Math.sign(t) * amount * 0.5);
+}
+
+/**
  * Build everything visible about a stage.
  *
  * The marker poles come from the simulation's own set rather than a copy, so
@@ -57,7 +107,7 @@ export interface StageView {
  */
 export function buildStageView(stage: Stage, markers: Markers): StageView {
   const group = new THREE.Group();
-  const { vertices, indices, vertexSurfaces, vertexShade } = stage.geometry;
+  const { vertices, indices, vertexSurfaces, vertexShade, vertexGrade } = stage.geometry;
 
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
@@ -65,8 +115,10 @@ export function buildStageView(stage: Stage, markers: Markers): StageView {
 
   const colors = new Float32Array(vertexSurfaces.length * 3);
   const c = new THREE.Color();
+  const slope = new THREE.Color();
   for (let i = 0; i < vertexSurfaces.length; i++) {
     c.setHex(SURFACES[vertexSurfaces[i]!].color).multiplyScalar(mottle(i) * vertexShade[i]!);
+    shadeByGrade(c, vertexGrade[i]!, slope);
     colors[i * 3] = c.r;
     colors[i * 3 + 1] = c.g;
     colors[i * 3 + 2] = c.b;
@@ -88,6 +140,7 @@ export function buildStageView(stage: Stage, markers: Markers): StageView {
   group.add(road);
 
   group.add(buildTerrain(stage));
+  group.add(buildGradeChevrons(stage));
   group.add(buildGates(stage));
   const first = stage.spline.samples[0]!;
   const startLights = new StartLightsView(first.position, first.left, first.width);
@@ -1417,6 +1470,105 @@ function buildBridges(stage: Stage): THREE.Group {
     group.add(mesh);
   }
 
+  return group;
+}
+
+/** Below this gradient a road reads as flat and gets no chevrons. */
+const CHEVRON_FROM = 0.035;
+/** Metres of road between chevrons. Closer on steeper ground — see below. */
+const CHEVRON_SPACING = 17;
+
+/**
+ * Arrows painted on the road, pointing up the hill.
+ *
+ * The tint in `shadeByGrade` tells you *that* the ground is sloping and roughly
+ * how much, but it is a colour on a coloured surface and on dirt it can be read
+ * as a change of surface instead. These say which way, unambiguously, in the
+ * one visual language every driver already knows from a road sign.
+ *
+ * They are paint, not objects: flat on the surface, no collider, no shadow.
+ * That keeps them out of `sim/` honestly — nothing here is at the size of a
+ * thing the car can hit, and the car drives over them exactly as it drives over
+ * a skid mark.
+ *
+ * Two details learned the hard way elsewhere in this file. A flat quad laid on
+ * the ground needs `DoubleSide` unless its winding has been checked, because a
+ * downward normal is silently culled and the buffer fills with perfectly good
+ * invisible geometry — that is the bug that hid every skid mark in the game.
+ * And they are lifted 4 cm rather than 1: the road is a coarse trimesh and at
+ * 1 cm the surface pokes through its own paint in stripes.
+ */
+function buildGradeChevrons(stage: Stage): THREE.Group {
+  const group = new THREE.Group();
+  const positions: number[] = [];
+  const colors: number[] = [];
+  const c = new THREE.Color();
+
+  let since = CHEVRON_SPACING;
+  let previous: number | null = null;
+  for (const sample of stage.spline.samples) {
+    const step = previous === null ? 0 : sample.distance - previous;
+    previous = sample.distance;
+    since += step;
+    const grade = sample.forward.y;
+    if (Math.abs(grade) < CHEVRON_FROM) continue;
+    // Steeper ground gets them closer together, so density reads as steepness
+    // the way contour lines do on a map — a second channel for free, and the
+    // one that still works when the arrows are too small to resolve.
+    const wanted = CHEVRON_SPACING * (1 - Math.min(Math.abs(grade) / 0.2, 1) * 0.55);
+    if (since < wanted) continue;
+    since = 0;
+
+    // Uphill is +forward when climbing and -forward when descending, so a
+    // chevron always points the way the ground rises.
+    const dir = grade > 0 ? 1 : -1;
+    const size = Math.min(2.3 + Math.abs(grade) * 10, 4.2);
+    c.setHex(grade > 0 ? 0xffc46b : 0x74a7d8).multiplyScalar(0.9);
+
+    // One per side, tucked toward the verge so the racing line stays clean.
+    for (const side of [-1, 1]) {
+      const across = sample.width * 0.62 * side;
+      const mid = {
+        x: sample.position.x + sample.left.x * across,
+        y: sample.position.y + 0.04,
+        z: sample.position.z + sample.left.z * across,
+      };
+      const f = sample.forward;
+      const l = sample.left;
+      // A V: tip ahead on the uphill side, two tails behind it.
+      const tip = { x: mid.x + f.x * size * dir, y: mid.y, z: mid.z + f.z * size * dir };
+      const arm = size * 0.85;
+      for (const wing of [-1, 1]) {
+        const outer = {
+          x: mid.x - f.x * arm * dir + l.x * arm * wing,
+          z: mid.z - f.z * arm * dir + l.z * arm * wing,
+        };
+        const inner = {
+          x: mid.x - f.x * arm * 0.35 * dir + l.x * arm * wing,
+          z: mid.z - f.z * arm * 0.35 * dir + l.z * arm * wing,
+        };
+        positions.push(tip.x, tip.y, tip.z, outer.x, mid.y, outer.z, inner.x, mid.y, inner.z);
+        for (let k = 0; k < 3; k++) colors.push(c.r, c.g, c.b);
+      }
+    }
+  }
+
+  if (positions.length === 0) return group;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  const mesh = new THREE.Mesh(
+    geo,
+    new THREE.MeshBasicMaterial({
+      vertexColors: true,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.72,
+      depthWrite: false,
+    }),
+  );
+  mesh.renderOrder = 1;
+  group.add(mesh);
   return group;
 }
 

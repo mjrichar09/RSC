@@ -1017,16 +1017,30 @@ export class DamageModel {
   }
 
   /** Total cost to return the car to new. */
-  repairBill(): { total: number; lines: { id: ComponentId; label: string; cost: number }[] } {
-    const lines: { id: ComponentId; label: string; cost: number }[] = [];
+  /**
+   * What is broken, what it costs, and how badly.
+   *
+   * `health` rides along because cost alone does not answer the question a
+   * player is actually asking. A destroyed exhaust is cheap and a lightly
+   * scuffed engine is not, so a bill sorted by price puts the trivial thing
+   * above the one that will end the next race — and the sort has to stay by
+   * cost, because the bill is also the thing you read when deciding what you
+   * can afford. Carrying health lets the row show both.
+   */
+  repairBill(): {
+    total: number;
+    lines: { id: ComponentId; label: string; cost: number; health: number }[];
+  } {
+    const lines: { id: ComponentId; label: string; cost: number; health: number }[] = [];
     let total = 0;
     for (const def of COMPONENTS) {
-      const missing = 1 - this.get(def.id);
+      const health = this.get(def.id);
+      const missing = 1 - health;
       if (missing <= 0.001) continue;
       // Slightly superlinear: a light scuff is cheap, a wrecked part is not.
       const cost = Math.round(def.repairCost * Math.pow(missing, 1.15));
       if (cost <= 0) continue;
-      lines.push({ id: def.id, label: def.label, cost });
+      lines.push({ id: def.id, label: def.label, cost, health });
       total += cost;
     }
     lines.sort((a, b) => b.cost - a.cost);
