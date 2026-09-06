@@ -69,6 +69,37 @@ const MAX_CRUST: Record<VisionKind, number> = {
   mud: 0.92,
 };
 
+/**
+ * Where it all ends up when nothing is clearing any of it.
+ *
+ * The caps above are what a *wiped* screen settles at — they are the balance
+ * point between what arrives and what the blade takes off, and water sits
+ * lowest of the three because it sheets off glass and you always see something
+ * through it. None of that reasoning survives the blade stopping. Rain with no
+ * wipers is the worst of the three to drive in, not the mildest: it arrives
+ * faster than anything except a ford and there is nothing to hold it back.
+ *
+ * Still short of 1. A screen you cannot see through at all is not difficulty,
+ * it is a black rectangle, and that principle does not change just because the
+ * wipers are the thing that broke.
+ */
+const MAX_UNWIPED: Record<VisionKind, number> = {
+  water: 0.88,
+  snow: 0.93,
+  mud: 0.94,
+};
+
+/**
+ * How fast the crust creeps across the arc once the blades stop, per second.
+ *
+ * A stage is 40-90 s, so this is sized to take most of a lap: the point is a
+ * view that closes in while you are driving it, which you feel, rather than a
+ * screen that is simply dirty from the first corner, which you only look at.
+ */
+const SPREAD_RATE = 0.055;
+/** How fast a working blade takes its arc back. One sweep, near enough. */
+const RECLAIM_RATE = 0.6;
+
 /** Seconds for one wiper stroke across the screen. A cycle is two of them. */
 const SWEEP_TIME = 0.55;
 /** Seconds between sweeps at full speed. Slower when there is less to clear. */
@@ -117,6 +148,25 @@ export interface VisionState {
    */
   wiperReturning: boolean;
   /**
+   * How far the crust has spread into the wiper's arc, 0..1.
+   *
+   * The clean sector exists because a blade is sweeping it. When the blade
+   * stops, the arc stops being special — whatever lands on it stays, exactly
+   * as it does in the corners — and the crust closes in from the edges until
+   * there is no clear glass left. Without this the screen kept a permanently
+   * clean arc in the middle no matter how long nobody wiped it, so losing the
+   * wipers cost you the corners and nothing else.
+   */
+  crustSpread: number;
+  /**
+   * How badly the glass itself is cracked, 0..1.
+   *
+   * Here rather than in the renderer for the same reason as everything else in
+   * this file: cracks are in front of the driver's eyes, so they are part of
+   * how far you can see, not decoration on top of it.
+   */
+  cracks: number;
+  /**
    * True when the wipers cannot clear at all any more.
    *
    * Either because the blades have gone or because the glass has. Losing the
@@ -159,6 +209,8 @@ export class Vision {
   private soiling = 0;
   /** What has built up where the blades never reach. */
   private caked = 0;
+  /** How much of the swept arc has been surrendered to the crust. */
+  private spread = 0;
   /** Seconds since the current sweep began, or null when parked. */
   private sweep: number | null = null;
   /** Whether the outbound stroke of the current cycle has already cleared. */
@@ -184,17 +236,45 @@ export class Vision {
     const kind: VisionKind =
       spray > weather ? 'mud' : conditions.weather === 'snowfall' ? 'snow' : 'water';
 
-    this.soiling = clamp(this.soiling + arriving * dt, 0, MAX_OCCLUSION[kind]);
+    // Wipers. They run when there is something to clear and they still work.
+    const wipersDead = wiperHealth <= 0;
+
+    // Everything below scales with what is left of the blade rather than
+    // switching at zero. A wiper that is failing does not sweep a clean stripe
+    // slightly less often — it *smears*, leaving more behind every stroke, and
+    // the glass it gives up on stays given up on. Measured before this was
+    // true: a windscreen at 10% health still ended a 90 s stage at 0.12
+    // occlusion, which is a cleaner screen than a healthy car in the same rain,
+    // because the only thing failing health did was stretch the interval.
+    const cap = (best: number, worst: number) => best + (worst - best) * (1 - wiperHealth);
+
+    this.soiling = clamp(
+      this.soiling + arriving * dt,
+      0,
+      cap(MAX_OCCLUSION[kind], MAX_UNWIPED[kind]),
+    );
     // The corners fill in far more slowly than the swept glass and never
     // empty. Only real weather and real mud cake glass: the fine dust off a dry
     // gravel road dirties a screen, it does not build a crust on it, and a
     // stage that ends with the corners packed solid after a dry afternoon is a
     // windscreen nobody recognises.
-    const caking = Math.max(arriving - 0.12, 0);
-    this.caked = clamp(this.caked + caking * dt * 0.28, 0, MAX_CRUST[kind]);
+    //
+    // That floor is about what a *blade* leaves behind, though, so it goes when
+    // there is no blade: with nothing clearing anything, drizzle cakes glass
+    // just as surely as a downpour does, only slower.
+    const caking = Math.max(arriving - 0.12 * wiperHealth, 0);
+    this.caked = clamp(this.caked + caking * dt * 0.28, 0, cap(MAX_CRUST[kind], MAX_UNWIPED[kind]));
 
-    // Wipers. They run when there is something to clear and they still work.
-    const wipersDead = wiperHealth <= 0;
+    // And the clean sector closes up. A blade keeps the share of its arc it
+    // still has the strength to keep — all of it when healthy, the middle of it
+    // when half gone, none of it when it has stopped. It closes only as fast as
+    // material actually arrives, so a dead wiper on a dry road costs nothing
+    // until the weather turns; it comes back in about a sweep.
+    const surrendered = 1 - wiperHealth;
+    this.spread =
+      surrendered > this.spread
+        ? Math.min(surrendered, this.spread + arriving * dt * SPREAD_RATE)
+        : Math.max(surrendered, this.spread - dt * RECLAIM_RATE);
     if (!wipersDead && this.soiling > 0.05) {
       this.sinceSweep += dt;
       // A tired wiper is a slow wiper, so the gap between sweeps stretches as
@@ -216,7 +296,7 @@ export class Vision {
         // Parked, and whatever the return stroke picked up on its way back.
         this.sweep = null;
         this.swept = false;
-        this.soiling = Math.min(this.soiling, SMEAR * (1 - wiperHealth * 0.7));
+        this.soiling = Math.min(this.soiling, this.leftBehind(wiperHealth, 0.7));
       } else if (progress >= 1) {
         // On the way back across glass the outbound stroke already cleared.
         // The clearing lands here, on the turn, rather than at a progress
@@ -225,7 +305,7 @@ export class Vision {
         // the wipers silently stop working.
         if (!this.swept) {
           this.swept = true;
-          this.soiling = Math.min(this.soiling, SMEAR * (1 - wiperHealth * 0.5));
+          this.soiling = Math.min(this.soiling, this.leftBehind(wiperHealth, 0.5));
         }
         wiper = 2 - progress;
         wiperReturning = true;
@@ -251,6 +331,12 @@ export class Vision {
       coneAngle: 0.34 + 0.14 * lightHealth,
       occlusion: this.soiling,
       crust: this.caked,
+      crustSpread: this.spread,
+      // Cracks run the other way from health, and then stop: past the last
+      // sliver the pane is gone rather than broken, and `carView.applyGlass`
+      // has already thrown it out of the frame. Cracks drawn on a hole would
+      // be the same mistake as a wiper sweeping one.
+      cracks: clamp(1 - input.windscreenHealth, 0, 1) * clamp(input.windscreenHealth / 0.08, 0, 1),
       kind,
       wiper,
       wiperReturning,
@@ -258,9 +344,22 @@ export class Vision {
     };
   }
 
+  /**
+   * What a stroke fails to remove.
+   *
+   * A healthy blade leaves only its smear. A worn one leaves a share of
+   * whatever was there, which is the difference between a wiper that is slow
+   * and a wiper that is not really working — and the whole reason the component
+   * is worth paying to fix before a wet stage rather than after it.
+   */
+  private leftBehind(wiperHealth: number, polish: number): number {
+    return SMEAR * (1 - wiperHealth * polish) + this.soiling * (1 - wiperHealth) * 0.85;
+  }
+
   reset(): void {
     this.soiling = 0;
     this.caked = 0;
+    this.spread = 0;
     this.sweep = null;
     this.swept = false;
     this.sinceSweep = 0;

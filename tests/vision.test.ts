@@ -57,15 +57,83 @@ describe('soiling', () => {
   it('never takes the whole screen, whatever is falling', () => {
     // A view you cannot see through at all is not difficulty, it is a black
     // rectangle — so every material has a ceiling below one.
+    //
+    // The ceiling used to be 0.8 here, which was the *wiped* ceiling being
+    // asserted about an unwiped screen: the same cap applied whether or not
+    // anything was clearing it, so losing the wipers cost you the corners and
+    // nothing else. It is higher now and still short of blind.
     for (const weather of ['rain', 'snowfall'] as const) {
       const state = run(new Vision(), 60, {
         conditions: { timeOfDay: 'night', weather },
         wiperHealth: 0,
       });
-      expect(state.occlusion, weather).toBeLessThan(0.8);
+      expect(state.occlusion, weather).toBeLessThan(0.95);
     }
     const muddy = run(new Vision(), 60, { surface: 'mud', wiperHealth: 0 });
     expect(muddy.occlusion).toBeLessThan(0.95);
+  });
+
+  it('keeps building all race when nothing is clearing it', () => {
+    // The report this exists for: with the wipers or the glass gone, the muck
+    // should keep arriving and stay arrived. It used to plateau at the wiped
+    // ceiling and, worse, the wiper's own arc stayed permanently clean in the
+    // middle of the screen because the renderer masked the crust out of it —
+    // so a stage driven with no wipers looked like a stage driven with them.
+    const wet = { conditions: { timeOfDay: 'day', weather: 'rain' } as const, wiperHealth: 0 };
+    const early = run(new Vision(), 5, wet);
+    const late = run(new Vision(), 60, wet);
+
+    // The corners fill within seconds; it is the arc that takes the race, which
+    // is the half a player actually feels closing in.
+    expect(early.crustSpread).toBeGreaterThan(0.05);
+    expect(late.crustSpread).toBeGreaterThan(early.crustSpread * 5);
+    expect(late.crustSpread).toBeGreaterThan(0.9);
+    expect(late.crust).toBeGreaterThan(early.crust);
+
+    // And a healthy car in the same rain keeps its arc for the whole stage.
+    const kept = run(new Vision(), 60, { conditions: wet.conditions, wiperHealth: 1 });
+    expect(kept.crustSpread).toBe(0);
+    expect(kept.occlusion).toBeLessThan(late.occlusion / 2);
+  });
+
+  it('lets a failing wiper smear instead of only sweeping less often', () => {
+    // A windscreen at 10% health used to end a 90 s stage *cleaner* than a
+    // healthy car in the same rain: failing health only stretched the interval
+    // between sweeps, and every sweep still polished the glass. A worn blade
+    // has to leave some of it behind or the component has no consequence.
+    const wet = { conditions: { timeOfDay: 'day', weather: 'rain' } as const };
+    const healthy = run(new Vision(), 60, { ...wet, windscreenHealth: 1 });
+    const failing = run(new Vision(), 60, { ...wet, windscreenHealth: 0.1 });
+    expect(failing.occlusion).toBeGreaterThan(healthy.occlusion * 2);
+    expect(failing.crustSpread).toBeGreaterThan(0.5);
+  });
+
+  it('leaves a dry day alone however broken the wipers are', () => {
+    // The other half of the same rule. A dead wiper is a wet-weather problem;
+    // it must not dirty a screen that nothing is landing on, or every stage
+    // becomes a wiper stage.
+    const dry = run(new Vision(), 90, {
+      conditions: { timeOfDay: 'day', weather: 'clear' },
+      surface: 'tarmac',
+      wiperHealth: 0,
+    });
+    expect(dry.occlusion).toBe(0);
+    expect(dry.crust).toBe(0);
+    expect(dry.crustSpread).toBe(0);
+  });
+
+  it('cracks with the glass, and stops when there is no glass left', () => {
+    // 70% health is a chipped edge, 40% a couple of stars, 10% a web. Past the
+    // last sliver the pane is gone rather than broken — `carView.applyGlass`
+    // has already thrown it out of the frame — and cracks drawn on a hole are
+    // the same mistake as a wiper sweeping one.
+    const at = (health: number) => run(new Vision(), 1, { windscreenHealth: health }).cracks;
+    expect(at(1)).toBe(0);
+    expect(at(0.7)).toBeGreaterThan(0.2);
+    expect(at(0.4)).toBeGreaterThan(at(0.7));
+    expect(at(0.1)).toBeGreaterThan(at(0.4));
+    expect(at(0.1)).toBeGreaterThan(0.8);
+    expect(at(0)).toBe(0);
   });
 
   it('knows mud from rain, because they do not look alike', () => {

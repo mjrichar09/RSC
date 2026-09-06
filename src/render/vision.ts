@@ -56,6 +56,8 @@ const COMPOSITE = /* glsl */ `
   uniform float uAngle;      // cone half-angle, radians
   uniform float uOcclusion;  // 0..1 muck on the swept glass
   uniform float uCrust;      // 0..1 muck where the blades never reach
+  uniform float uSpread;     // 0..1 how far the crust has closed over the arc
+  uniform float uCracks;     // 0..1 how broken the glass is
   uniform float uKind;       // 0 water, 1 snow, 2 mud
   uniform float uWiper;      // blade position 0..1, or -1 when parked
   uniform float uWiperBack;  // 1 while the blade is on its return stroke
@@ -124,6 +126,113 @@ const COMPOSITE = /* glsl */ `
     return best;
   }
 
+  /**
+   * The crack network: distance to the nearest boundary between two cells.
+   *
+   * A Voronoi second-minus-first distance, which is zero exactly on a cell
+   * edge and grows away from it — so thresholding it gives a connected web of
+   * lines that meet at junctions, which is what a crack network is. Cracks
+   * drawn as independent strokes never join up and read as scratches on the
+   * lens instead of damage to the pane.
+   */
+  float crackWeb(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    float d1 = 8.0;
+    float d2 = 8.0;
+    for (int y = -1; y <= 1; y++) {
+      for (int x = -1; x <= 1; x++) {
+        vec2 o = vec2(float(x), float(y));
+        vec2 seed = i + o;
+        vec2 point = o + vec2(hash(seed), hash(seed + 31.4));
+        float d = length(f - point);
+        if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) { d2 = d; }
+      }
+    }
+    return d2 - d1;
+  }
+
+  /**
+   * One impact: radial spokes with rings across them.
+   *
+   * The spoke width is divided by the radius so a line stays the same
+   * thickness from the centre out — without that the spokes fan into wedges
+   * and the whole thing reads as a starburst rather than as broken glass.
+   */
+  float spiderweb(vec2 uv, vec2 centre, float radius, float seed) {
+    vec2 d = (uv - centre) * vec2(uAspect, 1.0);
+    float r = length(d);
+    if (r > radius) return 0.0;
+    float a = atan(d.y, d.x);
+    float spokes = 7.0 + floor(hash(vec2(seed, 1.7)) * 7.0);
+    // Wobble, so the spokes are not a clean asterisk.
+    float wobble = (noise(d * 26.0) - 0.5) * 0.05;
+    float sa = fract((a + wobble) * spokes / 6.2831853 + hash(vec2(seed, 2.3)));
+    float spokeD = abs(sa - 0.5) * 6.2831853 / spokes * max(r, 0.004);
+    float spoke = 1.0 - smoothstep(0.0, 0.0022, spokeD);
+    // Rings joining the spokes, closer together near the impact.
+    float ringR = r * (13.0 + hash(vec2(seed, 3.1)) * 9.0) + (noise(d * 34.0) - 0.5) * 0.55;
+    float ring = 1.0 - smoothstep(0.0, 0.12, abs(fract(ringR) - 0.5));
+    // The impact itself is a crushed white point, not a hole.
+    float core = 1.0 - smoothstep(0.0, radius * 0.06, r);
+    float fade = 1.0 - smoothstep(radius * 0.35, radius, r);
+    return clamp(max(max(spoke, ring * 0.55), core) * fade, 0.0, 1.0);
+  }
+
+  /**
+   * Everything the glass is doing, in three layers that arrive in turn.
+   *
+   * They are staged rather than one network fading up because damage to glass
+   * is not uniform dimming — a screen goes from sound, to chipped at the edges
+   * where the frame holds it, to starred where something hit it, to a web you
+   * are trying to see past. Fading one full-screen network in from zero reads
+   * as a dirty filter for the whole first half of its range.
+   */
+  float glassCracks(vec2 uv) {
+    if (uCracks < 0.02) return 0.0;
+
+    // The edges first: the frame grips the pane there, so that is where it
+    // gives first and where a stone chip does the least damage.
+    //
+    // The band has to actually hug the frame. Written as smoothstep(0.28, 0.5)
+    // it left only the middle 56% of the screen clear, so "a few cracks at the
+    // edges" came out as a web over most of the picture and the three stages
+    // stopped being distinguishable from one another.
+    float border = smoothstep(0.40, 0.50, max(abs(uv.x - 0.5), abs(uv.y - 0.5)));
+    float fine = 1.0 - smoothstep(0.0, 0.022, crackWeb(uv * vec2(uAspect, 1.0) * 17.0));
+    float edge = fine * border * smoothstep(0.10, 0.32, uCracks);
+    // Nothing below is on screen yet at the first stage of damage.
+    if (uCracks < 0.48) return clamp(edge, 0.0, 1.0);
+
+    // Then two impacts, at fixed points so the damage does not crawl about the
+    // screen as it worsens — a crack that moves is a crack nobody believes.
+    //
+    // Each layer is skipped until its own stage arrives, and the tests are on a
+    // uniform so every pixel takes the same branch — a real early-out rather
+    // than one the hardware has to run both sides of. It matters: crackWeb is
+    // nine cells of hashing per call and this is a full-screen pass, so a
+    // windscreen with a chipped edge should not be paying for the shattered
+    // one's network. Fill rate is the first thing a phone runs out of here.
+    float webs = 0.0;
+    if (uCracks > 0.48) {
+      webs = max(webs, spiderweb(uv, vec2(0.34, 0.62), 0.17, 5.0)
+        * smoothstep(0.48, 0.62, uCracks));
+    }
+    if (uCracks > 0.55) {
+      webs = max(webs, spiderweb(uv, vec2(0.68, 0.41), 0.13, 19.0)
+        * smoothstep(0.55, 0.70, uCracks));
+    }
+
+    // And finally the whole pane, gone.
+    float through = 0.0;
+    if (uCracks > 0.68) {
+      float dense = 1.0 - smoothstep(0.0, 0.042, crackWeb(uv * vec2(uAspect, 1.0) * 7.5));
+      through = dense * smoothstep(0.68, 0.94, uCracks);
+    }
+
+    return clamp(max(max(edge, webs), through), 0.0, 1.0);
+  }
+
   void main() {
     vec2 toPixel = vec2((vUv.x - uOrigin.x) * uAspect, vUv.y - uOrigin.y);
     float distance = length(toPixel);
@@ -189,7 +298,13 @@ const COMPOSITE = /* glsl */ `
     float reachEdge = 1.74 + lumps;
     float inAngle = 1.0 - smoothstep(angleEdge - 0.03, angleEdge + 0.03, abs(sweepA));
     float inReach = 1.0 - smoothstep(reachEdge - 0.04, reachEdge + 0.04, sweepR);
-    float swept = inAngle * inReach;
+    // The arc is only clean because a blade is sweeping it. Once one stops, the
+    // crust closes in from the edges — so the sector shrinks toward its own
+    // pivot rather than fading out evenly, which is how a real screen fills in:
+    // the last clear glass is the middle of the arc, not a patch of it.
+    float closing = uSpread * 0.92;
+    float swept = inAngle * inReach * (1.0 - closing)
+      * (1.0 - smoothstep(mix(2.4, 0.15, uSpread), mix(2.6, 0.55, uSpread), sweepR));
 
     // Soiling. Water beads and runs, snow settles in patches, mud splatters in
     // hard-edged blobs — the same number drawn three ways.
@@ -269,7 +384,13 @@ const COMPOSITE = /* glsl */ `
     // happens to land on that pixel. Inside the cone, and on the car, the
     // world stays sharp.
     float haze = (1.0 - lit) * (uDarkness * 0.55 + uOcclusion * 1.15) + uCrust * (1.0 - swept) * 1.4;
-    float soften = clamp(hidden * 1.15 + haze, 0.0, 1.0) * (1.0 - onCar);
+    // Broken glass scatters what passes through it, so the picture behind a bad
+    // web is soft as well as interrupted. Held well below the muck terms: the
+    // cracks themselves are the readout, and blurring the whole screen because
+    // of them would hide the damage panel and the road at the same time.
+    float crack = glassCracks(vUv);
+    float shatter = crack * uCracks;
+    float soften = clamp(hidden * 1.15 + haze + shatter * 0.45, 0.0, 1.0) * (1.0 - onCar);
 
     vec4 sharp = texture2D(uScene, vUv);
     vec4 soft = texture2D(uBlur, vUv);
@@ -298,6 +419,30 @@ const COMPOSITE = /* glsl */ `
     // it is visible on a clear screen too, which is what makes the return
     // stroke read as a wiper coming back rather than as nothing happening.
     colour.rgb = mix(colour.rgb, vec3(0.05, 0.05, 0.06), blade * 0.85);
+
+    /*
+     * The cracks, on top of the weather and under the grade.
+     *
+     * A crack in laminated glass is bright, not dark: it is a fracture surface
+     * catching light from every direction at once, which is why a starred
+     * windscreen is so much harder to see past in sun than the same screen is
+     * at night. So the line itself goes light, and it carries a thin dark
+     * shoulder that is what actually makes it read as a split in a solid thing
+     * rather than as a chalk mark drawn on one.
+     *
+     * They are drawn *after* the muck deliberately. The crack is in the glass
+     * and the rain is on it — a screen where the water sits on top of the
+     * cracks looks like a photograph with a texture laid over it, which is
+     * exactly the failure this whole pass exists to avoid.
+     */
+    // Scaled by what is behind it as well as by the light: a fracture is
+    // catching the scene's own light, so a crack across a black tree is not as
+    // bright as the same crack across a lit road. A flat additive line ignores
+    // that and reads as chalk drawn on the picture.
+    float behind = dot(colour.rgb, vec3(0.2126, 0.7152, 0.0722));
+    float glare = (0.22 + 0.42 * (1.0 - uDarkness)) * (0.35 + 0.9 * behind);
+    colour.rgb = mix(colour.rgb, vec3(0.04, 0.05, 0.06), clamp(crack * 1.6, 0.0, 1.0) * 0.26);
+    colour.rgb += crack * glare;
 
     // The grade, last, on the finished picture — the light has to colour the
     // weather on the windscreen too, not just the world behind it.
@@ -380,6 +525,8 @@ export class VisionPass {
         uAngle: { value: 0.4 },
         uOcclusion: { value: 0 },
         uCrust: { value: 0 },
+        uSpread: { value: 0 },
+        uCracks: { value: 0 },
         uKind: { value: 0 },
         uWiper: { value: -1 },
         uWiperBack: { value: 0 },
@@ -417,7 +564,11 @@ export class VisionPass {
    */
   grade: Grade = NEUTRAL_GRADE;
 
-  /** True when the windscreen effect itself would change nothing. */
+  /**
+   * True when nothing is being *hidden* — so the blur target is not worth
+   * filling. Cracks are deliberately not part of this: they interrupt the
+   * picture rather than obscuring it, and they carry their own small softening.
+   */
   private clearScreen(state: VisionState): boolean {
     return (
       this.strength <= 0 ||
@@ -425,9 +576,20 @@ export class VisionPass {
     );
   }
 
-  /** True when the whole pass would change nothing, so it can be skipped. */
+  /**
+   * True when the whole pass would change nothing, so it can be skipped.
+   *
+   * Cracked glass counts. This used to ask only about darkness and muck, which
+   * meant a windscreen could be smashed to pieces and draw nothing at all on a
+   * clear afternoon — the pass was skipped entirely and the damage was visible
+   * only in the panel. Broken is broken whatever the weather is doing.
+   */
   idle(state: VisionState): boolean {
-    return this.clearScreen(state) && gradeStrength(this.grade) < 0.02;
+    return (
+      this.clearScreen(state) &&
+      state.cracks * this.strength < 0.02 &&
+      gradeStrength(this.grade) < 0.02
+    );
   }
 
   /**
@@ -486,6 +648,8 @@ export class VisionPass {
     c.uAngle!.value = state.coneAngle;
     c.uOcclusion!.value = state.occlusion * this.strength;
     c.uCrust!.value = state.crust * this.strength;
+    c.uSpread!.value = state.crustSpread;
+    c.uCracks!.value = state.cracks * this.strength;
     c.uKind!.value = state.kind === 'mud' ? 2 : state.kind === 'snow' ? 1 : 0;
     c.uWiper!.value = state.wiper ?? -1;
     c.uWiperBack!.value = state.wiperReturning ? 1 : 0;

@@ -1555,6 +1555,18 @@ const params = new URLSearchParams(location.search);
       if (world!.damage) damagePanel.update(world!.damage);
     }
 
+    // `?glass=0.4` sets the windscreen to that health directly. The three
+    // stages the cracks are authored against — a chipped edge, a couple of
+    // stars, a web — are a third of a component's range apart, and `?wreck=`
+    // cannot aim at one: it puts impulses through the nose and the flanks and
+    // whatever the windscreen catches from that is whatever it catches.
+    const glass = params.get('glass');
+    if (glass && world!.damage) {
+      world!.damage.health.set('windscreen', Math.max(0, Math.min(1, Number(glass))));
+      world!.damage.refreshFailures();
+      damagePanel.update(world!.damage);
+    }
+
     const loosen = params.get('loosen');
     if (loosen) {
       world!.debris?.applyImpact({ x: 0, y: 0, z: 1.9 }, Number(loosen));

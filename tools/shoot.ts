@@ -82,6 +82,8 @@ const cells = cellSpec.split(',').map((spec) => {
   const visMatch = /^vis(\d+):(.+)$/.exec(name!);
   const visionFor = visMatch ? (Number(visMatch[1]) / 100).toFixed(2) : visionArg;
   const wreckMatch = /^wreck(\d+):(.+)$/.exec(name!);
+  /** `glass<percent>:<stage>` sets the windscreen's health for that cell. */
+  const glassMatch = /^glass(\d+):(.+)$/.exec(name!);
   const looseMatch = /^loose(\d+)(?:x(\d+(?:\.\d+)?))?:(.+)$/.exec(name!);
   const looseFor = looseMatch ? looseMatch[1]! : loosenArg;
   const afterFor = looseMatch ? (looseMatch[2] ?? '2') : afterArg;
@@ -111,7 +113,7 @@ const cells = cellSpec.split(',').map((spec) => {
 
   const raw = isTrace || withGhost
     ? name!.slice(6)
-    : (crashMatch?.[2] ?? hotMatch?.[2] ?? looseMatch?.[3] ?? wreckMatch?.[2] ?? visMatch?.[2] ?? name!);
+    : (crashMatch?.[2] ?? hotMatch?.[2] ?? looseMatch?.[3] ?? wreckMatch?.[2] ?? glassMatch?.[2] ?? visMatch?.[2] ?? name!);
   const [id, cellVariant] = raw.split('/');
   const useVariant = cellVariant ?? variantArg;
   const url = isTrace
@@ -120,10 +122,11 @@ const cells = cellSpec.split(',').map((spec) => {
         withGhost ? '&ghost=1' : ''
       }${crashFor ? `&crash=${crashFor}` : ''}${hotFor ? `&brakes=${hotFor}` : ''}${zoomArg ? `&zoom=${zoomArg}` : ''}${looseFor ? `&loosen=${looseFor}` : ''}${afterFor ? `&after=${afterFor}` : ''}${
         wreckMatch ? `&wreck=${wreckMatch[1]}` : ''
+      }${glassMatch ? `&glass=${(Number(glassMatch[1]) / 100).toFixed(2)}` : ''
       }${signArg ? `&sign=${signArg}` : ''}${visionFor ? `&vision=${visionFor}` : ''}${carsArg ? `&cars=${carsArg}` : ''}${boilArg ? `&boil=${boilArg}` : ''}${knockArg ? `&knock=${knockArg}` : ''}${lightsArg ? `&lights=${lightsArg}` : ''}${awardArg ? `&award=${awardArg}` : ''}${replayArg ? '&replay=1' : ''}`;
   return {
     url,
-    label: `${id}${useVariant ? ` ${useVariant}` : ''} @ ${seconds}s${withGhost ? ' + ghost' : ''}${
+    label: `${id}${useVariant ? ` ${useVariant}` : ''} @ ${seconds}s${glassMatch ? ` · glass ${glassMatch[1]}%` : ''}${withGhost ? ' + ghost' : ''}${
       crashFor ? ` + ${crashFor}s crash` : ''
     }${carsArg ? ` · ${carsArg} cars` : ''}${boilArg ? ` · boiling` : ''}${hotMatch ? ` · ${hotFor}°C` : ''}${
       looseMatch ? ` · ${looseFor} N·s +${afterFor}s` : ''
