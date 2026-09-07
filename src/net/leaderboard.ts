@@ -78,21 +78,34 @@ export class Leaderboard {
   }
 
   /**
-   * Send a time. Resolves to the place it took, or null if it did not place
-   * or could not be sent.
+   * Send a time, and get the board back with it.
    *
-   * The two are deliberately the same answer. A player who has just finished
-   * outside the top ten and a player whose wifi dropped both want the same
-   * thing from this screen, which is for it to say nothing and get out of the
-   * way — and there is no useful action either of them could take.
+   * One request rather than a submit and then a read: the finish panel wants
+   * both — where you came and who is above you — and the server has the whole
+   * board in its hand at the moment it decides. `rank` is null when the time
+   * did not place; `top` still arrives, because the panel shows the leaders
+   * whether or not you are among them.
+   *
+   * Null overall means it could not be sent. A player whose wifi dropped and a
+   * player who finished eleventh both want the same thing from this screen,
+   * which is for it to get out of the way.
    */
-  async submit(track: string, name: string, time: number): Promise<number | null> {
+  async submit(
+    track: string,
+    name: string,
+    time: number,
+  ): Promise<{ rank: number | null; top: BoardEntry[]; was: string | null } | null> {
     const body = (await this.call(`/b/${encodeURIComponent(track)}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name, time }),
-    })) as { rank?: number } | null;
-    return typeof body?.rank === 'number' && body.rank >= 0 ? body.rank : null;
+    })) as { rank?: number; top?: BoardEntry[]; was?: string | null } | null;
+    if (!body || !Array.isArray(body.top)) return null;
+    return {
+      rank: typeof body.rank === 'number' && body.rank >= 0 ? body.rank : null,
+      top: body.top,
+      was: typeof body.was === 'string' ? body.was : null,
+    };
   }
 }
 

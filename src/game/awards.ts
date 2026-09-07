@@ -20,7 +20,7 @@ const ORDER: Medal[] = ['finish', 'bronze', 'silver', 'gold', 'author'];
 
 const rank = (medal: Medal | null): number => (medal === null ? -1 : ORDER.indexOf(medal));
 
-export type AwardKind = 'medal' | 'record' | 'sweep' | 'first';
+export type AwardKind = 'medal' | 'record' | 'sweep' | 'first' | 'board';
 
 export interface Award {
   kind: AwardKind;
@@ -140,6 +140,87 @@ export function awardsFor(input: AwardInput): Award[] {
 
   return awards;
 }
+
+/**
+ * What an arcade or multiplayer run was worth.
+ *
+ * A different question from the career one above, and a much smaller set of
+ * answers: there are no medals here, no money and no sweep — just your own
+ * best, and everyone else's.
+ *
+ * Three tiers, because they are three genuinely different things and running
+ * them together would be the same mistake as one fanfare for every medal:
+ *
+ * - **A personal best** is the one almost every session contains. It has to be
+ *   acknowledged and it must not shout, or the shouting stops meaning
+ *   anything — and it fires whether or not the time went near the board, which
+ *   is the point of keeping personal times at all.
+ * - **The top ten** is a real event that most players will see a handful of
+ *   times.
+ * - **The top of it** should be excessive. It is the rarest thing the game has
+ *   to say and the only one worth interrupting somebody for.
+ *
+ * A run can earn the personal best *and* a place; they queue biggest-last, so
+ * it plays as a build rather than as two shouts over each other.
+ */
+export function boardAwards(input: {
+  /** Stage and conditions, for the text. */
+  name: string;
+  /** The time just set. */
+  time: number;
+  /** The personal best it beat, null for a first, undefined if it beat none. */
+  beat?: number | null;
+  /** Where it placed on the global board, 0-based. Null if it did not. */
+  rank?: number | null;
+  /** Who was on top before this run, for the line under a new record. */
+  dethroned?: string | null;
+}): Award[] {
+  const awards: Award[] = [];
+  const { name, time, beat, rank, dethroned } = input;
+
+  if (beat !== undefined) {
+    awards.push({
+      kind: 'record',
+      title: beat === null ? 'FIRST TIME SET' : 'PERSONAL BEST',
+      detail:
+        beat === null
+          ? `${name} — ${seconds(time)} to beat`
+          : `${name} — ${seconds(beat - time)} faster than you have ever gone`,
+      weight: 0,
+      medal: null,
+    });
+  }
+
+  if (rank === 0) {
+    awards.push({
+      kind: 'board',
+      title: 'FASTEST IN THE WORLD',
+      detail: dethroned
+        ? `${name} — you have taken it from ${dethroned}`
+        : `${name} — nobody has gone quicker`,
+      weight: 3,
+      medal: 'author',
+    });
+  } else if (typeof rank === 'number' && rank > 0) {
+    awards.push({
+      kind: 'board',
+      // Ordinal rather than "top ten": third is not second, and a board you
+      // are climbing is only worth climbing if it says where you are.
+      title: `${ordinal(rank + 1)} IN THE WORLD`,
+      detail: `${name} — ${seconds(time)}, onto the board`,
+      weight: rank < 3 ? 2 : 1,
+      medal: rank < 3 ? 'gold' : 'silver',
+    });
+  }
+
+  return awards;
+}
+
+const ordinal = (n: number): string => {
+  const tens = n % 100;
+  if (tens >= 11 && tens <= 13) return `${n}TH`;
+  return `${n}${(['TH', 'ST', 'ND', 'RD'][n % 10] ?? 'TH')}`;
+};
 
 /**
  * Progress toward the next sweep, for the garage.

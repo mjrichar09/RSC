@@ -28,9 +28,11 @@ import { RaceGuest } from '../net/guest.js';
 import { acceptInvite, createInvite, type Invite, type RtcLink } from '../net/webrtc.js';
 import { formatRoomCode, makeRoomCode, normaliseRoomCode, type Room } from '../net/room.js';
 import { brokerFor } from '../net/roomHttp.js';
+import type { BoardEntry, Leaderboard } from '../net/leaderboard.js';
+import { escapeHtml } from './escape.js';
 import { joinRoom, serveRoom, type ServedRoom } from '../net/signalling.js';
 import { MAX_PLAYERS, type PlayerInfo, type RaceSetup } from '../net/protocol.js';
-import { stageVariants, type StageDef, type StageVariant } from '../sim/stage.js';
+import { stageVariants, variantKey, type StageDef, type StageVariant } from '../sim/stage.js';
 
 type Screen = 'choose' | 'host' | 'join';
 
@@ -88,6 +90,25 @@ export class MultiplayerPanel {
   private players: PlayerInfo[] = [];
   /** What the other players see over this car. */
   private name = 'Driver';
+
+  /**
+   * The global board, and the top three for the stage being picked.
+   *
+   * Multiplayer races the same stock car as arcade and posts to the same
+   * table, so the lobby has to be able to show what it is racing against —
+   * picking a stage without knowing the time to beat is picking blind.
+   */
+  board: Leaderboard | null = null;
+  private lobbyTop: BoardEntry[] = [];
+  private lobbyTopKey = '';
+
+  /** Raised when the player edits their name, so one identity is kept. */
+  onName: ((name: string) => void) | null = null;
+
+  /** Set the name from the saved profile, without raising a change. */
+  setName(name: string): void {
+    if (name) this.name = name;
+  }
   /**
    * Paint and number.
    *
@@ -294,6 +315,7 @@ export class MultiplayerPanel {
     this.announcePick();
     this.openRoom();
     this.render();
+    void this.loadLobbyTop();
   }
 
   /**
@@ -441,6 +463,22 @@ export class MultiplayerPanel {
    * A retirement has no time and cannot be ordered against one, so it goes to
    * the bottom rather than being given an invented number.
    */
+  /**
+   * Everyone's result so far, for the finish panel.
+   *
+   * "So far" is the whole difficulty: you reach the panel the moment you cross
+   * the line, and the others are still driving. This returns what is known at
+   * the instant it is asked rather than waiting for a complete field — the
+   * lobby's own classification is the complete one, and it is what appears
+   * when the last car is in.
+   */
+  standings(): { name: string; time: number | null }[] {
+    const mine = this.guest ? this.guest.you : this.host?.players.find((p) => p.host)?.id;
+    return this.classification()
+      .filter((row) => row.player.id !== mine)
+      .map((row) => ({ name: row.player.name, time: row.time }));
+  }
+
   private classification(): { player: PlayerInfo; time: number | null; retired: boolean }[] {
     const rows = this.players.map((player) => ({
       player,
@@ -765,6 +803,47 @@ export class MultiplayerPanel {
     return this.joinBody();
   }
 
+  /**
+   * The three fastest on the stage currently selected in the picker.
+   *
+   * Fetched when the selection changes rather than for every stage up front:
+   * the lobby shows one at a time, and a host flicking through the list would
+   * otherwise be forty requests deep before choosing anything.
+   */
+  private async loadLobbyTop(): Promise<void> {
+    const stage = STAGES[this.stageIndex];
+    const variant = this.variants[this.variantIndex];
+    if (!this.board || !stage || !variant) return;
+    const key = variantKey(stage.id, variant.id);
+    if (key === this.lobbyTopKey) return;
+    this.lobbyTopKey = key;
+    this.lobbyTop = [];
+
+    const top = await this.board.top(key, 3);
+    // Only if the selection has not moved on while this was in flight —
+    // otherwise a slow request for a stage nobody is looking at any more
+    // overwrites the times for the one they are.
+    if (this.lobbyTopKey !== key) return;
+    this.lobbyTop = top ?? [];
+    this.render();
+  }
+
+  /** The times to beat, under the stage picker. */
+  private lobbyBoardMarkup(): string {
+    if (!this.board) return '';
+    if (this.lobbyTop.length === 0) {
+      return `<p class="lobby-board dim">No times set here yet.</p>`;
+    }
+    return `<div class="lobby-board">
+      ${this.lobbyTop
+        .map(
+          (entry, i) =>
+            `<span><u>${i + 1}</u> ${escapeHtml(entry.name)} <b>${entry.time.toFixed(2)}s</b></span>`,
+        )
+        .join('')}
+    </div>`;
+  }
+
   private hostBody(): string {
     const stages = STAGES.map(
       (stage, i) =>
@@ -783,6 +862,7 @@ export class MultiplayerPanel {
           <h3>The race</h3>
           <label class="lobby-field">Stage <select data-act="stage">${stages}</select></label>
           <label class="lobby-field">Conditions <select data-act="variant">${variants}</select></label>
+          ${this.lobbyBoardMarkup()}
           <h3>Your car</h3>
           ${this.liveryPicker()}
           <h3>Grid</h3>
@@ -991,16 +1071,23 @@ export class MultiplayerPanel {
 
     pick('name')?.addEventListener('input', (event) => {
       this.name = (event.target as HTMLInputElement).value.slice(0, 16) || 'Driver';
+      // The same name arcade posts under. Two identities for one player would
+      // put them on the same board twice under different names, which is
+      // exactly what the one-place-per-driver rule exists to prevent.
+      this.onName?.(this.name);
     });
     pick('stage')?.addEventListener('change', (event) => {
       this.stageIndex = Number((event.target as HTMLSelectElement).value);
       this.variantIndex = 0;
       this.announcePick();
       this.render();
+      void this.loadLobbyTop();
     });
     pick('variant')?.addEventListener('change', (event) => {
       this.variantIndex = Number((event.target as HTMLSelectElement).value);
       this.announcePick();
+      this.render();
+      void this.loadLobbyTop();
     });
     pick('livery')?.addEventListener('change', (event) => {
       this.livery = (event.target as HTMLSelectElement).value;

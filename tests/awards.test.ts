@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { awardsFor, sweepProgress } from '../src/game/awards.js';
+import { awardsFor, boardAwards, sweepProgress } from '../src/game/awards.js';
 import type { StageRecord } from '../src/game/save.js';
 
 const keys = ['a:day', 'b:day', 'c:day'];
@@ -104,5 +104,73 @@ describe('progress toward the next sweep', () => {
     expect(at('gold').have).toBe(1);
     expect(at('author').have).toBe(0);
     expect(at('gold').of).toBe(3);
+  });
+});
+
+describe('what an arcade or multiplayer run was worth', () => {
+  const run = (over: Partial<Parameters<typeof boardAwards>[0]> = {}) =>
+    boardAwards({ name: 'Pine Loop · Day', time: 41.02, ...over });
+
+  it('says nothing about a run that beat nothing', () => {
+    // Not every lap is an event. A game that celebrates all of them has stopped
+    // celebrating any of them.
+    expect(run()).toEqual([]);
+    expect(run({ rank: null })).toEqual([]);
+  });
+
+  it('marks a personal best whether or not it went near the board', () => {
+    // The whole reason personal times are kept: most players will never see the
+    // top ten, and their own improvement still has to count for something.
+    const awards = run({ beat: 44.5, rank: null });
+    expect(awards).toHaveLength(1);
+    expect(awards[0]!.kind).toBe('record');
+    expect(awards[0]!.detail).toContain('3.48s faster');
+    // Quiet. It happens most sessions, and shouting about it makes the shouting
+    // worth nothing when something rare actually happens.
+    expect(awards[0]!.weight).toBe(0);
+  });
+
+  it('reads a first time as a personal best rather than as nothing', () => {
+    const awards = run({ beat: null });
+    expect(awards[0]!.title).toBe('FIRST TIME SET');
+  });
+
+  it('builds to the biggest thing when a run earns more than one', () => {
+    // Celebrations queue biggest last, so a personal best that also took the
+    // top plays as two beats rising rather than two shouts at once.
+    const awards = run({ beat: 44.5, rank: 0, dethroned: 'Ari' });
+    expect(awards.map((a) => a.kind)).toEqual(['record', 'board']);
+    expect(awards[0]!.weight).toBeLessThan(awards[1]!.weight);
+  });
+
+  it('is excessive only at the very top', () => {
+    const first = run({ rank: 0 })[0]!;
+    expect(first.title).toBe('FASTEST IN THE WORLD');
+    expect(first.weight).toBe(3);
+
+    // And everything else on the board is smaller than that.
+    for (const rank of [1, 2, 3, 5, 9]) {
+      expect(run({ rank })[0]!.weight, `rank ${rank}`).toBeLessThan(3);
+    }
+  });
+
+  it('names the place rather than saying "top ten"', () => {
+    // Third is not second. A board you are climbing is only worth climbing if
+    // it tells you where you are on it.
+    expect(run({ rank: 1 })[0]!.title).toBe('2ND IN THE WORLD');
+    expect(run({ rank: 2 })[0]!.title).toBe('3RD IN THE WORLD');
+    expect(run({ rank: 3 })[0]!.title).toBe('4TH IN THE WORLD');
+    expect(run({ rank: 9 })[0]!.title).toBe('10TH IN THE WORLD');
+    // The ordinal rule everybody gets wrong, kept honest even though a
+    // ten-place board cannot currently reach it.
+    expect(run({ rank: 10 })[0]!.title).toBe('11TH IN THE WORLD');
+    expect(run({ rank: 12 })[0]!.title).toBe('13TH IN THE WORLD');
+    expect(run({ rank: 20 })[0]!.title).toBe('21ST IN THE WORLD');
+  });
+
+  it('only claims a throne when one was actually taken', () => {
+    expect(run({ rank: 0, dethroned: 'Ari' })[0]!.detail).toContain('taken it from Ari');
+    // Beating your own record is holding the top, not taking it from somebody.
+    expect(run({ rank: 0, dethroned: null })[0]!.detail).toContain('nobody has gone quicker');
   });
 });

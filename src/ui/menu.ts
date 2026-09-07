@@ -20,13 +20,7 @@ import type { Career } from '../game/career.js';
 import { stageVariants, variantKey, type StageDef, type StageVariant } from '../sim/stage.js';
 import { formatTime } from './raceHud.js';
 import type { BoardEntry, Leaderboard } from '../net/leaderboard.js';
-
-/** Names come from other players, so they are escaped everywhere they land. */
-const escapeHtml = (raw: string): string =>
-  raw.replace(
-    /[&<>"']/g,
-    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!,
-  );
+import { escapeHtml } from './escape.js';
 
 export interface ArcadePick {
   def: StageDef;
@@ -58,6 +52,11 @@ export class StartMenu {
   private tops = new Map<string, BoardEntry[]>();
   /** Set once the fetch has come back, so "no times yet" is not shown early. */
   private topsLoaded = false;
+  /** Which door sent us to the name screen, so it can be gone through after. */
+  private after: 'arcade' | 'multiplayer' = 'arcade';
+
+  /** Raised when a name is set here, so one identity is kept across the game. */
+  onName: ((name: string) => void) | null = null;
 
   /** Put the slider where the saved setting says, without raising a change. */
   setVolume(value: number): void {
@@ -123,6 +122,7 @@ export class StartMenu {
         // A name first, or the board is a list of anonymous numbers. Asked once
         // and remembered; `name` also reaches here from the arcade screen when
         // somebody wants to change it.
+        this.after = 'arcade';
         this.screen = this.career.driverName ? 'arcade' : 'name';
         if (this.screen === 'arcade') void this.loadBoards();
         break;
@@ -140,6 +140,15 @@ export class StartMenu {
           return;
         }
         void this.career.setDriverName(typed).then(() => {
+          this.onName?.(typed);
+          // Back to whichever door asked for the name, rather than always to
+          // arcade — being made to name yourself and then landing somewhere
+          // you were not going is a small betrayal of the click.
+          if (this.after === 'multiplayer') {
+            this.setOpen(false);
+            this.onMultiplayer?.();
+            return;
+          }
           this.screen = 'arcade';
           void this.loadBoards();
           this.render();
@@ -147,6 +156,15 @@ export class StartMenu {
         return;
       }
       case 'multiplayer':
+        // Same gate as arcade, for the same reason: a multiplayer race is
+        // driven in the stock car and its times go on the same board, so it
+        // needs the same name behind it. `after` is what the name screen goes
+        // to once it has one.
+        if (!this.career.driverName) {
+          this.after = 'multiplayer';
+          this.screen = 'name';
+          break;
+        }
         this.setOpen(false);
         this.onMultiplayer?.();
         return;

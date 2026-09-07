@@ -16,7 +16,7 @@ import { DEFAULT_LIVERY, liveryById } from '../data/liveries.js';
 import type { Ghost } from '../sim/replay.js';
 
 const DB_NAME = 'rsc';
-const DB_VERSION = 7;
+const DB_VERSION = 8;
 const PROFILE_KEY = 'profile';
 
 /** Enough to enter the second stage and still afford a mistake. */
@@ -32,6 +32,19 @@ export interface Profile {
   version: number;
   /** Best time per stage id. */
   records: Record<string, StageRecord>;
+  /**
+   * Best arcade time per stage id, which is a different thing from `records`.
+   *
+   * They cannot share a table. A career time is set in whatever the garage has
+   * built — up to +18% torque and +12% grip — and an arcade time is set in a
+   * stock car, so the same number means two different drives. Career records
+   * also carry a medal and a ghost and are what the medal tables are read
+   * against; mixing a stock-car time into them would quietly rewrite what a
+   * gold is worth.
+   *
+   * Arcade and multiplayer share this one, because they share the car.
+   */
+  arcadeRecords: Record<string, { time: number; at: number }>;
   money: number;
   upgrades: UpgradeLevels;
   /**
@@ -110,6 +123,7 @@ export { migrate as migrateProfile };
 export const emptyProfile = (): Profile => ({
   version: DB_VERSION,
   records: {},
+  arcadeRecords: {},
   money: STARTING_MONEY,
   upgrades: {},
   carHealth: {},
@@ -146,6 +160,9 @@ function migrate(stored: unknown): Profile {
   const out: Profile = {
     version: DB_VERSION,
     records: isObject(stored.records) ? (stored.records as Profile['records']) : base.records,
+    arcadeRecords: isObject(stored.arcadeRecords)
+      ? (stored.arcadeRecords as Profile['arcadeRecords'])
+      : base.arcadeRecords,
     money: Math.max(0, number(stored.money, base.money)),
     upgrades: isObject(stored.upgrades) ? (stored.upgrades as Profile['upgrades']) : base.upgrades,
     carHealth: isObject(stored.carHealth) ? (stored.carHealth as Profile['carHealth']) : base.carHealth,
@@ -182,6 +199,23 @@ function migrate(stored: unknown): Profile {
   for (const [id, value] of Object.entries(health)) {
     if (typeof value !== 'number' || !Number.isFinite(value)) delete health[id];
     else health[id] = Math.min(Math.max(value, 0), 1);
+  }
+
+  // v7 -> v8: arcade keeps personal bests too. Nothing to bring forward — the
+  // mode banked nothing before this, so there is no older shape of it and an
+  // existing save simply starts collecting them from its next race.
+  //
+  // Damaged entries are dropped rather than trusted, the same way health is:
+  // a NaN here would win every comparison it appeared in and stand as an
+  // unbeatable personal best forever.
+  const arcade = out.arcadeRecords as Record<string, { time: number; at: number }>;
+  for (const [key, record] of Object.entries(arcade)) {
+    const ok =
+      isObject(record) &&
+      typeof record.time === 'number' &&
+      Number.isFinite(record.time) &&
+      record.time > 0;
+    if (!ok) delete arcade[key];
   }
 
   // v6 -> v7: a driver name, and upgrades capped at two levels.
@@ -360,6 +394,29 @@ export class SaveStore {
       await put(this.db, 'ghosts', stageId, ghost);
     }
     return true;
+  }
+
+  /** The best arcade time for a track, or null. */
+  arcadeRecordFor(stageId: string): { time: number; at: number } | null {
+    return this.profile.arcadeRecords[stageId] ?? null;
+  }
+
+  /**
+   * Record an arcade time if it beats the one held. Returns the time it beat,
+   * or null when it did not beat anything.
+   *
+   * The *previous* time rather than a boolean, because "you beat it" and "by
+   * how much" are the same question at the moment it is asked, and the finish
+   * panel wants both. `undefined` for a first time is not usable here — a
+   * first time is a personal best and has to read as one.
+   */
+  async submitArcadeRun(stageId: string, time: number): Promise<{ beat: number | null } | null> {
+    const previous = this.profile.arcadeRecords[stageId];
+    if (previous && previous.time <= time) return null;
+
+    this.profile.arcadeRecords[stageId] = { time, at: Date.now() };
+    if (this.db) await put(this.db, 'profile', PROFILE_KEY, this.profile);
+    return { beat: previous?.time ?? null };
   }
 
   async loadGhost(stageId: string): Promise<Ghost | null> {

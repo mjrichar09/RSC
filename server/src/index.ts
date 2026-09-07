@@ -16,7 +16,7 @@
  */
 
 import { ROOM_CODE, RoomStore, empty, json } from './rooms.js';
-import { BoardStore, TRACK_KEY } from './board.js';
+import { BoardStore, TRACK_KEY, safeDecode } from './board.js';
 
 export interface Env {
   ROOMS: DurableObjectNamespace;
@@ -38,7 +38,9 @@ export default {
     if (parts[0] === 'b' || parts[0] === 'bs') {
       if (request.method !== 'GET' && request.method !== 'POST') return empty(405);
       const url = new URL(request.url);
-      const track = parts[1];
+      // Decoded before it is checked: the key carries a colon, which the
+      // client percent-encodes into the path.
+      const track = parts[1] ? safeDecode(parts[1]) : undefined;
       // Checked at the edge so a malformed key never reaches the object and
       // can never allocate storage. The batch read carries its keys in the
       // query string instead, and `many` filters them the same way.
@@ -47,11 +49,14 @@ export default {
       }
       const boards = env.BOARDS.get(env.BOARDS.idFromName('boards'));
       return boards.fetch(
-        new Request(`https://boards/${parts[0]}${track ? `/${track}` : ''}${url.search}`, {
-          method: request.method,
-          headers: { 'content-type': 'application/json' },
-          ...(request.method === 'POST' ? { body: await request.text() } : {}),
-        }),
+        new Request(
+          `https://boards/${parts[0]}${track ? `/${encodeURIComponent(track)}` : ''}${url.search}`,
+          {
+            method: request.method,
+            headers: { 'content-type': 'application/json' },
+            ...(request.method === 'POST' ? { body: await request.text() } : {}),
+          },
+        ),
       );
     }
 

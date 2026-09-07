@@ -24,7 +24,7 @@ import { TouchControls } from './ui/touch.js';
 import { type QualityTier, RenderScale, guessTier, qualityFor } from './render/quality.js';
 import { useRelay } from './net/webrtc.js';
 import { StartLights } from './game/startLights.js';
-import { awardsFor } from './game/awards.js';
+import { awardsFor, boardAwards } from './game/awards.js';
 import { Celebrations } from './ui/celebrate.js';
 import { SaveStore } from './game/save.js';
 import { type DriverInput, NEUTRAL_INPUT } from './sim/input.js';
@@ -549,7 +549,20 @@ const params = new URLSearchParams(location.search);
     world.rescue(race?.furthest);
     stuckFor = 0;
   };
+  // The global times board, sharing the room broker's worker and its `?rooms=`
+  // override so there is only ever one address to keep in step. Null when there
+  // is no broker configured, which the menu and the finish path both handle by
+  // simply not showing times.
+  const board = boardFor(params);
+
   const multiplayer = new MultiplayerPanel(hudRoot);
+  multiplayer.board = board;
+  // One identity across both modes. Multiplayer races the same stock car as
+  // arcade and posts to the same table, so two names for one player would put
+  // them on the board twice — which is exactly what one-place-per-driver is
+  // there to prevent.
+  multiplayer.setName(career.driverName);
+  multiplayer.onName = (name) => void career.setDriverName(name);
   multiplayer.onRace = (start) => {
     menu.setOpen(false);
     garage.setOpen(false);
@@ -645,13 +658,9 @@ const params = new URLSearchParams(location.search);
     if (!freeRoam) loadStage(STAGES[0]!.id);
   };
 
-  // The global times board, sharing the room broker's worker and its `?rooms=`
-  // override so there is only ever one address to keep in step. Null when there
-  // is no broker configured, which the menu and the finish path both handle by
-  // simply not showing times.
-  const board = boardFor(params);
   const menu = new StartMenu(hudRoot, career);
   menu.board = board;
+  menu.onName = (name) => multiplayer.setName(name);
   menu.onCareer = () => {
     rivalLiveries = [];
     mode = 'career';
@@ -988,15 +997,50 @@ const params = new URLSearchParams(location.search);
       session?.report(0, race.finishTime, retired);
       raceHud.setLedger(null);
       const finished = race.finishTime;
-      // A retirement is not a lap. Neither is a session with no name behind it,
-      // which should be impossible — arcade will not start without one — but a
-      // save edited by hand is not worth publishing an empty name over.
-      if (!retired && finished !== null && board && career.driverName) {
-        // Not awaited: nothing on this screen depends on it, and the submit
-        // fails soft. A finish that waited on a network call before showing
-        // the time would be a worse screen on a worse connection.
-        void board.submit(currentKey(), career.driverName, finished);
-      }
+      // A retirement is not a lap.
+      if (retired || finished === null) return;
+
+      const key = currentKey();
+      const label = `${stage.def.name} · ${variant?.name ?? ''}`.replace(/ · $/, '');
+
+      // Personal best first, and locally: it is the one part of this that
+      // cannot fail, does not need a network, and is true whether or not the
+      // time went anywhere near the board. Arcade and multiplayer share the
+      // table because they share the car.
+      const personal = await save.submitArcadeRun(key, finished);
+      raceHud.setBest(save.arcadeRecordFor(key)?.time ?? null);
+
+      // Then the world. Deliberately not awaited by anything that draws — the
+      // panel is already up with the time on it, and the board grows into it a
+      // moment later or never.
+      void (async () => {
+        const posted =
+          board && career.driverName
+            ? await board.submit(key, career.driverName, finished)
+            : null;
+
+        raceHud.markBoard({
+          top: posted?.top ?? null,
+          rank: posted?.rank ?? null,
+          you: career.driverName || 'You',
+          yourTime: finished,
+          ...(personal ? { beat: personal.beat } : {}),
+          // The others, as far as they have got. In multiplayer you reach this
+          // panel the moment you cross the line and they are still driving, so
+          // this is what is known now — the lobby's classification is the
+          // complete one, and it arrives when the last car is in.
+          ...(session ? { rivals: multiplayer.standings() } : {}),
+        });
+
+        celebrations.show(
+          boardAwards({
+            name: label,
+            time: finished,
+            ...(personal ? { beat: personal.beat } : {}),
+            ...(posted ? { rank: posted.rank, dethroned: posted.was } : {}),
+          }),
+        );
+      })();
       return;
     }
 

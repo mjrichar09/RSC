@@ -1397,6 +1397,57 @@ html, body {
   min-width: 0;
 }
 
+/* The times to beat, under the lobby's stage picker. */
+.lobby-board {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: -2px 0 10px;
+  font-size: 10.5px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+.lobby-board u { text-decoration: none; color: var(--accent); font-weight: 700; }
+.lobby-board b { color: var(--ink); font-weight: 400; }
+
+/* The board on the finish panel: three names, your own, and the field. */
+.finish-board {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+  font-variant-numeric: tabular-nums;
+}
+.finish-board h4 {
+  margin: 0 0 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--dim);
+  text-transform: uppercase;
+}
+.board-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12.5px;
+  padding: 2px 0;
+}
+.board-row u {
+  text-decoration: none;
+  min-width: 16px;
+  color: var(--dim);
+  font-weight: 700;
+  font-size: 11px;
+}
+.board-row span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.board-row b { font-weight: 700; }
+/* Your own row, which is the one the eye is looking for. */
+.board-row.is-you { color: var(--accent); }
+.board-row.is-you u { color: var(--accent); }
+.board-note { margin-top: 5px; font-size: 10.5px; color: var(--dim); }
+.board-rivals { margin-top: 8px; }
+.board-rivals h4 { margin-top: 0; }
+
 .name-entry { display: flex; flex-direction: column; gap: 10px; max-width: 320px; }
 .name-entry input {
   font: inherit;

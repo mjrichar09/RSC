@@ -13,6 +13,8 @@ import type { LaunchQuality } from '../game/startLights.js';
 import type { DamageModel } from '../sim/damage.js';
 import type { Stage } from '../sim/stage.js';
 import type { UpcomingCorner } from '../sim/corners.js';
+import type { BoardEntry } from '../net/leaderboard.js';
+import { escapeHtml } from './escape.js';
 
 export const formatTime = (seconds: number): string => {
   const m = Math.floor(seconds / 60);
@@ -340,6 +342,101 @@ export class RaceHud {
         this.showRetired(race.retirement ?? 'RETIRED', race.time, damage);
       }
     }
+  }
+
+  /**
+   * Add the board to the finish panel: who is quickest, and where you came.
+   *
+   * Appended after the panel is already up rather than built into it, for the
+   * same reason `markRecord` is: the times arrive from a network and the panel
+   * must not wait for them. A run that finished shows its own time instantly
+   * and grows the board a moment later, or never — an unreachable board leaves
+   * a panel that is exactly what it was before any of this existed.
+   */
+  markBoard(board: {
+    /** Null when the board could not be reached, which is not the same as empty. */
+    top: BoardEntry[] | null;
+    /** Your place, 0-based, or null if you did not make it. */
+    rank: number | null;
+    /** Your name, so your row can be picked out of the three. */
+    you: string;
+    yourTime: number;
+    /** Your own best before this run: null for a first, undefined if unbeaten. */
+    beat?: number | null;
+    /** The others in a multiplayer race, already in finishing order. */
+    rivals?: { name: string; time: number | null }[];
+  }): void {
+    const section = document.createElement('div');
+    section.className = 'finish-board';
+
+    // An unreachable board and an empty one are different things and must not
+    // read alike: "this is the first time set here" is a claim about the world,
+    // and making it because a request failed is telling the player something
+    // false about a race they just drove.
+    const reached = board.top !== null;
+
+    // Three, which is what fits beside a time without becoming a table. The
+    // rest of the ten is on the stage-select screen.
+    const podium = (board.top ?? []).slice(0, 3);
+    // Which of the three is you, by name rather than by this run's rank. They
+    // are not the same question: you can already hold second from last week and
+    // have just driven a slower lap, and keying off the rank puts you on the
+    // board twice — once in the podium and once again underneath with a dash,
+    // which reads as two contradictory results for one race.
+    const yourRow = podium.findIndex(
+      (entry) => entry.name.toLowerCase() === board.you.toLowerCase(),
+    );
+
+    const rows = podium
+      .map(
+        (entry, i) =>
+          `<div class="board-row${i === yourRow ? ' is-you' : ''}">
+            <u>${i + 1}</u><span>${escapeHtml(entry.name)}</span><b>${formatTime(entry.time)}</b>
+          </div>`,
+      )
+      .join('');
+
+    // Your own row, unless you are already one of the three above.
+    const yours =
+      yourRow >= 0
+        ? ''
+        : `<div class="board-row is-you">
+             <u>${board.rank !== null ? board.rank + 1 : '—'}</u>
+             <span>${escapeHtml(board.you)}</span><b>${formatTime(board.yourTime)}</b>
+           </div>`;
+
+    const best =
+      board.beat === undefined
+        ? ''
+        : `<div class="board-note">${
+            board.beat === null
+              ? 'Your first time here'
+              : `Your best, by ${(board.beat - board.yourTime).toFixed(2)}s`
+          }</div>`;
+
+    const rivals = board.rivals?.length
+      ? `<div class="board-rivals"><h4>This race</h4>${board.rivals
+          .map(
+            (r) =>
+              `<div class="board-row"><span>${escapeHtml(r.name)}</span><b>${
+                r.time === null ? 'retired' : formatTime(r.time)
+              }</b></div>`,
+          )
+          .join('')}</div>`
+      : '';
+
+    const heading = !reached
+      ? 'Your time'
+      : podium.length === 0
+        ? 'No times yet — this is the first'
+        : 'Fastest here';
+
+    section.innerHTML = `<h4>${heading}</h4>${rows}${yours}${best}${rivals}`;
+
+    // Before the buttons, so the way out stays the last thing on the panel.
+    const actions = this.panel.querySelector('.finish-actions');
+    if (actions) this.panel.insertBefore(section, actions);
+    else this.panel.append(section);
   }
 
   /** Adds the record banner to the finish panel after a run beats the ghost. */

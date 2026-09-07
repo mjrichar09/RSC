@@ -291,3 +291,51 @@ describe('the driver name', () => {
     expect(migrateProfile({ ...emptyProfile(), driverName: 42 } as never).driverName).toBe('');
   });
 });
+
+describe('arcade personal bests', () => {
+  it('keeps a table of its own, separate from career records', async () => {
+    // They cannot share one. A career time is set in whatever the garage has
+    // built and an arcade time in a stock car, so the same number means two
+    // different drives — and career records are what the medal tables are read
+    // against, so a stock-car time landing in them would rewrite what a gold is.
+    await save.submitArcadeRun('pine-loop:day-clear', 44.0);
+    expect(save.arcadeRecordFor('pine-loop:day-clear')?.time).toBe(44.0);
+    expect(save.recordFor('pine-loop:day-clear')).toBeNull();
+  });
+
+  it('reports the time it beat, and nothing when it beat nothing', async () => {
+    // A first time is a personal best and has to read as one.
+    expect(await save.submitArcadeRun('pine-loop:day-clear', 44.0)).toEqual({ beat: null });
+    expect(await save.submitArcadeRun('pine-loop:day-clear', 41.5)).toEqual({ beat: 44.0 });
+    // Slower changes nothing and says so.
+    expect(await save.submitArcadeRun('pine-loop:day-clear', 43.0)).toBeNull();
+    expect(save.arcadeRecordFor('pine-loop:day-clear')?.time).toBe(41.5);
+    // And an exact tie is not an improvement.
+    expect(await save.submitArcadeRun('pine-loop:day-clear', 41.5)).toBeNull();
+  });
+
+  it('drops a record that could never be beaten', () => {
+    // A NaN wins every comparison it appears in and would stand as an
+    // unbeatable personal best forever.
+    const damaged = {
+      ...emptyProfile(),
+      version: 7,
+      arcadeRecords: {
+        good: { time: 40, at: 1 },
+        nan: { time: Number.NaN, at: 1 },
+        text: { time: '40', at: 1 },
+        negative: { time: -3, at: 1 },
+      },
+    };
+    const out = migrateProfile(damaged as never).arcadeRecords;
+
+    expect(out.good?.time).toBe(40);
+    expect(out.nan).toBeUndefined();
+    expect(out.text).toBeUndefined();
+    expect(out.negative).toBeUndefined();
+  });
+
+  it('starts empty for a profile that predates it', () => {
+    expect(migrateProfile({ ...emptyProfile(), version: 7 }).arcadeRecords).toEqual({});
+  });
+});

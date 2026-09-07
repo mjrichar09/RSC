@@ -113,6 +113,15 @@ export function cleanName(raw: unknown): string | null {
   return stripped.length > 0 ? stripped : null;
 }
 
+/** `decodeURIComponent` throws on a malformed escape; a bad key is a 400. */
+export function safeDecode(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return '';
+  }
+}
+
 /** Where a time would place in a board, or -1 if it would not make it. */
 export function placeOf(board: Entry[], time: number): number {
   const at = board.findIndex((e) => time < e.time);
@@ -141,22 +150,35 @@ export class BoardStore {
    * the person who improves most. Their slot moves when they beat themselves
    * and is left alone when they do not.
    */
-  async submit(track: string, name: string, time: number): Promise<{ rank: number; top: Entry[] }> {
+  async submit(
+    track: string,
+    name: string,
+    time: number,
+  ): Promise<{ rank: number; top: Entry[]; was: string | null }> {
     const board = await this.read(track);
+    // Who held the top before this run. Returned because only the server can
+    // know it: the caller sees the board *after* its own insert, where the name
+    // now sitting second may be the leader it displaced or may be the same
+    // second place as before — and "you have taken it from Ari" is worth saying
+    // only when it is actually true.
+    const leader = board[0]?.name ?? null;
 
     const mine = board.findIndex((e) => e.name.toLowerCase() === name.toLowerCase());
     if (mine >= 0) {
-      if (board[mine]!.time <= time) return { rank: -1, top: board };
+      if (board[mine]!.time <= time) return { rank: -1, top: board, was: leader };
       board.splice(mine, 1);
     }
 
     const rank = placeOf(board, time);
-    if (rank < 0) return { rank: -1, top: board };
+    if (rank < 0) return { rank: -1, top: board, was: leader };
 
     board.splice(rank, 0, { name, time, at: Date.now() });
     board.length = Math.min(board.length, BOARD_SIZE);
     await this.storage.put(`b:${track}`, board);
-    return { rank, top: board };
+    // Only a *different* name counts as dethroned. Beating your own record is
+    // holding on to the top, not taking it from somebody.
+    const took = rank === 0 && leader !== null && leader.toLowerCase() !== name.toLowerCase();
+    return { rank, top: board, was: took ? leader : null };
   }
 
   /**
@@ -186,7 +208,14 @@ export class BoardStore {
       return json({ boards: await this.many(tracks, limit) });
     }
 
-    const track = parts[1];
+    // Decoded, because a track key contains a colon and the client percent-
+    // encodes it into the path. `pathname` hands back the raw, still-encoded
+    // segment, so without this every single-track request arrives as
+    // `quarry-run%3Aday-clear`, fails the pattern and 400s — while the batch
+    // read carries its keys in the query string, where `searchParams` decodes
+    // them, and works. That split is why it looked like the board was simply
+    // empty rather than unreachable.
+    const track = parts[1] ? safeDecode(parts[1]) : undefined;
     if (parts[0] !== 'b' || !track || !TRACK_KEY.test(track)) {
       return json({ error: 'bad track' }, 400);
     }
