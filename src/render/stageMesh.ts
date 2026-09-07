@@ -105,6 +105,126 @@ function shadeByGrade(color: THREE.Color, grade: number, scratch: THREE.Color): 
  * The marker poles come from the simulation's own set rather than a copy, so
  * what is drawn lying flat is exactly what the car knocked over.
  */
+/**
+ * Metres of elevation between contour lines.
+ *
+ * Sized so the lines read as a pattern rather than as the occasional stripe.
+ * At 1 m — the obvious first choice — a 4% road, which is the mean across
+ * every stage, puts them 25 m apart and only three or four are ever on screen;
+ * a handful of unexplained bands is worse than nothing. At 0.6 m the same road
+ * gets a line every 15 m and a 20% climb one every 3 m, which is the density
+ * that makes bunching legible as steepness.
+ */
+const CONTOUR_INTERVAL = 0.6;
+
+/**
+ * Contour lines on the road, exactly as a map draws them.
+ *
+ * The problem this solves is that the camera is orthographic and near
+ * overhead, which is the view that destroys gradient: measured across all
+ * thirteen stages the mean grade is 3.5-6%, so the surface normal barely moves
+ * and N.L changes by a couple of percent. Shadows cannot show it.
+ *
+ * Chevrons painted on the road were the first attempt and were the wrong shape
+ * of answer. The road is a coarse trimesh, so a decal laid on it is in a fight
+ * with the surface it is lying on: at 1 cm the road pokes through in stripes,
+ * at 4 cm it still does wherever two triangles meet at an angle, and lifting it
+ * further only makes it float. Anything drawn *on* the geometry has this
+ * problem. A line computed *from* the geometry cannot.
+ *
+ * So the lines are a function of world height, evaluated in the road's own
+ * fragment shader. Nothing can be in front of them because they are not a
+ * thing in the world; they are the road's own colour, and they are lit and
+ * shadowed with it.
+ *
+ * The good part is free. `fwidth(height)` is how much elevation changes across
+ * one pixel, so dividing by it gives a line that is a constant width on screen
+ * no matter how steep the ground — and it makes the lines bunch together on
+ * steep ground and spread apart on shallow ground with no code at all, which
+ * is precisely the thing a contour map is read by. Flat ground produces no
+ * lines whatsoever, so most of every stage is untouched.
+ */
+function addContours(material: THREE.MeshStandardMaterial): void {
+  // Without this the lines simply do not appear, and nothing anywhere errors.
+  // three's default program cache key is built from the material's *defines* —
+  // and `roughness` and `metalness` are uniforms, not defines. So this material
+  // and the terrain's (`vertexColors` + `flatShading`, roughness 1 instead of
+  // 0.95) hash to the same key, three hands whichever compiled first to both,
+  // and `onBeforeCompile` is silently skipped for the loser. It cost a probe
+  // frame to find, because the road rendered perfectly — just without any of
+  // this in it.
+  material.customProgramCacheKey = () => 'stage-road-contours';
+
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = `attribute float aRoad;
+attribute float aGrade;
+varying float vHeight;
+varying float vRoad;
+varying float vGrade;
+${shader.vertexShader}`.replace(
+      '#include <begin_vertex>',
+      `#include <begin_vertex>
+  vHeight = (modelMatrix * vec4(transformed, 1.0)).y;
+  vRoad = aRoad;
+  vGrade = aGrade;`,
+    );
+
+    shader.fragmentShader = `varying float vHeight;
+varying float vRoad;
+varying float vGrade;
+${shader.fragmentShader}`.replace(
+      '#include <color_fragment>',
+      `#include <color_fragment>
+  {
+    // Where this pixel sits between one contour and the next.
+    float band = vHeight / ${CONTOUR_INTERVAL.toFixed(2)};
+    // How fast that changes across a pixel — the slope, in screen terms.
+    float rate = fwidth(band);
+    // Distance to the nearest line, measured in pixels rather than in metres,
+    // which is what keeps the line one pixel wide on a 2% grade and on a 20%
+    // one. The floor stops a perfectly flat road sitting exactly on a contour
+    // from dividing by zero and painting the whole surface.
+    float toLine = abs(fract(band - 0.5) - 0.5) / max(rate, 1e-4);
+    // Roughly two and a half pixels of core with a soft pixel either side.
+    // One-pixel lines are correct and unreadable: anti-aliased down to a 46%
+    // darkening of a single pixel they vanish into a gravel texture, which is
+    // the whole reason the first attempt at this looked like it had failed.
+    float line = 1.0 - smoothstep(1.1, 3.0, toLine);
+
+    // Fade in on the *gradient*, not on the screen-space rate. They differ by
+    // the zoom and the resolution, so a fade written against rate would put
+    // more lines on a desktop than on a phone and change the ones you get when
+    // the camera pulls back for a fast section — the road would appear to
+    // change as you drove it. Measured across the stages, mean grade is 3.5-6%
+    // and flat road is under 1%, so this is off below 1.2% and full by 3.5%.
+    line *= smoothstep(0.012, 0.035, abs(vGrade));
+    // The one thing that does belong in screen space: past about a line every
+    // two pixels they stop being separate lines and become a grey wash, which
+    // is worse than nothing because it reads as a change of surface.
+    line *= 1.0 - smoothstep(0.20, 0.45, rate);
+    line *= vRoad;
+
+    // Every fifth line heavier, which is how a map makes a count possible
+    // without labelling anything: you read the thick ones and interpolate.
+    float index = floor(band + 0.5);
+    float major = abs(fract(index / 5.0)) < 0.1 ? 1.0 : 0.0;
+
+    // Darker than the road rather than lighter. The stages run from pale
+    // gravel to near-black tarmac at night, and a dark line holds against all
+    // of them, where a light one disappears into dry gravel and glows on wet
+    // tarmac. Applied to the diffuse colour, so the lines are lit and shadowed
+    // with the surface and read as paint on the road rather than as an overlay
+    // drawn on top of the picture.
+    // Strength found by looking, not by choosing: at 0.30 the lines were
+    // there and measurably correct and still could not be read on a tan gravel
+    // road at a glance, which is the only thing they are for.
+    float ink = line * (0.44 + 0.28 * major);
+    diffuseColor.rgb *= 1.0 - ink;
+  }`,
+    );
+  };
+}
+
 export function buildStageView(stage: Stage, markers: Markers): StageView {
   const group = new THREE.Group();
   const { vertices, indices, vertexSurfaces, vertexShade, vertexGrade } = stage.geometry;
@@ -114,6 +234,10 @@ export function buildStageView(stage: Stage, markers: Markers): StageView {
   geometry.setIndex(new THREE.BufferAttribute(indices, 1));
 
   const colors = new Float32Array(vertexSurfaces.length * 3);
+  // Where the contour lines are allowed to be drawn: the driveable road only.
+  // The banks rise several metres over a couple, so contours on them come out
+  // denser than the pixels can hold and turn the verge into moire.
+  const onRoad = new Float32Array(vertexSurfaces.length);
   const c = new THREE.Color();
   const slope = new THREE.Color();
   for (let i = 0; i < vertexSurfaces.length; i++) {
@@ -122,25 +246,32 @@ export function buildStageView(stage: Stage, markers: Markers): StageView {
     colors[i * 3] = c.r;
     colors[i * 3 + 1] = c.g;
     colors[i * 3 + 2] = c.b;
+    // `vertexShade` is 1 on the road and steps down across verge, bank and
+    // beyond, so it already carries exactly this and there is nothing to
+    // recompute — but read it as a threshold, not as a fade: a line that dims
+    // gradually across the verge reads as a badly drawn line rather than as a
+    // line that stops at the edge of the road.
+    onRoad[i] = vertexShade[i]! > 0.9 ? 1 : 0;
   }
   geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geometry.setAttribute('aRoad', new THREE.BufferAttribute(onRoad, 1));
+  geometry.setAttribute('aGrade', new THREE.BufferAttribute(vertexGrade, 1));
   geometry.computeVertexNormals();
 
-  const road = new THREE.Mesh(
-    geometry,
-    new THREE.MeshStandardMaterial({
-      vertexColors: true,
-      roughness: 0.95,
-      metalness: 0,
-      flatShading: true,
-    }),
-  );
+  const roadMaterial = new THREE.MeshStandardMaterial({
+    vertexColors: true,
+    roughness: 0.95,
+    metalness: 0,
+    flatShading: true,
+  });
+  addContours(roadMaterial);
+
+  const road = new THREE.Mesh(geometry, roadMaterial);
   road.receiveShadow = true;
   road.castShadow = true;
   group.add(road);
 
   group.add(buildTerrain(stage));
-  group.add(buildGradeChevrons(stage));
   group.add(buildGates(stage));
   const first = stage.spline.samples[0]!;
   const startLights = new StartLightsView(first.position, first.left, first.width);
@@ -1470,105 +1601,6 @@ function buildBridges(stage: Stage): THREE.Group {
     group.add(mesh);
   }
 
-  return group;
-}
-
-/** Below this gradient a road reads as flat and gets no chevrons. */
-const CHEVRON_FROM = 0.035;
-/** Metres of road between chevrons. Closer on steeper ground — see below. */
-const CHEVRON_SPACING = 17;
-
-/**
- * Arrows painted on the road, pointing up the hill.
- *
- * The tint in `shadeByGrade` tells you *that* the ground is sloping and roughly
- * how much, but it is a colour on a coloured surface and on dirt it can be read
- * as a change of surface instead. These say which way, unambiguously, in the
- * one visual language every driver already knows from a road sign.
- *
- * They are paint, not objects: flat on the surface, no collider, no shadow.
- * That keeps them out of `sim/` honestly — nothing here is at the size of a
- * thing the car can hit, and the car drives over them exactly as it drives over
- * a skid mark.
- *
- * Two details learned the hard way elsewhere in this file. A flat quad laid on
- * the ground needs `DoubleSide` unless its winding has been checked, because a
- * downward normal is silently culled and the buffer fills with perfectly good
- * invisible geometry — that is the bug that hid every skid mark in the game.
- * And they are lifted 4 cm rather than 1: the road is a coarse trimesh and at
- * 1 cm the surface pokes through its own paint in stripes.
- */
-function buildGradeChevrons(stage: Stage): THREE.Group {
-  const group = new THREE.Group();
-  const positions: number[] = [];
-  const colors: number[] = [];
-  const c = new THREE.Color();
-
-  let since = CHEVRON_SPACING;
-  let previous: number | null = null;
-  for (const sample of stage.spline.samples) {
-    const step = previous === null ? 0 : sample.distance - previous;
-    previous = sample.distance;
-    since += step;
-    const grade = sample.forward.y;
-    if (Math.abs(grade) < CHEVRON_FROM) continue;
-    // Steeper ground gets them closer together, so density reads as steepness
-    // the way contour lines do on a map — a second channel for free, and the
-    // one that still works when the arrows are too small to resolve.
-    const wanted = CHEVRON_SPACING * (1 - Math.min(Math.abs(grade) / 0.2, 1) * 0.55);
-    if (since < wanted) continue;
-    since = 0;
-
-    // Uphill is +forward when climbing and -forward when descending, so a
-    // chevron always points the way the ground rises.
-    const dir = grade > 0 ? 1 : -1;
-    const size = Math.min(2.3 + Math.abs(grade) * 10, 4.2);
-    c.setHex(grade > 0 ? 0xffc46b : 0x74a7d8).multiplyScalar(0.9);
-
-    // One per side, tucked toward the verge so the racing line stays clean.
-    for (const side of [-1, 1]) {
-      const across = sample.width * 0.62 * side;
-      const mid = {
-        x: sample.position.x + sample.left.x * across,
-        y: sample.position.y + 0.04,
-        z: sample.position.z + sample.left.z * across,
-      };
-      const f = sample.forward;
-      const l = sample.left;
-      // A V: tip ahead on the uphill side, two tails behind it.
-      const tip = { x: mid.x + f.x * size * dir, y: mid.y, z: mid.z + f.z * size * dir };
-      const arm = size * 0.85;
-      for (const wing of [-1, 1]) {
-        const outer = {
-          x: mid.x - f.x * arm * dir + l.x * arm * wing,
-          z: mid.z - f.z * arm * dir + l.z * arm * wing,
-        };
-        const inner = {
-          x: mid.x - f.x * arm * 0.35 * dir + l.x * arm * wing,
-          z: mid.z - f.z * arm * 0.35 * dir + l.z * arm * wing,
-        };
-        positions.push(tip.x, tip.y, tip.z, outer.x, mid.y, outer.z, inner.x, mid.y, inner.z);
-        for (let k = 0; k < 3; k++) colors.push(c.r, c.g, c.b);
-      }
-    }
-  }
-
-  if (positions.length === 0) return group;
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-  const mesh = new THREE.Mesh(
-    geo,
-    new THREE.MeshBasicMaterial({
-      vertexColors: true,
-      side: THREE.DoubleSide,
-      transparent: true,
-      opacity: 0.72,
-      depthWrite: false,
-    }),
-  );
-  mesh.renderOrder = 1;
-  group.add(mesh);
   return group;
 }
 
