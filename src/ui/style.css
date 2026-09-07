@@ -1368,6 +1368,65 @@ html, body {
 .menu-row b { min-width: 170px; }
 .menu-row-best { margin-left: auto; font-size: 11px; letter-spacing: 0.08em; color: var(--dim); }
 
+/* A row with a board under it stacks; one without stays on a single line, so
+   the layout does not shift when the times arrive. */
+.menu-row.has-board { display: block; }
+.menu-row-head { display: flex; gap: 10px; align-items: baseline; width: 100%; }
+.menu-board {
+  display: flex;
+  gap: 14px;
+  margin-top: 3px;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+.menu-board i { font-style: normal; display: inline-flex; gap: 5px; align-items: baseline; }
+.menu-board u {
+  text-decoration: none;
+  color: var(--accent);
+  font-weight: 700;
+  opacity: 0.75;
+}
+.menu-board b {
+  color: var(--ink);
+  font-weight: 400;
+  /* `.menu-row b` sets a 170px min-width to line the stage names up, and the
+     times in here are `b` too — so without this each one is padded to the width
+     of a stage name and three entries spread right across the row. */
+  min-width: 0;
+}
+
+.name-entry { display: flex; flex-direction: column; gap: 10px; max-width: 320px; }
+.name-entry input {
+  font: inherit;
+  font-size: 16px;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+  background: rgba(0, 0, 0, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 3px;
+  padding: 10px 12px;
+}
+.name-entry input:focus { outline: none; border-color: var(--accent); }
+/* Refusing an empty name is the whole point of the screen, so it has to be
+   visible — a button that silently does nothing reads as a broken button. */
+.name-entry input.is-bad { border-color: var(--hot); }
+
+/* A button that reads as a link: it changes a setting rather than going
+   anywhere, but it sits inside a paragraph and must not look like a control. */
+.menu-strap .link {
+  font: inherit;
+  font-size: inherit;
+  color: var(--accent);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .menu button[data-action="back"] {
   font: inherit;
   color: var(--ink);

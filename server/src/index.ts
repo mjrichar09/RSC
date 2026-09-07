@@ -16,17 +16,46 @@
  */
 
 import { ROOM_CODE, RoomStore, empty, json } from './rooms.js';
+import { BoardStore, TRACK_KEY } from './board.js';
 
 export interface Env {
   ROOMS: DurableObjectNamespace;
+  BOARDS: DurableObjectNamespace;
 }
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (request.method === 'OPTIONS') return empty(204);
-    if (request.method !== 'POST') return empty(405);
 
     const parts = new URL(request.url).pathname.split('/').filter(Boolean);
+
+    // /b/:track — the leaderboard. Read with GET, submit with POST. A separate
+    // object from the rooms because the two have nothing to do with each other
+    // and opposite lifetimes: a room is sixty seconds of state nobody minds
+    // losing, a board is the only thing here meant to be permanent. Sharing one
+    // object would put every leaderboard read behind the handshake traffic of
+    // whoever happened to be starting a race.
+    if (parts[0] === 'b' || parts[0] === 'bs') {
+      if (request.method !== 'GET' && request.method !== 'POST') return empty(405);
+      const url = new URL(request.url);
+      const track = parts[1];
+      // Checked at the edge so a malformed key never reaches the object and
+      // can never allocate storage. The batch read carries its keys in the
+      // query string instead, and `many` filters them the same way.
+      if (parts[0] === 'b' && (parts.length !== 2 || !track || !TRACK_KEY.test(track))) {
+        return json({ error: 'bad track' }, 400);
+      }
+      const boards = env.BOARDS.get(env.BOARDS.idFromName('boards'));
+      return boards.fetch(
+        new Request(`https://boards/${parts[0]}${track ? `/${track}` : ''}${url.search}`, {
+          method: request.method,
+          headers: { 'content-type': 'application/json' },
+          ...(request.method === 'POST' ? { body: await request.text() } : {}),
+        }),
+      );
+    }
+
+    if (request.method !== 'POST') return empty(405);
     // /r/:code/:action
     if (parts.length !== 3 || parts[0] !== 'r') return empty(404);
     const code = parts[1]!.toUpperCase();
@@ -65,6 +94,29 @@ export default {
  * evicted when idle and rebuilt on the next request, so anything held in a
  * field is gone by the time the second half of a handshake arrives.
  */
+/**
+ * The leaderboard object.
+ *
+ * One for every track, for the same reason the rooms share one: a
+ * single-threaded actor handling a handful of requests a second is not a
+ * bottleneck at this scale, and it makes "insert this time and keep the best
+ * ten" trivially atomic — which is the one thing a leaderboard has to get
+ * right, and the reason this is a Durable Object rather than KV. Two players
+ * finishing at once against an eventually consistent store is one of them
+ * silently overwriting the other's place.
+ */
+export class Boards {
+  private readonly store: BoardStore;
+
+  constructor(state: DurableObjectState) {
+    this.store = new BoardStore(state.storage);
+  }
+
+  fetch(request: Request): Promise<Response> {
+    return this.store.fetch(request);
+  }
+}
+
 export class Rooms {
   private readonly store: RoomStore;
 

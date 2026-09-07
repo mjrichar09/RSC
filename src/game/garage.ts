@@ -27,54 +27,67 @@ export interface UpgradeDef {
   costs: number[];
 }
 
+/**
+ * How many levels any upgrade can reach.
+ *
+ * Two, deliberately, and the `costs` arrays below are all exactly this long —
+ * the length *is* the cap, which is why `maxLevel` reads it rather than a
+ * constant. Four levels of engine put +36% torque on a car whose medal times
+ * are calibrated against an AI lap in a stock one, so the last two levels were
+ * not a choice between upgrades, they were a switch that turned the stage
+ * times off. Two levels keeps every upgrade a decision about what to spend on
+ * rather than a queue to work through.
+ */
+export const MAX_UPGRADE_LEVEL = 2;
+
 export const UPGRADES: UpgradeDef[] = [
   {
     id: 'engine',
     label: 'Engine',
     description: '+9% torque per level. Faster everywhere, and harder to place on loose surfaces.',
-    costs: [2400, 5800, 12500, 25000],
+    costs: [2400, 5800],
   },
   {
     id: 'turbo',
     label: 'Turbo',
     description: '+7% torque per level, and more heat. A holed radiator becomes a shorter fuse.',
-    costs: [3200, 7600, 16000],
+    costs: [3200, 7600],
   },
   {
     id: 'gearbox',
     label: 'Gearbox',
     description: 'Shorter shifts and a wider limited-slip bias. Sharper corner exits.',
-    costs: [2800, 6400, 13500],
+    costs: [2800, 6400],
   },
   {
     id: 'suspension',
     label: 'Suspension',
     description: 'Stiffer springs and better anti-roll. More grip, less forgiving over crests.',
-    costs: [2200, 5200, 11000],
+    costs: [2200, 5200],
   },
   {
     id: 'brakes',
     label: 'Brakes',
     description: '+12% brake torque per level. Later braking, more chance of locking a wheel.',
-    costs: [1800, 4200, 9000],
+    costs: [1800, 4200],
   },
   {
     id: 'tyres',
     label: 'Tyres',
     description: '+6% peak grip per level. Softer compounds: quicker, snappier at the limit, and they wear noticeably faster.',
-    costs: [2600, 6200, 13000],
+    costs: [2600, 6200],
   },
   {
     id: 'weight',
     label: 'Weight reduction',
     description: '−4% mass per level. Better in every direction, and less forgiving of impacts.',
-    costs: [3400, 8200, 17500],
+    costs: [3400, 8200],
   },
   {
     id: 'rollcage',
     label: 'Rollcage',
     description: 'Cuts damage to mechanical parts by 18% per level. Adds weight; does nothing for bodywork.',
-    costs: [2000, 4800, 10500],
+    costs: [2000, 4800],
   },
 ];
 
@@ -114,6 +127,26 @@ export const rollcageMitigation = (levels: UpgradeLevels): number =>
  * mutated, so the handling tests and the sweep tool always measure the stock
  * car.
  */
+/**
+ * The car a race is actually driven in.
+ *
+ * Arcade is stock and career is whatever is in the garage. This is policy
+ * rather than plumbing — it is the thing that makes a global board mean
+ * anything, because upgrades are worth up to +18% torque and +12% grip, and a
+ * board comparing an upgraded car with a stock one is comparing two garages
+ * rather than two drives. It lives here, next to the upgrades it is about, so
+ * it can be tested; inline in `main.ts` it was three words in a world-builder
+ * that nothing could reach.
+ */
+export function carFor(
+  mode: 'career' | 'arcade',
+  levels: UpgradeLevels,
+): { tuning: VehicleTuning; rollcage: number } {
+  return mode === 'arcade'
+    ? { tuning: tuneFor({}), rollcage: 0 }
+    : { tuning: tuneFor(levels), rollcage: rollcageMitigation(levels) };
+}
+
 export function tuneFor(levels: UpgradeLevels): VehicleTuning {
   const t: VehicleTuning = { ...CAR };
 

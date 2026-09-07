@@ -53,8 +53,37 @@ console.log('career opens the garage');
 await page.click('[data-action="menu"]');
 await page.waitForSelector('.menu.is-open');
 await page.click('[data-action="arcade"]');
+
+// Arcade asks who is driving before it will start, because its times go on a
+// global board and a board of anonymous numbers is a list rather than a
+// leaderboard. Asked once and remembered.
+await page.waitForSelector('.name-entry input');
+if (await page.locator('.menu-row').count()) throw new Error('arcade started without a name');
+// An empty name is refused visibly rather than silently doing nothing.
+await page.click('[data-action="save-name"]');
+await page.waitForSelector('.name-entry input.is-bad');
+if (await page.locator('.menu-row').count()) throw new Error('an empty name was accepted');
+console.log('arcade asks for a driver name, and refuses an empty one');
+
+await page.fill('.name-entry input', 'Checkbot');
+await page.click('[data-action="save-name"]');
 await page.waitForSelector('.menu-row');
 const rows = await page.locator('.menu-row').count();
+
+// The top three for each track, or an honest word about why there are none.
+//
+// No broker is reachable under this check, which is the case that matters: the
+// strip has to *settle*, not sit on "loading" forever. Everything about the
+// board fails soft on purpose — a stage list that will not open because a
+// leaderboard request is hanging is a far worse bug than one with no times in
+// it — and this is the assertion that keeps that true.
+await page.waitForFunction(
+  () => !document.querySelector('.menu-board')?.textContent?.includes('loading'),
+  { timeout: 15_000 },
+);
+const strip = (await page.locator('.menu-board').first().textContent())?.trim();
+if (!strip) throw new Error('no leaderboard strip on the arcade rows');
+console.log(`leaderboard strip settles with no broker: "${strip}"`);
 await page.locator('.menu-row[data-id="quarry-run:night"]').click();
 await page.waitForFunction(() => (window.RSC!.status() as { stage: string }).stage === 'quarry-run');
 console.log(`arcade lists ${rows} races and drives one`);

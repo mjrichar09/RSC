@@ -9,14 +9,14 @@
  * evolve strands every player's progress the first time it changes.
  */
 
-import type { UpgradeLevels } from './garage.js';
+import { MAX_UPGRADE_LEVEL, type UpgradeLevels } from './garage.js';
 import type { Medal } from './race.js';
 import type { ComponentId, Dent } from '../sim/damage.js';
 import { DEFAULT_LIVERY, liveryById } from '../data/liveries.js';
 import type { Ghost } from '../sim/replay.js';
 
 const DB_NAME = 'rsc';
-const DB_VERSION = 6;
+const DB_VERSION = 7;
 const PROFILE_KEY = 'profile';
 
 /** Enough to enter the second stage and still afford a mistake. */
@@ -55,6 +55,14 @@ export interface Profile {
   /** Paint and competition number: which car is *yours*. */
   livery: string;
   raceNumber: number;
+  /**
+   * The name that goes on the leaderboard.
+   *
+   * Empty until it has been asked for. Arcade will not start without one,
+   * because a board of anonymous times is a list of numbers — the name is what
+   * makes somebody else's lap something to beat rather than something to read.
+   */
+  driverName: string;
   /** Player settings that survive a reload. */
   settings: Settings;
 }
@@ -108,6 +116,7 @@ export const emptyProfile = (): Profile => ({
   carDents: [],
   livery: DEFAULT_LIVERY.id,
   raceNumber: 7,
+  driverName: '',
   totals: { earned: 0, spentOnRepairs: 0, spentOnUpgrades: 0, retirements: 0 },
   settings: { ...DEFAULT_SETTINGS },
 });
@@ -153,6 +162,7 @@ function migrate(stored: unknown): Profile {
     // 1 to 99, because a rally car's number is two digits and a four-digit one
     // would not fit on the roof.
     raceNumber: Math.min(Math.max(Math.round(number(stored.raceNumber, base.raceNumber)), 1), 99),
+    driverName: typeof stored.driverName === 'string' ? stored.driverName.slice(0, 16).trim() : '',
     settings: isObject(stored.settings)
       ? {
           vision: clamp01(number(stored.settings.vision, DEFAULT_SETTINGS.vision)),
@@ -172,6 +182,24 @@ function migrate(stored: unknown): Profile {
   for (const [id, value] of Object.entries(health)) {
     if (typeof value !== 'number' || !Number.isFinite(value)) delete health[id];
     else health[id] = Math.min(Math.max(value, 0), 1);
+  }
+
+  // v6 -> v7: a driver name, and upgrades capped at two levels.
+  //
+  // The cap has to be applied to what is *stored*, not only to what the garage
+  // offers: `maxLevel` reads the `costs` array so the shop stops at two on its
+  // own, but `tuneFor` scales straight off the stored number and would happily
+  // keep handing a returning player the +36% engine they bought under the old
+  // four-level ladder. Clamping here is what makes the cap true of the car
+  // rather than only of the shop.
+  //
+  // No refund. The money was spent on a car that was faster for as long as
+  // those levels existed, and paying it back would hand every existing save a
+  // windfall the balance was never built for.
+  const upgrades = out.upgrades as Record<string, number>;
+  for (const [id, level] of Object.entries(upgrades)) {
+    if (typeof level !== 'number' || !Number.isFinite(level) || level <= 0) delete upgrades[id];
+    else upgrades[id] = Math.min(Math.round(level), MAX_UPGRADE_LEVEL);
   }
 
   // v1 -> v2: carried damage and lifetime totals were added, and money went

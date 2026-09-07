@@ -17,15 +17,23 @@
 
 import { STAGES } from '../data/stages/index.js';
 import type { Career } from '../game/career.js';
-import { stageVariants, type StageDef, type StageVariant } from '../sim/stage.js';
+import { stageVariants, variantKey, type StageDef, type StageVariant } from '../sim/stage.js';
 import { formatTime } from './raceHud.js';
+import type { BoardEntry, Leaderboard } from '../net/leaderboard.js';
+
+/** Names come from other players, so they are escaped everywhere they land. */
+const escapeHtml = (raw: string): string =>
+  raw.replace(
+    /[&<>"']/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!,
+  );
 
 export interface ArcadePick {
   def: StageDef;
   variant: StageVariant;
 }
 
-type Screen = 'main' | 'arcade';
+type Screen = 'main' | 'arcade' | 'name';
 
 export class StartMenu {
   onCareer: (() => void) | null = null;
@@ -36,6 +44,20 @@ export class StartMenu {
 
   /** Where the slider sits. Set from the saved profile at startup. */
   private volume = 1;
+
+  /**
+   * The global board, or null where there is none.
+   *
+   * Optional in exactly the way the room broker is: a fork with no worker
+   * behind it, or a player with no connection, gets an arcade screen with no
+   * times on it and everything else working.
+   */
+  board: Leaderboard | null = null;
+
+  /** Top three per track, filled in after the screen is already on show. */
+  private tops = new Map<string, BoardEntry[]>();
+  /** Set once the fetch has come back, so "no times yet" is not shown early. */
+  private topsLoaded = false;
 
   /** Put the slider where the saved setting says, without raising a change. */
   setVolume(value: number): void {
@@ -98,8 +120,32 @@ export class StartMenu {
         this.onCareer?.();
         return;
       case 'arcade':
-        this.screen = 'arcade';
+        // A name first, or the board is a list of anonymous numbers. Asked once
+        // and remembered; `name` also reaches here from the arcade screen when
+        // somebody wants to change it.
+        this.screen = this.career.driverName ? 'arcade' : 'name';
+        if (this.screen === 'arcade') void this.loadBoards();
         break;
+      case 'name':
+        this.screen = 'name';
+        break;
+      case 'save-name': {
+        const input = this.root.querySelector('[data-act="name"]') as HTMLInputElement | null;
+        const typed = input?.value.trim() ?? '';
+        if (!typed) {
+          // Refusing is the whole point of the screen, so say so rather than
+          // silently doing nothing to a button somebody just pressed.
+          input?.classList.add('is-bad');
+          input?.focus();
+          return;
+        }
+        void this.career.setDriverName(typed).then(() => {
+          this.screen = 'arcade';
+          void this.loadBoards();
+          this.render();
+        });
+        return;
+      }
       case 'multiplayer':
         this.setOpen(false);
         this.onMultiplayer?.();
@@ -119,6 +165,29 @@ export class StartMenu {
     this.render();
   }
 
+  /**
+   * Fetch every board the arcade screen shows, in one request.
+   *
+   * Deliberately not awaited by anything that draws: the screen goes up
+   * immediately with the times missing and fills them in when they arrive. A
+   * stage list that will not open because a leaderboard request is hanging is
+   * a far worse bug than a stage list with no times in it.
+   */
+  private async loadBoards(): Promise<void> {
+    if (!this.board) {
+      this.topsLoaded = true;
+      return;
+    }
+    const keys = this.arcadePicks().map((p) => variantKey(p.def.id, p.variant.id));
+    const boards = await this.board.many(keys, 3);
+    this.topsLoaded = true;
+    if (boards) this.tops = new Map(Object.entries(boards));
+    // Only if the player is still looking at it — they may have driven off by
+    // now, and re-rendering a closed menu would throw away a screen they are
+    // on the way to.
+    if (this.open && this.screen === 'arcade') this.render();
+  }
+
   /** Every stage under every condition, with nothing locked. */
   private arcadePicks(): ArcadePick[] {
     return STAGES.flatMap((def) => stageVariants(def).map((variant) => ({ def, variant })));
@@ -126,7 +195,48 @@ export class StartMenu {
 
   private render(): void {
     this.root.innerHTML =
-      this.screen === 'main' ? this.mainScreen() : this.arcadeScreen();
+      this.screen === 'main'
+        ? this.mainScreen()
+        : this.screen === 'name'
+          ? this.nameScreen()
+          : this.arcadeScreen();
+    if (this.screen === 'name') {
+      const input = this.root.querySelector('[data-act="name"]') as HTMLInputElement | null;
+      input?.focus();
+      input?.select();
+    }
+  }
+
+  /**
+   * Ask who is driving.
+   *
+   * Once, before the first arcade race, and never again unless it is changed
+   * on purpose. Career is not gated on it: nothing there is published, and
+   * making somebody name themselves to play alone would be a toll on the mode
+   * that has none of the benefit.
+   */
+  private nameScreen(): string {
+    const current = escapeHtml(this.career.driverName);
+    return `
+      <div class="menu-inner">
+        <div class="menu-head">
+          <h1 class="menu-title small">DRIVER</h1>
+          <button data-action="back">Back</button>
+        </div>
+        <p class="menu-strap">
+          Arcade times go on a global board for each stage. This is the name that
+          appears beside yours.
+        </p>
+        <div class="name-entry">
+          <input data-act="name" maxlength="16" placeholder="Your name"
+                 value="${current}" autocomplete="off" spellcheck="false" />
+          <button class="wide" data-action="save-name">Start racing</button>
+        </div>
+        <p class="menu-strap dim">
+          Sixteen characters. Change it any time from the arcade screen — your
+          old times keep the old name.
+        </p>
+      </div>`;
   }
 
   private mainScreen(): string {
@@ -181,6 +291,20 @@ export class StartMenu {
       </label>`;
   }
 
+  /** The three fastest, or a word about why there are not three. */
+  private boardStrip(key: string): string {
+    if (!this.board) return '';
+    if (!this.topsLoaded) return '<span class="menu-board dim">loading times…</span>';
+    const top = this.tops.get(key) ?? [];
+    if (top.length === 0) return '<span class="menu-board dim">no times yet — set the first</span>';
+    return `<span class="menu-board">${top
+      .map(
+        (entry, i) =>
+          `<i><u>${i + 1}</u> ${escapeHtml(entry.name)} <b>${formatTime(entry.time)}</b></i>`,
+      )
+      .join('')}</span>`;
+  }
+
   private arcadeScreen(): string {
     const rows = this.arcadePicks()
       .map((pick) => {
@@ -189,10 +313,13 @@ export class StartMenu {
           ? `${formatTime(record.time)} · ${record.medal}`
           : '<span class="dim">no time set</span>';
         return `
-          <button class="menu-row" data-action="drive" data-id="${pick.def.id}:${pick.variant.id}">
-            <b>${pick.def.name}</b>
-            <span class="dim">${pick.variant.name}</span>
-            <span class="menu-row-best">${best}</span>
+          <button class="menu-row has-board" data-action="drive" data-id="${pick.def.id}:${pick.variant.id}">
+            <span class="menu-row-head">
+              <b>${pick.def.name}</b>
+              <span class="dim">${pick.variant.name}</span>
+              <span class="menu-row-best">${best}</span>
+            </span>
+            ${this.boardStrip(variantKey(pick.def.id, pick.variant.id))}
           </button>`;
       })
       .join('');
@@ -204,8 +331,12 @@ export class StartMenu {
           <button data-action="back">Back</button>
         </div>
         <p class="menu-strap">
-          Nothing here costs anything and nothing here is kept: the car arrives fixed
-          and leaves forgotten. Your career's best time is shown to chase.
+          Nothing here costs anything and nothing here is kept: the car arrives fixed,
+          stock and unmodified, and leaves forgotten. Every arcade car is the same car,
+          which is what makes the board worth reading.
+          <button class="link" data-action="name">Racing as <b>${escapeHtml(
+            this.career.driverName,
+          )}</b> — change</button>
         </p>
         <div class="menu-rows">${rows}</div>
       </div>`;

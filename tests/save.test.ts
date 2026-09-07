@@ -237,3 +237,57 @@ describe('paint and number', () => {
     expect(migrateProfile({ version: 6, raceNumber: 'seven' }).raceNumber).toBeGreaterThan(0);
   });
 });
+
+describe('the two-level upgrade cap', () => {
+  it('clamps a car bought under the old four-level ladder', () => {
+    // The cap has to be true of the *car*, not only of the shop. `maxLevel`
+    // reads the costs array so the garage stops offering a third level on its
+    // own, but `tuneFor` scales straight off the stored number — so without
+    // this a returning player keeps the +36% engine they bought when it
+    // existed, and every medal time is measured against a car nobody else can
+    // buy any more.
+    const old = { ...emptyProfile(), version: 6, upgrades: { engine: 4, turbo: 3, brakes: 1 } };
+    const out = migrateProfile(old);
+
+    expect(out.upgrades.engine).toBe(2);
+    expect(out.upgrades.turbo).toBe(2);
+    // Untouched where it was already inside the cap.
+    expect(out.upgrades.brakes).toBe(1);
+  });
+
+  it('does not refund the difference', () => {
+    // The money bought a car that was faster for as long as those levels
+    // existed. Paying it back would hand every existing save a windfall the
+    // balance was never built for.
+    const old = { ...emptyProfile(), version: 6, money: 500, upgrades: { engine: 4 } };
+    expect(migrateProfile(old).money).toBe(500);
+  });
+
+  it('drops an upgrade level that is not a number at all', () => {
+    const damaged = {
+      ...emptyProfile(),
+      version: 6,
+      upgrades: { engine: 'lots', turbo: Number.NaN, brakes: 0, tyres: -3 },
+    };
+    const out = migrateProfile(damaged as never).upgrades as Record<string, number>;
+
+    expect(out.engine).toBeUndefined();
+    expect(out.turbo).toBeUndefined();
+    // Zero and negative are "not fitted", which is the absence of a key.
+    expect(out.brakes).toBeUndefined();
+    expect(out.tyres).toBeUndefined();
+  });
+});
+
+describe('the driver name', () => {
+  it('starts empty, so arcade has to ask', () => {
+    expect(emptyProfile().driverName).toBe('');
+    expect(migrateProfile({ ...emptyProfile(), version: 6 }).driverName).toBe('');
+  });
+
+  it('survives a reload, and is kept to a length that fits', () => {
+    expect(migrateProfile({ ...emptyProfile(), driverName: '  Ari  ' }).driverName).toBe('Ari');
+    expect(migrateProfile({ ...emptyProfile(), driverName: 'x'.repeat(50) }).driverName).toHaveLength(16);
+    expect(migrateProfile({ ...emptyProfile(), driverName: 42 } as never).driverName).toBe('');
+  });
+});

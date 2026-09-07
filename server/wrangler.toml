@@ -5,7 +5,10 @@ main = "src/index.ts"
 compatibility_date = "2026-01-01"
 
 [durable_objects]
-bindings = [{ name = "ROOMS", class_name = "Rooms" }]
+bindings = [
+  { name = "ROOMS", class_name = "Rooms" },
+  { name = "BOARDS", class_name = "Boards" },
+]
 
 # `new_sqlite_classes`, and not by choice: the free plan refuses a Durable Object
 # namespace created any other way ("you must create a namespace using a
@@ -22,3 +25,10 @@ bindings = [{ name = "ROOMS", class_name = "Rooms" }]
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Rooms"]
+
+# The leaderboard. `new_sqlite_classes` again, and this time the SQLite backing
+# is actually used for what it is: unlike a room, a board is meant to outlive
+# everything — the object, the deploy, and the players who set the times.
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Boards"]

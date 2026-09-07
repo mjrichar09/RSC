@@ -12,7 +12,17 @@ import { STAGES } from '../src/data/stages/index.js';
 import { CAR } from '../src/data/tuning.js';
 import { Career, type RaceTarget } from '../src/game/career.js';
 import { RECOVERY_FLOOR, canEnter, ledger, payout } from '../src/game/economy.js';
-import { UPGRADES, investedIn, nextCost, rollcageMitigation, tuneFor } from '../src/game/garage.js';
+import {
+  MAX_UPGRADE_LEVEL,
+  UPGRADES,
+  carFor,
+  investedIn,
+  maxLevel,
+  nextCost,
+  rollcageMitigation,
+  tuneFor,
+  type UpgradeLevels,
+} from '../src/game/garage.js';
 import { SaveStore, STARTING_MONEY } from '../src/game/save.js';
 import { impactPointFromForce } from '../src/sim/damage.js';
 import { v3 } from '../src/sim/math.js';
@@ -499,5 +509,51 @@ describe('progression', () => {
     });
     // Finishing without a medal is not a medal.
     expect(career.medalsHeld).toBe(1);
+  });
+});
+
+/** Biggest number on the torque curve, which is what an engine upgrade moves. */
+const peakTorque = (t: { torqueCurve: readonly (readonly [number, number])[] }): number =>
+  Math.max(...t.torqueCurve.map(([, nm]) => nm));
+
+describe('the upgrade ladder', () => {
+  it('stops at two levels for everything', () => {
+    // Two, and the `costs` array length is the cap — so a shop that offers a
+    // third level and a car that accepts one cannot drift apart.
+    for (const def of UPGRADES) {
+      expect(maxLevel(def.id), def.id).toBe(MAX_UPGRADE_LEVEL);
+      expect(def.costs, def.id).toHaveLength(MAX_UPGRADE_LEVEL);
+    }
+  });
+
+  it('has nothing left to sell at the cap', () => {
+    const maxed: UpgradeLevels = {};
+    for (const def of UPGRADES) maxed[def.id] = MAX_UPGRADE_LEVEL;
+    for (const def of UPGRADES) expect(nextCost(maxed, def.id), def.id).toBeNull();
+  });
+});
+
+describe('the car a race is driven in', () => {
+  it('gives arcade a stock car whatever the garage holds', () => {
+    // The whole basis of a comparable board: every arcade car is the same car.
+    // Career upgrades are worth up to +18% torque and +12% grip, so a board
+    // mixing the two would be comparing garages rather than drives.
+    const maxed: UpgradeLevels = { engine: 2, turbo: 2, tyres: 2, rollcage: 2, weight: 2 };
+
+    const arcade = carFor('arcade', maxed);
+    expect(arcade.tuning).toEqual(tuneFor({}));
+    expect(arcade.rollcage).toBe(0);
+
+    // And career still gets what it paid for.
+    const career = carFor('career', maxed);
+    expect(career.tuning.tireGrip).toBeGreaterThan(arcade.tuning.tireGrip);
+    expect(career.rollcage).toBeGreaterThan(0);
+    expect(peakTorque(career.tuning)).toBeGreaterThan(peakTorque(arcade.tuning));
+  });
+
+  it('leaves a career car with no upgrades identical to an arcade one', () => {
+    // The two paths must agree where they should agree, or "stock" means one
+    // thing in the garage and another on the board.
+    expect(carFor('career', {})).toEqual(carFor('arcade', {}));
   });
 });

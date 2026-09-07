@@ -10,7 +10,8 @@ import { STAGES, stageById } from './data/stages/index.js';
 import { liveryById } from './data/liveries.js';
 import { TEST_PATCHES } from './data/testGround.js';
 import { Career, type RaceTarget } from './game/career.js';
-import { rollcageMitigation } from './game/garage.js';
+import { carFor } from './game/garage.js';
+import { boardFor } from './net/leaderboard.js';
 import { Race } from './game/race.js';
 import { ImpactDrama } from './game/drama.js';
 import {
@@ -387,10 +388,13 @@ const params = new URLSearchParams(location.search);
 
     // Damage is on for stages and off for the proving ground: the handling
     // tests and the tuning sweep are measuring the car, not the crashing.
+    // Arcade drives a stock car and career drives the one in the garage — the
+    // rule itself is in `carFor`, next to the upgrades it is about.
+    const car = carFor(mode, career.upgrades);
     world = new SimWorld({
       stage,
-      tuning: career.tuning(),
-      damage: { rollcage: rollcageMitigation(career.upgrades) },
+      tuning: car.tuning,
+      damage: { rollcage: car.rollcage },
       conditions: variant.conditions,
       ...(grid ? { cars: grid.cars, ...(grid.slots ? { slots: grid.slots } : {}) } : {}),
     });
@@ -641,7 +645,13 @@ const params = new URLSearchParams(location.search);
     if (!freeRoam) loadStage(STAGES[0]!.id);
   };
 
+  // The global times board, sharing the room broker's worker and its `?rooms=`
+  // override so there is only ever one address to keep in step. Null when there
+  // is no broker configured, which the menu and the finish path both handle by
+  // simply not showing times.
+  const board = boardFor(params);
   const menu = new StartMenu(hudRoot, career);
+  menu.board = board;
   menu.onCareer = () => {
     rivalLiveries = [];
     mode = 'career';
@@ -967,12 +977,26 @@ const params = new URLSearchParams(location.search);
     if (!stage || !race || settled || !world.damage) return;
     settled = true;
 
-    // Arcade banks nothing: no payout, no repair bill, no record, no ghost.
-    // The whole point of it is that you can wreck the car on a night stage you
-    // have not unlocked and walk away as though it never happened.
+    // Arcade banks nothing locally: no payout, no repair bill, no record, no
+    // ghost. The whole point of it is that you can wreck the car on a night
+    // stage you have not unlocked and walk away as though it never happened.
+    //
+    // It is the only mode that publishes, though, and for the reason the car
+    // is stock here: every arcade car is the same car, so the times are
+    // comparable. A career time is a time set by that player's garage.
     if (mode === 'arcade') {
       session?.report(0, race.finishTime, retired);
       raceHud.setLedger(null);
+      const finished = race.finishTime;
+      // A retirement is not a lap. Neither is a session with no name behind it,
+      // which should be impossible — arcade will not start without one — but a
+      // save edited by hand is not worth publishing an empty name over.
+      if (!retired && finished !== null && board && career.driverName) {
+        // Not awaited: nothing on this screen depends on it, and the submit
+        // fails soft. A finish that waited on a network call before showing
+        // the time would be a worse screen on a worse connection.
+        void board.submit(currentKey(), career.driverName, finished);
+      }
       return;
     }
 

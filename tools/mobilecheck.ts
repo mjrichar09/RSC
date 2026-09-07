@@ -69,7 +69,17 @@ try {
 
   // Touch, not click: the whole point is that this works without a mouse.
   await page.tap('[data-action="arcade"]');
+
+  // The driver name, typed on a phone. A text input inside a document with
+  // `touch-action: none` and a full-screen steering pad is exactly the kind of
+  // control that works on a desktop and cannot be reached with a thumb, so it
+  // is tapped and filled here rather than clicked.
+  await page.waitForSelector('.name-entry input');
+  await page.locator('.name-entry input').tap();
+  await page.fill('.name-entry input', 'Thumbs');
+  await page.tap('[data-action="save-name"]');
   await page.waitForSelector('.menu-row');
+  console.log('the driver name can be typed with a thumb');
   await page.locator('.menu-row[data-id="pine-loop:day-clear"]').tap();
   await page.waitForFunction(() => (window.RSC!.status() as { stage: string }).stage === 'pine-loop');
   console.log('arcade picks a stage by tapping');

@@ -77,6 +77,20 @@ export class Career {
     return variantKey(target.def.id, target.variant.id);
   }
 
+  /**
+   * The name that goes on the leaderboard, or empty if it has not been asked.
+   */
+  get driverName(): string {
+    return this.profile.driverName;
+  }
+
+  async setDriverName(name: string): Promise<void> {
+    const clean = name.replace(/\s+/g, ' ').trim().slice(0, 16);
+    await this.save.update((p) => {
+      p.driverName = clean;
+    });
+  }
+
   /** The paint on the car, and the number on its roof. */
   get livery(): Livery {
     return liveryById(this.profile.livery);
