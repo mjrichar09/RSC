@@ -15,6 +15,7 @@ import type { Stage } from '../sim/stage.js';
 import type { UpcomingCorner } from '../sim/corners.js';
 import type { BoardEntry } from '../net/leaderboard.js';
 import { escapeHtml } from './escape.js';
+import { callDistance, miles, yards } from './units.js';
 
 export const formatTime = (seconds: number): string => {
   const m = Math.floor(seconds / 60);
@@ -139,7 +140,7 @@ export class RaceHud {
     this.standings.innerHTML = order
       .map((row, i) => {
         const ahead = i === 0 ? null : (order[i - 1]!.progress - row.progress);
-        const gap = ahead === null ? '' : `+${Math.round(ahead)} m`;
+        const gap = ahead === null ? '' : `+${Math.round(yards(ahead))} yd`;
         return `<div class="standing${row.you ? ' you' : ''}"><b>${i + 1}</b>${
           row.name
         }<span>${gap}</span></div>`;
@@ -177,7 +178,11 @@ export class RaceHud {
 
   setNotes(upcoming: UpcomingCorner[]): void {
     const key = upcoming
-      .map((u) => `${u.corner.entry}:${Math.max(Math.round(u.distance / 10) * 10, 0)}`)
+      // The cache key has to be the string that is actually drawn, not the
+      // metres behind it: rounded to a call, two different distances make the
+      // same note, and rebuilding the markup for a note that has not changed is
+      // the flicker this key exists to prevent.
+      .map((u) => `${u.corner.entry}:${callDistance(u.distance)}`)
       .join('|');
     if (key === this.notesKey) return;
     this.notesKey = key;
@@ -193,7 +198,7 @@ export class RaceHud {
         const tier = corner.severity <= 2 ? 'tight' : corner.severity <= 4 ? 'mid' : 'fast';
         // The distance is what turns a note into a call. Under twenty metres it
         // is no longer a warning — you are in the corner — so it reads "now".
-        const away = distance <= 15 ? 'now' : `${Math.round(distance / 10) * 10} m`;
+        const away = callDistance(distance);
         return `
           <div class="note ${tier} ${i === 0 ? 'next' : 'after'}">
             <i class="note-arrow ${corner.direction}"></i>
@@ -245,7 +250,7 @@ export class RaceHud {
     this.medals = medals ?? null;
     const suffix = variantName && variantName !== 'Day' ? ` · ${variantName.toUpperCase()}` : '';
     this.stageName.textContent =
-      `${stage.def.name.toUpperCase()}${suffix} · ${(stage.length / 1000).toFixed(2)} km`;
+      `${stage.def.name.toUpperCase()}${suffix} · ${miles(stage.length).toFixed(2)} mi`;
     this.stripKey = '';
     this.lastPhase = '';
     this.panel.className = 'race-panel';

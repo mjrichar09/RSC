@@ -16,6 +16,7 @@ import { LIVERIES } from '../data/liveries.js';
 import { sweepProgress } from '../game/awards.js';
 import { formatTime } from './raceHud.js';
 import { healthColor } from './damagePanel.js';
+import { feet } from './units.js';
 
 const MEDAL_TINT: Record<string, string> = {
   author: '#b06bff',
@@ -343,7 +344,7 @@ export class Garage {
             <div class="stage-map-thumb">${thumb.map}</div>
             <div class="stage-body">
               <div class="stage-name">${def.name} <span class="dim">· ${variant.name}</span></div>
-              <div class="stage-meta">${def.biome} · <span class="stage-climb">▲ ${thumb.climb} m</span>${
+              <div class="stage-meta">${def.biome} · <span class="stage-climb">▲ ${Math.round(feet(thumb.climb))} ft</span>${
                 check.reason === 'locked' ? ` · <span class="locked-note">locked</span>` : ''
               }</div>
               <div class="stage-profile-thumb">${thumb.profile}</div>

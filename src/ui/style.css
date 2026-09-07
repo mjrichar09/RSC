@@ -1668,6 +1668,154 @@ html, body {
 .award.w3 .award-title { font-size: 68px; letter-spacing: 0.14em; }
 .award.w3 { animation-duration: 0.55s; }
 
+/*
+ * The rare tiers, and why they escalate rather than all shout.
+ *
+ * The three things a board can tell you are not equally rare, and the
+ * celebration has to say which one happened before the words are read: a
+ * personal best happens most sessions, a place in the ten happens a handful of
+ * times, and the top of it may happen once. Everything below is tiered so the
+ * ordinary case stays quiet — a game that celebrates everything has stopped
+ * celebrating anything, and the cost of over-decorating the common case is
+ * paid by the rare one.
+ *
+ * The vocabulary is the one every game with loot in it has trained players to
+ * read, and it is worth using precisely because it is already learned: colour
+ * for rarity, a glow that breathes, a shimmer sweeping the letters, and light
+ * thrown off the thing itself at the top tier.
+ */
+
+/*
+ * The glow, and why it is a second copy of the word rather than a shadow.
+ *
+ * Animating `text-shadow` repaints the text every frame — a 68px word with a
+ * 46px blur, sixty times a second — and it took the finish screen from 50 fps
+ * to 17. A blurred duplicate underneath, with only its *opacity* animating, is
+ * composited instead of repainted and costs nothing. Same picture, and it is
+ * the difference between a word appearing and a word arriving.
+ */
+.award-title { position: relative; }
+.award.w1 .award-title::before,
+.award.w2 .award-title::before,
+.award.w3 .award-title::before {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  color: inherit;
+  filter: blur(16px);
+  opacity: 0.55;
+  animation: award-glow 1.6s ease-in-out infinite;
+  will-change: opacity;
+}
+.award.w2 .award-title::before { animation-duration: 1.25s; filter: blur(20px); }
+
+/*
+ * Tier 3: the letters are lit metal.
+ *
+ * A gradient clipped to the text, sweeping — which is the standard "legendary"
+ * reveal and is instantly legible as the rarest thing on offer. The clip
+ * throws the colour away, so the glow cannot come from this element: the
+ * `::before` underneath is the same word painted solid, blurred, and it is
+ * what actually casts the light.
+ */
+.award.w3 .award-title {
+  position: relative;
+  color: transparent;
+  background: linear-gradient(
+    100deg,
+    #b06bff 0%, #f2c14e 22%, #fff6d0 38%, #f2c14e 52%, #ff8a3d 70%, #b06bff 100%
+  );
+  background-size: 260% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: award-sweep 2.4s ease-in-out infinite;
+}
+/* The clip throws the colour away, so the glow cannot come from the gradient —
+   this layer is the same word painted solid gold and blurred, and it is what
+   actually casts the light. */
+.award.w3 .award-title::before {
+  color: #f2c14e;
+  filter: blur(22px);
+  opacity: 0.9;
+  animation-duration: 1.1s;
+}
+
+/* The ray fan behind it, turning slowly. Masked to a disc so it fades out
+   rather than ending at an edge, and kept well under the text's brightness —
+   it is light coming off the award, not a second thing competing with it. */
+.award-rays {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 720px;
+  height: 720px;
+  transform: translate(-50%, -50%);
+  background: repeating-conic-gradient(
+    from 0deg,
+    rgba(242, 193, 78, 0.22) 0deg 6deg,
+    transparent 6deg 18deg
+  );
+  -webkit-mask-image: radial-gradient(closest-side, #000 10%, transparent 68%);
+  mask-image: radial-gradient(closest-side, #000 10%, transparent 68%);
+  animation: award-turn 15s linear infinite, award-rays-in 0.8s ease-out;
+  opacity: 0.6;
+  /* Rotation only, so the fan is rasterised once and then moved by the
+     compositor rather than redrawn. */
+  will-change: transform;
+}
+
+/* Sparks thrown outward once, on the beat. */
+.award-sparks {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+}
+.award-sparks i {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  margin: -2.5px 0 0 -2.5px;
+  border-radius: 50%;
+  background: #fff6d0;
+  box-shadow: 0 0 12px 3px rgba(242, 193, 78, 0.9);
+  transform: rotate(var(--a)) translateX(0);
+  animation: award-spark 1.1s cubic-bezier(0.15, 0.85, 0.25, 1) forwards;
+  animation-delay: var(--d);
+}
+
+@keyframes award-glow {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
+@keyframes award-sweep {
+  0% { background-position: 120% 0; }
+  100% { background-position: -60% 0; }
+}
+@keyframes award-turn {
+  to { transform: translate(-50%, -50%) rotate(360deg); }
+}
+@keyframes award-rays-in {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.6); }
+}
+@keyframes award-spark {
+  from { transform: rotate(var(--a)) translateX(30px) scale(1); opacity: 1; }
+  to { transform: rotate(var(--a)) translateX(calc(360px * var(--r))) scale(0.2); opacity: 0; }
+}
+
+/* Somebody who has asked for less motion gets the colour and none of the
+   movement. The award still lands and still reads as the rare one. */
+@media (prefers-reduced-motion: reduce) {
+  .award-rays { animation: none; }
+  .award-sparks { display: none; }
+  .award.w1 .award-title,
+  .award.w2 .award-title,
+  .award.w3 .award-title,
+  .award.w3 .award-title::before { animation: none; }
+}
+
 @keyframes award-in {
   from { transform: scale(0.72) translateY(14px); opacity: 0; filter: blur(6px); }
   60% { transform: scale(1.06); opacity: 1; filter: blur(0); }
@@ -1677,6 +1825,19 @@ html, body {
   from { width: 10px; opacity: 0.95; }
   to { width: 780px; opacity: 0; }
 }
+
+/*
+ * An award and the finish panel are both dead centre, so the big tiers landed
+ * straight across the medal table and the board and made all three unreadable.
+ * They are not competing for attention — one is the moment and the other is
+ * the detail you read afterwards — so the panel steps back while an award is
+ * on screen and comes forward when it is done.
+ */
+#hud:has(.award) .race-panel {
+  opacity: 0.12;
+  transition: opacity 0.25s ease;
+}
+.race-panel { transition: opacity 0.35s ease 0.15s; }
 
 #hud.in-garage .awards,
 #hud.in-menu .awards,

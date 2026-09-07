@@ -25,6 +25,7 @@
  * number, and both are the same spline the road is built from.
  */
 
+import { feet } from './units.js';
 import type { Stage } from '../sim/stage.js';
 import type { Vec3 } from '../sim/math.js';
 
@@ -326,7 +327,9 @@ export class LiveStageMap {
       elevationProfileSvg(stage, this.profileWidth, 26) +
       // The one number worth printing. Everything else about the height is
       // easier to see than to read.
-      `<div class="profile-label">▲${Math.round(elevation.climb)} ▼${Math.round(elevation.descent)} m</div>`;
+      `<div class="profile-label">▲${Math.round(feet(elevation.climb))} ▼${Math.round(
+        feet(elevation.descent),
+      )} ft</div>`;
     this.projection = mapProjection(stage, 100);
     this.car = this.root.querySelector('.map-car');
     this.done = this.root.querySelector('.map-done');

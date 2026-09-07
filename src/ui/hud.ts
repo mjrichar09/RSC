@@ -3,6 +3,7 @@
  * than in-canvas text, and it costs nothing at this scale.
  */
 
+import { mph } from './units.js';
 import { CAR } from '../data/tuning.js';
 import type { VehicleState } from '../sim/vehicle.js';
 
@@ -31,7 +32,7 @@ export class Hud {
       <div class="hud-corner hud-br">
         <div class="rpm"><div class="rpm-fill" id="hud-rpm"></div></div>
         <div class="cluster">
-          <div class="speed"><span id="hud-speed">0</span><em>km/h</em></div>
+          <div class="speed"><span id="hud-speed">0</span><em>mph</em></div>
           <div class="gear" id="hud-gear">1</div>
         </div>
         <div class="drift" id="hud-drift"></div>
@@ -50,7 +51,7 @@ export class Hud {
   }
 
   update(state: VehicleState, fps: number): void {
-    this.speed.textContent = Math.abs(state.speed * 3.6).toFixed(0);
+    this.speed.textContent = mph(state.speed).toFixed(0);
     this.gear.textContent = GEAR_LABEL(state.gear);
 
     const frac = Math.min(state.rpm / CAR.maxRpm, 1);
