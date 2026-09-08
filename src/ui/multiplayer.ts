@@ -290,7 +290,23 @@ export class MultiplayerPanel {
     }
   }
 
+  /**
+   * Set the status line.
+   *
+   * Repeats are dropped, which is the whole of the fix: the room loop reports
+   * the same thing on every poll, and `render()` replaces the entire panel — so
+   * with a broker actually reachable the host's lobby was reconstructing itself
+   * about once a second, and any button somebody was reaching for was detached
+   * between the press and the release. It reads as taps that do nothing, and it
+   * only appeared once the broker was deployed: before that the loop failed
+   * fast and said nothing at all.
+   *
+   * A real change still renders everything, because callers set other state
+   * alongside the message and rely on this to show it — an earlier attempt to
+   * patch just the text in place left the reply code set and never drawn.
+   */
   private say(text: string): void {
+    if (this.status === text) return;
     this.status = text;
     this.render();
   }
@@ -736,6 +752,7 @@ export class MultiplayerPanel {
         this.players = players;
         this.pick = pick;
         this.render();
+        void this.loadLobbyTop();
       },
       onStart: (setup) => {
         const guest = this.guest!;
@@ -811,10 +828,13 @@ export class MultiplayerPanel {
    * otherwise be forty requests deep before choosing anything.
    */
   private async loadLobbyTop(): Promise<void> {
-    const stage = STAGES[this.stageIndex];
-    const variant = this.variants[this.variantIndex];
-    if (!this.board || !stage || !variant) return;
-    const key = variantKey(stage.id, variant.id);
+    // Driven from `pick` rather than from the pickers, because the pickers only
+    // exist on the host's screen — a guest is *told* what it is racing and had
+    // no way to see the times it was about to be measured against. `pick` is
+    // set on both sides: the host writes it when it announces, the guest when
+    // it is announced to.
+    if (!this.board || !this.pick) return;
+    const key = variantKey(this.pick.stageId, this.pick.variantId);
     if (key === this.lobbyTopKey) return;
     this.lobbyTopKey = key;
     this.lobbyTop = [];
@@ -825,14 +845,25 @@ export class MultiplayerPanel {
     // overwrites the times for the one they are.
     if (this.lobbyTopKey !== key) return;
     this.lobbyTop = top ?? [];
-    this.render();
+
+    // Patched in place rather than re-rendered. `render()` replaces the whole
+    // lobby's markup, so a reply arriving from the network while somebody is
+    // reaching for a button destroys the button under their finger — the tap
+    // lands on an element that no longer exists and nothing happens. It is a
+    // race nobody would ever reproduce deliberately and everybody hits, because
+    // the reply arrives a few hundred milliseconds after the screen opens,
+    // which is exactly when the first tap happens.
+    const slot = this.root.querySelector('.lobby-board');
+    if (slot) slot.outerHTML = this.lobbyBoardMarkup();
   }
 
   /** The times to beat, under the stage picker. */
   private lobbyBoardMarkup(): string {
-    if (!this.board) return '';
+    // Always one element with the same class, even with nothing in it, so
+    // there is something to patch when the times arrive.
+    if (!this.board) return '<div class="lobby-board"></div>';
     if (this.lobbyTop.length === 0) {
-      return `<p class="lobby-board dim">No times set here yet.</p>`;
+      return `<div class="lobby-board dim">No times set here yet.</div>`;
     }
     return `<div class="lobby-board">
       ${this.lobbyTop
@@ -956,6 +987,7 @@ export class MultiplayerPanel {
           <div>
             <h3>Racing</h3>
             <p class="lobby-hint">${this.pickedName}</p>
+            ${this.lobbyBoardMarkup()}
             <h3>Grid</h3>
             ${this.playerList()}
             <button class="wide" data-act="ready">I'm ready</button>
@@ -978,6 +1010,7 @@ export class MultiplayerPanel {
           ${this.liveryPicker()}
           <h3>Racing</h3>
           <p class="lobby-hint">${this.pickedName}</p>
+          ${this.lobbyBoardMarkup()}
           <h3>Grid</h3>
           ${this.playerList()}
           <button class="wide" data-act="ready">I'm ready</button>

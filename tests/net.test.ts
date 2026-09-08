@@ -57,8 +57,14 @@ async function pair(options: { latency?: number; loss?: number; jitter?: number;
 
   const hostWorld = await createWorld({ baseSurface: 'tarmac', cars });
   // The guest builds its world the way the game does: its own car at index 0,
-  // in the grid slot the host has it in.
-  guestWorld = await createWorld({ baseSurface: 'tarmac', cars, slots: guest.slots });
+  // in the grid slot the host has it in, and everybody else's car kinematic
+  // because it is driven from the wire rather than by the physics.
+  guestWorld = await createWorld({
+    baseSurface: 'tarmac',
+    cars,
+    slots: guest.slots,
+    remote: Array.from({ length: cars - 1 }, (_, i) => i + 1),
+  });
   host.start(SETUP, hostWorld);
   wire.flush();
   guest.attach(guestWorld);
@@ -672,5 +678,56 @@ describe('a guest predicting its own car', () => {
     // the jolt a player feels, and it is entirely self-inflicted.
     const { snaps } = await drive(120, 0.08, 80);
     expect(snaps).toBeLessThan(5);
+  }, 60_000);
+});
+
+describe("somebody else's car, on a guest", () => {
+  it('is kinematic rather than a dynamic body being teleported', async () => {
+    // The distinction is the whole bug. A dynamic body moved with
+    // `setTranslation` every step arrives inside whatever it has caught up
+    // with, carrying no motion the solver can resolve the contact against, so
+    // the overlap is pushed out with an impulse the size of how far in it got.
+    // Locally that is being hit by nothing, shoved off the road, or wedged
+    // against an obstacle that is not there — and since the host simulated no
+    // such shove, the guest then diverges and is dragged back, which is the
+    // stutter and the car appearing to steer itself.
+    const { guestWorld, hostWorld } = await pair({ cars: 2 });
+
+    expect(guestWorld.cars[1]!.vehicle.remote).toBe(true);
+    expect(guestWorld.cars[1]!.vehicle.body.isKinematic()).toBe(true);
+    // The guest's own car is still a real car, or it would not be predicting.
+    expect(guestWorld.cars[0]!.vehicle.remote).toBe(false);
+    expect(guestWorld.cars[0]!.vehicle.body.isKinematic()).toBe(false);
+    // And the host simulates every car for real: it is the authority on all of
+    // them, including the contacts between them.
+    for (const car of hostWorld.cars) expect(car.vehicle.body.isKinematic()).toBe(false);
+  });
+
+  it('is still moved to where the host says it is', async () => {
+    // The other half, and the more expensive mistake of the two: kinematic must
+    // not mean stationary. A remote car that stopped following the wire would
+    // be a worse bug than one that shoves, because it would be invisible until
+    // somebody tried to race it.
+    const { host, guest, hostWorld, guestWorld, wire } = await pair({ latency: 40, cars: 2 });
+    const flat: DriverInput = { throttle: 1, brake: 0, steer: 0, handbrake: 0 };
+    const idle: DriverInput = { throttle: 0, brake: 0, steer: 0, handbrake: 0 };
+
+    const before = guestWorld.cars[1]!.vehicle.body.translation().z;
+    for (let i = 0; i < 120 * 6; i++) {
+      host.step(flat, DT);
+      host.maybeSnapshot(DT, (c) => hostWorld.cars[c]!.vehicle.body.translation().z);
+      guest.step(idle, DT);
+      wire.advance(DT * 1000);
+    }
+    const moved = guestWorld.cars[1]!.vehicle.body.translation().z - before;
+    const hostMoved = hostWorld.cars[0]!.vehicle.body.translation().z;
+
+    expect(moved).toBeGreaterThan(20);
+    // It trails, and it is supposed to: a remote car is drawn `INTERP_DELAY`
+    // plus one one-way delay in the past, which is the buffer that lets it be
+    // interpolated between two real samples rather than guessed at. 0.14 s at
+    // the ~40 m/s this reaches is about 5.5 m, and that is what it measures.
+    // The assertion is that the lag is *bounded*, not that it is absent.
+    expect(Math.abs(moved - hostMoved)).toBeLessThan(9);
   }, 60_000);
 });

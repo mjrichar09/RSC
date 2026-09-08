@@ -87,6 +87,14 @@ export interface WorldOptions {
    * dragged sideways by the first snapshot.
    */
   slots?: readonly number[];
+  /**
+   * Car indices whose position comes off the wire rather than out of the
+   * physics — every car but your own, on a guest.
+   *
+   * They get kinematic bodies. See `VehicleOptions.remote` for why a dynamic
+   * body that is teleported every step is the worst of both.
+   */
+  remote?: readonly number[];
 }
 
 /** Merge overrides over the baseline car setup. */
@@ -376,6 +384,7 @@ export class SimWorld {
     this.conditions = options.conditions ?? CLEAR_DAY;
     this.carCount = Math.max(1, Math.floor(options.cars ?? 1));
     this.slots = options.slots ?? [];
+    const remote = new Set(options.remote ?? []);
 
     const wantsDamage = options.damage !== undefined && options.damage !== false;
     this.wildlife =
@@ -408,6 +417,7 @@ export class SimWorld {
       const vehicle = new Vehicle(RAPIER, this.world, tuning, this.gridSlot(spawn, i), {
         surfaceAt: (p) => surface(this.surfaceIdAt(p)),
         conditions: this.conditions,
+        ...(remote.has(i) ? { remote: true } : {}),
         ...(damage ? { damage } : {}),
         ...(debris ? { debris } : {}),
       });

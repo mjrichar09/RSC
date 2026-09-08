@@ -200,10 +200,18 @@ export class StartMenu {
     const boards = await this.board.many(keys, 3);
     this.topsLoaded = true;
     if (boards) this.tops = new Map(Object.entries(boards));
-    // Only if the player is still looking at it — they may have driven off by
-    // now, and re-rendering a closed menu would throw away a screen they are
-    // on the way to.
-    if (this.open && this.screen === 'arcade') this.render();
+    if (!this.open || this.screen !== 'arcade') return;
+
+    // Patched in place rather than re-rendered, for the same reason the lobby
+    // is: `render()` replaces every row, so a reply arriving while somebody is
+    // reaching for a stage destroys the row under their finger. The reply lands
+    // a few hundred milliseconds after the screen opens, which is exactly when
+    // the first tap happens.
+    for (const row of Array.from(this.root.querySelectorAll<HTMLElement>('.menu-row'))) {
+      const slot = row.querySelector('.menu-board');
+      const key = row.dataset.id;
+      if (slot && key) slot.outerHTML = this.boardStrip(key);
+    }
   }
 
   /** Every stage under every condition, with nothing locked. */

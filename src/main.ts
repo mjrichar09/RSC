@@ -364,7 +364,7 @@ const params = new URLSearchParams(location.search);
   const loadStage = (
     stageId: string,
     variantId?: string,
-    grid?: { cars: number; slots?: number[] },
+    grid?: { cars: number; slots?: number[]; remote?: number[] },
   ) => {
     stageView?.dispose();
     if (stageView) scene.remove(stageView.group);
@@ -396,7 +396,13 @@ const params = new URLSearchParams(location.search);
       tuning: car.tuning,
       damage: { rollcage: car.rollcage },
       conditions: variant.conditions,
-      ...(grid ? { cars: grid.cars, ...(grid.slots ? { slots: grid.slots } : {}) } : {}),
+      ...(grid
+        ? {
+            cars: grid.cars,
+            ...(grid.slots ? { slots: grid.slots } : {}),
+            ...(grid.remote ? { remote: grid.remote } : {}),
+          }
+        : {}),
     });
     buildRivalViews(grid?.cars ?? 1);
 
@@ -584,6 +590,11 @@ const params = new URLSearchParams(location.search);
     loadStage(start.setup.stageId, start.setup.variantId, {
       cars: start.cars,
       ...(start.slots ? { slots: start.slots } : {}),
+      // On a guest every car but your own is driven from the wire, so they are
+      // kinematic. The host simulates all of them for real and marks none.
+      ...(start.guest
+        ? { remote: Array.from({ length: start.cars - 1 }, (_, i) => i + 1) }
+        : {}),
     });
 
     // Nobody counts down yet. Building a world is asynchronous and takes a
@@ -728,11 +739,31 @@ const params = new URLSearchParams(location.search);
     garage.setOpen(true);
   };
 
-  // Browsers refuse to start audio without a gesture, so the graph is built on
-  // the first interaction and the game is silent but playable until then.
-  const startAudio = () => mixer.start();
-  window.addEventListener('keydown', startAudio, { once: true });
-  window.addEventListener('pointerdown', startAudio, { once: true });
+  /*
+   * Browsers refuse to start audio without a gesture, so the graph is built on
+   * the first interaction and the game is silent but playable until then.
+   *
+   * Kept attached until it has actually *worked*, rather than fired once and
+   * assumed. `AudioContext.resume()` is a promise, the context can be handed
+   * back already suspended, and a gesture the browser does not count leaves it
+   * that way — and with `{ once: true }` on each listener there was exactly one
+   * attempt and no way back. That is the whole of "the game is silent until I
+   * touch the volume control": the volume control calls `start()` again, which
+   * is the retry nothing else was doing.
+   *
+   * `running` is checked on the *next* gesture rather than straight after
+   * `start()`, because `resume()` has not resolved by then — so the listeners
+   * detach one gesture after audio genuinely comes up, which costs nothing.
+   */
+  const startAudio = () => {
+    if (mixer.running) {
+      for (const event of AUDIO_GESTURES) window.removeEventListener(event, startAudio);
+      return;
+    }
+    mixer.start();
+  };
+  const AUDIO_GESTURES = ['keydown', 'pointerdown', 'pointerup', 'click', 'touchend'] as const;
+  for (const event of AUDIO_GESTURES) window.addEventListener(event, startAudio);
 
   controls.onMute = () => mixer.toggleMute();
 
@@ -936,7 +967,11 @@ const params = new URLSearchParams(location.search);
   };
   raceHud.onLeave = () => {
     touch.release();
-    if (session && multiplayer.inLobby) multiplayer.returnToLobby();
+    // In a session this is the way out of the finish screen, so it goes to the
+    // classification — who won and by how much — rather than resetting the
+    // lobby, which would throw that away before it had been read. The lobby's
+    // own button is what starts the next race.
+    if (session && multiplayer.inLobby) multiplayer.showFinish();
     else controls.onGarage?.();
   };
 
@@ -1949,16 +1984,15 @@ const params = new URLSearchParams(location.search);
 
       if (wasRunning && (race.phase === 'finished' || race.phase === 'retired')) {
         void settleRun(race.phase === 'retired');
-        // A multiplayer race ends back in the lobby rather than in the garage.
-        // The shape of an evening is race, look at the tally, pick a different
-        // stage, race again — and being dropped into the garage after one
-        // stage ends it instead. Given a few seconds so the finish is on
-        // screen before the panel covers it.
-        // Straight to the lobby panel, which now shows the classification and
-        // waits. Returning after a fixed four seconds threw away the only thing
-        // anybody wanted from the race — who won, and by how much — and did it
-        // before the slower half of the grid had even finished.
-        if (session && multiplayer.inLobby) multiplayer.showFinish();
+        // A multiplayer race ends back in the lobby rather than in the garage:
+        // the shape of an evening is race, look at the tally, pick a different
+        // stage, go again, and being dropped into the garage ends it instead.
+        //
+        // But not *yet*. The lobby panel used to open the instant the line was
+        // crossed, which covered the finish screen before it could be read —
+        // your time, the three fastest, and who else is still out there — and
+        // that is the whole reward for the lap. The race panel stays up and its
+        // leave button already says "Lobby"; going there is a press now.
       }
 
       raceHud.update(race);

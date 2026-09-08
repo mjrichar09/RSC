@@ -603,10 +603,22 @@ export class RaceGuest {
       if (!car || buffer.length === 0) continue;
       const state = this.sampleAt(buffer, this.playback);
       const body = car.vehicle.body;
-      body.setTranslation(state.p, true);
-      body.setRotation(state.q, true);
-      body.setLinvel(state.v, true);
-      body.setAngvel(state.w, true);
+      if (car.vehicle.remote) {
+        // `setNextKinematic*` rather than `setTranslation`: it tells the solver
+        // where the body will be at the *end* of the step, so Rapier derives
+        // the velocity from the motion itself and resolves contacts against a
+        // car that is genuinely moving. Teleporting instead puts the body
+        // wherever it was told with no motion behind it, and anything it lands
+        // inside is squeezed out with an impulse the size of the overlap —
+        // which is what being hit by nothing felt like.
+        body.setNextKinematicTranslation(state.p);
+        body.setNextKinematicRotation(state.q);
+      } else {
+        body.setTranslation(state.p, true);
+        body.setRotation(state.q, true);
+        body.setLinvel(state.v, true);
+        body.setAngvel(state.w, true);
+      }
     }
   }
 

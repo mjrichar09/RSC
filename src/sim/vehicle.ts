@@ -133,6 +133,24 @@ export interface VehicleOptions {
   debris?: DebrisModel;
   /** Weather and time of day. Weather takes real grip away. */
   conditions?: Conditions;
+  /**
+   * True for a car whose position comes off the wire rather than out of the
+   * physics — somebody else's car, on a guest.
+   *
+   * It gets a *kinematic* body. A dynamic one that is teleported every step is
+   * the single worst thing you can hand a solver: it arrives inside whatever it
+   * has caught up with, with no velocity the contact can be resolved against,
+   * and the penetration is pushed out with an impulse proportional to how far
+   * in it got. Locally that reads as being hit by nothing, shoved off the road,
+   * or wedged against an obstacle that is not there — and because the host
+   * simulated no such shove, the guest then diverges and gets dragged back,
+   * which is the stutter and the car appearing to drive itself.
+   *
+   * A kinematic body moves exactly where it is put, is never pushed by
+   * anything, and pushes what it touches with a velocity derived from its own
+   * motion. That is precisely what a remote car is.
+   */
+  remote?: boolean;
 }
 
 /** What an undamaged car looks like, so the damage-free path costs nothing. */
@@ -157,6 +175,8 @@ export class Vehicle {
   readonly body: RAPIER.RigidBody;
   readonly collider: RAPIER.Collider;
 
+  /** True when this car is driven from the wire rather than by the physics. */
+  readonly remote: boolean;
   private readonly rapier: typeof RAPIER;
   private readonly world: RAPIER.World;
   readonly tuning: VehicleTuning;
@@ -192,12 +212,14 @@ export class Vehicle {
     this.damage = options.damage ?? null;
     this.debris = options.debris ?? null;
     this.conditions = options.conditions ?? CLEAR_DAY;
+    this.remote = options.remote ?? false;
 
     const h = tuning.halfExtents;
     const heading = spawn.heading ?? 0;
 
-    const desc = rapier
-      .RigidBodyDesc.dynamic()
+    const desc = (options.remote
+      ? rapier.RigidBodyDesc.kinematicPositionBased()
+      : rapier.RigidBodyDesc.dynamic())
       .setTranslation(spawn.position.x, spawn.position.y, spawn.position.z)
       .setRotation({ x: 0, y: Math.sin(heading / 2), z: 0, w: Math.cos(heading / 2) })
       .setLinearDamping(0.02)
