@@ -250,6 +250,13 @@ scannable as it grows; it is append-only.
   fold a corner did nothing at all, because a wing it never touched had soaked
   up the impact. `exposed` marks them; `tests/debris.test.ts` caught it.
 
+- **A `let` declared below a closure that boot calls.** `main()` is one long
+  function, so a `let` near the bottom of it is in the temporal dead zone for
+  every helper defined above it — and `loadStage` runs during boot. `npm test`
+  is green throughout, because nothing headless calls `main`; the game simply
+  never becomes ready and the first sign is a `uicheck` timeout with no page
+  error printed. State that boot touches gets declared at the top, beside the
+  thing it belongs to.
 - **`process.env` anywhere under `src/`.** It is undefined in the browser and
   throws. One debug line inside a Rapier contact callback silently killed every
   impact in the game while the headless tests stayed green.
@@ -423,7 +430,29 @@ scannable as it grows; it is append-only.
 - **Effects written only inside the frame loop.** `shoot` and the `?stage=&t=`
   harness step the world directly and never call `frame()`, so anything that
   only lives there produces nothing in any screenshot and looks broken when it
-  is merely unreachable. Put per-frame effects in a function both call.
+  is merely unreachable. Put per-frame effects in a function both call. The
+  whole reaction to an impact — shake, thud, sparks, dust, debris — is
+  `reactToImpact` for exactly this reason, and
+  `shoot --cells=crash1.4:quarry-run@26` is the frame that shows it. The
+  cinematic is deliberately *not* in there: it pauses the world, which a harness
+  seek must never do.
+- **A crash that only subtracts.** Damage took the car apart and the picture
+  stayed exactly as it was, so slowing the clock down made the moment longer
+  rather than bigger. What reads as an impact is what it *adds*: sparks along
+  the contact normal, one dust puff in the surface's own colour from the ground
+  under the contact, and debris that carries the car's velocity, lands and stays
+  — plus the colour draining out of the frame for as long as the world is slow
+  (`crashGrade`, riding `drama.duck` so one number switches all of it off). All
+  of it needs a *point*, which is why `SimWorld.lastImpactAt` exists: every path
+  that reports an impact already had it for the damage model and threw it away.
+- **Damage arriving between two frames.** `applyImpact` is a step, so the wing
+  was bent on the next frame drawn — correct, and it reads as the car cutting to
+  a damaged version of itself. `render/foldEase.ts` is a `DamageLike` that lags
+  the real one by about an eighth of a second so the metal is *seen* to bend;
+  the panel, the bill and the simulation all keep reading the live model. Two
+  rules keep it honest: metal folds but does not unfold (a repair is instant),
+  and the first frame after `attach` adopts whatever it is given, or a career
+  car with a folded corner folds itself in as the lights go out.
 - **A replay that reads anything live is a recreation, not a replay.** The crash
   cinematic played a ghost — where the car *was* — and posed damage and wildlife
   from the present, so the car was already wrecked on the way in and the deer it
@@ -433,6 +462,23 @@ scannable as it grows; it is append-only.
   part states, dents and animal positions, copied rather than referenced,
   because the live dent list is mutated in place and a reference gives every
   recorded frame the *final* folds.
+- **A replay is drawn against the *present* world unless every part of that
+  world is recorded too.** The car was in the reel and nothing around it was, so
+  the cinematic played the run-up to a crash over the skid marks that crash laid,
+  past the boards and poles it had already flattened, and among the panels it had
+  already shed. Each is a different fix and none of them is the car: a monotonic
+  stamp per skid quad with a `uCutoff` that discards the later ones, a recorded
+  `fallen` per sign and pole (`knockedToward` is written once and never changes,
+  so the live value is the recorded one), and the loose-debris group simply
+  hidden, because where a shed part flew is not recorded and is not worth
+  recording. The rule generalises: if it is on screen during the replay and not
+  in `ReelFrame`, it is showing the aftermath.
+- **A replay whose last frame is the impact shows everything except the crash.**
+  The strip was taken on the frame `drama.hit` fired, so it ended with the car
+  straight and intact a moment before anything happened. It is armed now and
+  taken half a second of *wall* time later — wall, because the world is in slow
+  motion for the whole of that wait and the sim clock would make it three times
+  as long.
 - **Anything with a lifetime has to be advanced on *every* draw path**, and
   there are three: the live loop, `drawReplay`, and the harness seek. The camera
   shake decayed inside `camera.follow`, and the crash replay draws with

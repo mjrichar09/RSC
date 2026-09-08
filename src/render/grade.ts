@@ -118,6 +118,41 @@ export function gradeFor(conditions: Conditions): Grade {
   };
 }
 
+/**
+ * The grade during a big impact, on top of whatever the weather was doing.
+ *
+ * A crash changed the clock and the mix and not one pixel of colour, so the
+ * moment read as the game running slowly rather than as the game reacting. This
+ * is the cheapest fix there is: it rides the dilation envelope that already
+ * exists, so it arrives and releases exactly with the slow motion and needs no
+ * state of its own.
+ *
+ * Colour drains and the corners close in. Both are what shock looks like in
+ * every medium that has ever tried to draw it, and both are *reductions* —
+ * nothing is added to the frame, so it cannot fight the sparks and dust that
+ * are being added to it at the same moment. Contrast goes the other way and
+ * only slightly: a desaturated frame with no contrast lift reads as fog.
+ *
+ * Pure, so `tests/crashLook.test.ts` can hold the ends of it: 0 is exactly the
+ * grade that came in, and nothing it produces is off the end of a scale.
+ */
+export function crashGrade(base: Grade, strength: number): Grade {
+  const k = Math.min(Math.max(strength, 0), 1);
+  if (k === 0) return base;
+  return {
+    gain: base.gain,
+    lift: base.lift,
+    // Never all the way to monochrome. A rally car is red, and the one frame
+    // where you most want to see which way up it is is not the frame to take
+    // its colour away entirely.
+    saturation: base.saturation * (1 - k * 0.55),
+    contrast: base.contrast * (1 + k * 0.18),
+    // Capped, because time of day already spends up to 0.3 of this and dusk
+    // plus a crash would otherwise close the frame to a keyhole.
+    vignette: Math.min(base.vignette + k * 0.3, 0.55),
+  };
+}
+
 /** How far this grade is from doing nothing, so a neutral one can be skipped. */
 export function gradeStrength(grade: Grade): number {
   return (

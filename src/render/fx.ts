@@ -67,6 +67,18 @@ export class ParticleField {
   private readonly velocities = new Float32Array(MAX_PARTICLES * 3);
   private readonly life = new Float32Array(MAX_PARTICLES);
   private readonly maxLife = new Float32Array(MAX_PARTICLES);
+  /**
+   * A height each particle will not fall through, or `-Infinity` for none.
+   *
+   * Spray and steam want no floor — they die in the air long before they reach
+   * one. Crash debris does: a shard that carries on through the tarmac and
+   * disappears is a spark, and the whole point of debris is that it *lands* and
+   * is still lying there when the car has gone. One number per particle rather
+   * than a terrain query, because a burst all leaves from one point and the
+   * ground under that point is flat enough for the second the shards are in
+   * the air.
+   */
+  private readonly floor = new Float32Array(MAX_PARTICLES);
   private next = 0;
 
   private readonly geometry = new THREE.BufferGeometry();
@@ -101,7 +113,15 @@ export class ParticleField {
   density = 1;
   private thin = 0;
 
-  emit(at: Vec3, velocity: Vec3, color: THREE.Color, size: number, life: number): void {
+  emit(
+    at: Vec3,
+    velocity: Vec3,
+    color: THREE.Color,
+    size: number,
+    life: number,
+    /** A height to come to rest on, for anything that should land. */
+    floor = -Infinity,
+  ): void {
     if (this.density < 1) {
       // Deterministic thinning: an accumulator rather than a random draw, so a
       // headless run is still reproducible and a steady jet does not flicker.
@@ -124,6 +144,7 @@ export class ParticleField {
     this.sizes[i] = size;
     this.life[i] = life;
     this.maxLife[i] = life;
+    this.floor[i] = floor;
     this.alphas[i] = 1;
   }
 
@@ -147,6 +168,19 @@ export class ParticleField {
       this.positions[i * 3 + 1]! += this.velocities[i * 3 + 1]! * dt;
       this.positions[i * 3 + 2]! += this.velocities[i * 3 + 2]! * dt;
 
+      // Land, and then stay landed. The vertical velocity is killed rather
+      // than bounced: a point sprite has no shape to bounce with, and a shard
+      // that skids to a stop and lies there reads as wreckage where one that
+      // hops reads as a bug.
+      const floor = this.floor[i]!;
+      if (this.positions[i * 3 + 1]! < floor) {
+        this.positions[i * 3 + 1] = floor;
+        this.velocities[i * 3 + 1] = 0;
+        const friction = 1 - Math.min(dt * 6, 0.95);
+        this.velocities[i * 3]! *= friction;
+        this.velocities[i * 3 + 2]! *= friction;
+      }
+
       const t = this.life[i]! / this.maxLife[i]!;
       this.alphas[i] = t * t;
     }
@@ -167,6 +201,7 @@ export class ParticleField {
   clear(): void {
     this.life.fill(0);
     this.alphas.fill(0);
+    this.floor.fill(-Infinity);
     this.geometry.getAttribute('alpha').needsUpdate = true;
   }
 }
@@ -186,7 +221,16 @@ export class SkidMarks {
   /** Per-vertex tint, so a rut in gravel and a skid on tarmac share one mesh. */
   private readonly colors = new Float32Array(MAX_SKID_QUADS * 6 * 3);
   private readonly geometry = new THREE.BufferGeometry();
+  /**
+   * Which quad each vertex belongs to, counted from the first mark of the run
+   * and never wrapped — the buffer's own index does wrap, and a wrapped index
+   * cannot answer "was this mark here yet".
+   */
+  private readonly serials = new Float32Array(MAX_SKID_QUADS * 6);
   private next = 0;
+  /** Marks laid since the last `clear`. The serial the next quad will carry. */
+  private serial = 0;
+  private readonly cutoff = { value: Number.MAX_SAFE_INTEGER };
   /**
    * Last contact point per emitter, so a mark can be stretched between frames.
    *
@@ -200,22 +244,36 @@ export class SkidMarks {
     this.geometry.setAttribute('position', new THREE.BufferAttribute(this.positions, 3));
     this.geometry.setAttribute('aOpacity', new THREE.BufferAttribute(this.opacities, 1));
     this.geometry.setAttribute('aColor', new THREE.BufferAttribute(this.colors, 3));
+    this.geometry.setAttribute('aSerial', new THREE.BufferAttribute(this.serials, 1));
 
     const material = new THREE.ShaderMaterial({
+      uniforms: { uCutoff: this.cutoff },
       vertexShader: `
         attribute float aOpacity;
         attribute vec3 aColor;
+        attribute float aSerial;
         varying float vOpacity;
         varying vec3 vColor;
+        varying float vSerial;
         void main() {
           vOpacity = aOpacity;
           vColor = aColor;
+          vSerial = aSerial;
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }`,
+      // `uCutoff` hides marks laid after a moment being replayed. Nothing is
+      // erased to do it: the crash cinematic is a window into the past that the
+      // present is still writing behind, and a mark deleted for the replay
+      // would be missing from the road when it ends.
       fragmentShader: `
+        uniform float uCutoff;
         varying float vOpacity;
         varying vec3 vColor;
-        void main() { gl_FragColor = vec4(vColor, vOpacity); }`,
+        varying float vSerial;
+        void main() {
+          if (vSerial > uCutoff) discard;
+          gl_FragColor = vec4(vColor, vOpacity);
+        }`,
       transparent: true,
       depthWrite: false,
       // Double-sided, and this is not a detail: the quads are wound so their
@@ -280,7 +338,9 @@ export class SkidMarks {
 
     const base = this.next * 6;
     this.next = (this.next + 1) % MAX_SKID_QUADS;
+    const serial = this.serial++;
     for (let i = 0; i < 6; i++) {
+      this.serials[base + i] = serial;
       const v = quad[order[i]!]!;
       this.positions[(base + i) * 3] = v.x;
       this.positions[(base + i) * 3 + 1] = v.y + 0.015;
@@ -294,11 +354,28 @@ export class SkidMarks {
     this.geometry.getAttribute('position').needsUpdate = true;
     this.geometry.getAttribute('aOpacity').needsUpdate = true;
     this.geometry.getAttribute('aColor').needsUpdate = true;
+    this.geometry.getAttribute('aSerial').needsUpdate = true;
   }
 
   /** Segments laid so far. The harness checks that tracks are being made. */
   get laid(): number {
     return this.next;
+  }
+
+  /**
+   * The serial the next mark will carry — a stamp for "the road as it is now".
+   *
+   * Recorded per frame by the crash reel and handed back to `showUpTo` while
+   * the cinematic plays, so a replay of the seconds before a crash does not
+   * show the tracks the car laid *during* it.
+   */
+  get stamp(): number {
+    return this.serial;
+  }
+
+  /** Draw only marks laid before `stamp`. Null for all of them. */
+  showUpTo(stamp: number | null): void {
+    this.cutoff.value = stamp === null ? Number.MAX_SAFE_INTEGER : stamp - 1;
   }
 
   /** Called when a wheel stops marking, so the next mark does not bridge a gap. */
@@ -310,10 +387,15 @@ export class SkidMarks {
     this.opacities.fill(0);
     this.positions.fill(0);
     this.colors.fill(0);
+    this.serials.fill(0);
     this.previous.fill(null);
+    this.serial = 0;
+    this.next = 0;
+    this.showUpTo(null);
     this.geometry.getAttribute('position').needsUpdate = true;
     this.geometry.getAttribute('aOpacity').needsUpdate = true;
     this.geometry.getAttribute('aColor').needsUpdate = true;
+    this.geometry.getAttribute('aSerial').needsUpdate = true;
   }
 }
 
@@ -463,6 +545,139 @@ export function emitDragSparks(
 }
 
 const STEAM_COLOR = new THREE.Color(0xd7e2e8);
+
+/**
+ * What a crash throws off, in three parts, all anchored to the same point.
+ *
+ * A crash used to *subtract*: the picture stayed exactly as it was and there
+ * was simply less car in it. Slowing the clock down made that longer, not
+ * bigger. What reads as an impact is what an impact *adds* to the frame, and it
+ * arrives in three layers that do different jobs and are worth keeping separate:
+ *
+ * - **Sparks** say metal, and at dusk they are the brightest thing on screen.
+ *   They come off along the contact normal, because a spark that sprays into
+ *   the thing that caused it reads as coming from nowhere.
+ * - **Dust** says *ground*, and it is the layer that gives the hit a size: one
+ *   radial puff in the surface's own colour, wide and gone in half a second.
+ * - **Debris** is the only one that lasts. It carries the car's own velocity,
+ *   lands, skids and stays put — evidence on the road after the car has gone,
+ *   which is what makes the crash something that happened rather than something
+ *   that was displayed.
+ *
+ * All three take a `severity` of 0..1 rather than an impulse: newton-seconds
+ * are the damage model's unit and nothing here should have an opinion about
+ * where its thresholds are.
+ */
+const DEBRIS_COLORS = [
+  new THREE.Color(0x2b2f36),
+  new THREE.Color(0x8d9199),
+  new THREE.Color(0xb9c6cf),
+];
+
+/**
+ * Sparks off the contact, in a cone along the normal.
+ *
+ * Distinct from `emitDragSparks`, which is a steady trickle from something
+ * grinding along the road for as long as it is grinding. This is a one-shot
+ * burst, so it is scaled by how hard the hit was rather than by how long it
+ * lasted.
+ */
+export function emitImpactSparks(
+  particles: ParticleField,
+  at: Vec3,
+  normal: Vec3,
+  severity: number,
+): void {
+  if (severity <= 0) return;
+  const count = Math.round(6 + severity * 34);
+  const speed = 5 + severity * 12;
+  for (let n = 0; n < count; n++) {
+    // Along the normal with a wide scatter: a tight jet reads as a welder, and
+    // a hit at an isometric camera angle has to throw some of it sideways to
+    // be seen at all.
+    scratch.x = normal.x * speed + (Math.random() - 0.5) * speed * 1.2;
+    scratch.y = normal.y * speed * 0.5 + 1.5 + Math.random() * speed * 0.5;
+    scratch.z = normal.z * speed + (Math.random() - 0.5) * speed * 1.2;
+    particles.emit(
+      at,
+      scratch,
+      SPARK_COLOR,
+      0.1 + Math.random() * 0.14,
+      0.2 + Math.random() * 0.35,
+    );
+  }
+}
+
+/**
+ * The ground going up: one radial puff at the contact, in the surface's colour.
+ *
+ * Mostly horizontal and deliberately large. This is the layer that says how big
+ * the hit was — the eye reads the width of the cloud long before it reads
+ * anything about the car — so its size scales with severity where the sparks'
+ * only scales in number.
+ */
+export function emitImpactBurst(
+  particles: ParticleField,
+  at: Vec3,
+  color: THREE.Color,
+  severity: number,
+): void {
+  if (severity <= 0) return;
+  const count = Math.round(8 + severity * 26);
+  const speed = 3 + severity * 9;
+  for (let n = 0; n < count; n++) {
+    // Spread around the ring rather than randomly: a random draw at this count
+    // leaves visible gaps, and a puff with a hole in it reads as a mistake.
+    const angle = (n / count) * Math.PI * 2 + Math.random() * 0.4;
+    const out = speed * (0.5 + Math.random() * 0.7);
+    scratch.x = Math.cos(angle) * out;
+    scratch.y = 1.2 + Math.random() * 3.2;
+    scratch.z = Math.sin(angle) * out;
+    particles.emit(
+      at,
+      scratch,
+      color,
+      0.5 + severity * 0.9 + Math.random() * 0.5,
+      0.35 + Math.random() * 0.4,
+    );
+  }
+}
+
+/**
+ * Shards that leave, land, and stay.
+ *
+ * Given the car's own velocity so they carry down the road with it rather than
+ * dropping where the hit happened — that is the difference between debris and
+ * confetti — and given a floor so they come to rest on it. Three greys: dark
+ * trim, bright metal, and glass.
+ */
+export function emitCrashDebris(
+  particles: ParticleField,
+  at: Vec3,
+  carVelocity: Vec3,
+  ground: number,
+  severity: number,
+): void {
+  if (severity <= 0) return;
+  const count = Math.round(4 + severity * 22);
+  for (let n = 0; n < count; n++) {
+    // A third of the car's momentum, which is enough to travel with it without
+    // keeping pace: debris that stays level with the car looks bolted to it.
+    scratch.x = carVelocity.x * 0.33 + (Math.random() - 0.5) * (4 + severity * 10);
+    scratch.y = 2 + Math.random() * (3 + severity * 5);
+    scratch.z = carVelocity.z * 0.33 + (Math.random() - 0.5) * (4 + severity * 10);
+    particles.emit(
+      at,
+      scratch,
+      DEBRIS_COLORS[n % DEBRIS_COLORS.length]!,
+      0.12 + Math.random() * 0.2,
+      // Long enough to still be on the road as the car leaves, short enough
+      // that a stage does not slowly fill with litter.
+      2.2 + Math.random() * 1.4,
+      ground,
+    );
+  }
+}
 
 /**
  * Steam from a boiling cooling system.

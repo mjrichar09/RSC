@@ -42,6 +42,9 @@ interface Stick {
   originX: number;
 }
 
+/** Remembers that the home-screen advice has been read, so it is said once. */
+const IOS_HINT_KEY = 'rsc.iosFullscreenHint';
+
 export class TouchControls {
   readonly root: HTMLElement;
   /** Raised by the on-screen menu button. */
@@ -57,8 +60,18 @@ export class TouchControls {
   private readonly pedals = new Map<number, 'throttle' | 'brake' | 'handbrake'>();
   private wanted = { throttle: 0, brake: 0 };
   private visible = false;
+  /** Whether the home-screen note has been read, this session or an earlier one. */
+  private dismissed = (() => {
+    try {
+      return localStorage.getItem(IOS_HINT_KEY) === '1';
+    } catch {
+      return false;
+    }
+  })();
   private readonly wheel: HTMLElement;
   private readonly rotate: HTMLElement;
+  /** The "add it to your home screen" note, on the one platform that needs it. */
+  private readonly ios: HTMLElement;
 
   constructor(parent: HTMLElement) {
     this.root = document.createElement('div');
@@ -91,7 +104,42 @@ export class TouchControls {
     this.rotate.innerHTML = '<div><b>↻</b><span>Turn your phone sideways</span></div>';
     parent.appendChild(this.rotate);
 
+    /*
+     * The one thing an iPhone will not do.
+     *
+     * Safari on iOS has no Fullscreen API on a phone — not a refused promise,
+     * no method at all — so there is nothing to call and nothing to retry, and
+     * an address bar and a home indicator eat about a fifth of a landscape
+     * screen. The only route to a real fullscreen game there is the home
+     * screen: launched from an icon the page runs standalone, which the
+     * manifest and the `apple-mobile-web-app-capable` meta already ask for.
+     *
+     * So this says so, once, and then never again. It is advice, not a modal:
+     * it sits along the top edge, takes no pointer events away from anything
+     * and dismisses itself on a tap.
+     */
+    this.ios = document.createElement('div');
+    this.ios.className = 'ios-fs';
+    this.ios.innerHTML =
+      '<span>For fullscreen on iPhone: <b>Share</b> → <b>Add to Home Screen</b>, then play from the icon.</span><button type="button">Got it</button>';
+    this.ios.querySelector('button')!.addEventListener('click', () => this.dismissIosHint());
+    parent.appendChild(this.ios);
+
     this.root.addEventListener('pointerdown', (event) => this.down(event));
+    /*
+     * And on the turn into landscape, which is when a player expects it.
+     *
+     * `orientationchange` is not a user gesture, so this is granted only where
+     * the browser still counts the touch that caused the rotation as recent —
+     * some do, some do not. Where it does not, the next tap gets it: `main.ts`
+     * asks on every touch anywhere, which is a menu tap long before the race.
+     */
+    window.addEventListener('orientationchange', () => this.onLandscape());
+    window
+      .matchMedia('(orientation: landscape)')
+      .addEventListener('change', (event) => {
+        if (event.matches) this.onLandscape();
+      });
     // Listened for on the window, not on the button: a thumb that slides off
     // the throttle mid-corner must still release it, and a pointer that leaves
     // the element it started on never fires `pointerup` there.
@@ -108,22 +156,77 @@ export class TouchControls {
     this.visible = on;
     this.root.classList.toggle('is-on', on);
     this.rotate.classList.toggle('is-on', on);
-    if (!on) this.release();
+    if (on) this.showIosHint();
+    else {
+      this.ios.classList.remove('is-on');
+      this.release();
+    }
   }
 
   /**
-   * Go fullscreen, on the gesture that asked for it.
+   * Go fullscreen, on the earliest gesture that can carry it.
    *
    * Browsers only grant this from inside a user gesture, and on Android the
    * address bar is a fifth of a landscape phone's height — so this is worth
-   * more here than anywhere else. iOS Safari refuses it outright and that is
-   * fine: the request is best-effort and nothing depends on it.
+   * more here than anywhere else.
+   *
+   * It used to be asked for on the first thumb on the *steering pad*, which is
+   * the first gesture of the race — so Android's "RSC is now full screen"
+   * toast landed across the middle of the start countdown, every time. The
+   * gesture that can carry it is the first touch anywhere: tapping a menu, a
+   * stage, a Go button. By the time the lights run, the toast has been and
+   * gone. Best-effort throughout — a refusal changes nothing about the game.
+   *
+   * iOS Safari on a phone has no Fullscreen API at all, so nothing here can
+   * work there; `showIosHint` is what that platform gets instead.
    */
   requestFullscreen(): void {
     if (!this.visible || document.fullscreenElement) return;
     void document.documentElement.requestFullscreen?.().catch(() => {
       // Refused, which several browsers do. The game plays either way.
     });
+  }
+
+  /** Landscape: ask for fullscreen, and offer the iOS advice if that is all there is. */
+  private onLandscape(): void {
+    this.requestFullscreen();
+    this.showIosHint();
+  }
+
+  /**
+   * Show the home-screen note, if this is the platform with no other answer.
+   *
+   * Feature-detected rather than sniffed for the part that matters — no
+   * `requestFullscreen` on the document element is the actual condition, and
+   * it is true of exactly the browsers this advice is for. The iOS test on top
+   * of it keeps the note off a desktop browser with the API disabled, where
+   * "add it to your home screen" would be nonsense.
+   */
+  private showIosHint(): void {
+    if (!this.visible || this.dismissed) return;
+    // Typed as always present, and on an iPhone it is simply absent — which is
+    // the whole condition this is testing, so the cast is the honest one.
+    const api = document.documentElement as { requestFullscreen?: unknown };
+    if (api.requestFullscreen) return;
+    const standalone =
+      window.matchMedia('(display-mode: standalone)').matches ||
+      (navigator as { standalone?: boolean }).standalone === true;
+    if (standalone) return;
+    const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    if (!ios) return;
+    this.ios.classList.add('is-on');
+  }
+
+  private dismissIosHint(): void {
+    this.dismissed = true;
+    this.ios.classList.remove('is-on');
+    try {
+      localStorage.setItem(IOS_HINT_KEY, '1');
+    } catch {
+      // Private browsing refuses this. Then it is shown again next time, which
+      // is a small annoyance and not worth a second storage path.
+    }
   }
 
   get shown(): boolean {
@@ -180,8 +283,10 @@ export class TouchControls {
     }
     if (what === 'steer') {
       this.stick = { pointer: event.pointerId, originX: event.clientX };
-      // The first thumb on the wheel is a gesture, and a gesture is the only
-      // thing a browser will accept a fullscreen request from.
+      // A backstop, not the main path: `main.ts` asks on the first touch
+      // anywhere, which is normally a menu tap long before this. Kept because
+      // it costs nothing — the request returns immediately once it is granted
+      // — and it covers a session that reached the road without one.
       this.requestFullscreen();
       return;
     }

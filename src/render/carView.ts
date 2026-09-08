@@ -10,7 +10,7 @@
 import * as THREE from 'three';
 import { CAR } from '../data/tuning.js';
 import type { Quat, Vec3 } from '../sim/math.js';
-import type { ComponentId, DamageModel, Dent } from '../sim/damage.js';
+import type { ComponentId, Dent } from '../sim/damage.js';
 import type { DebrisModel, PartId, PartState } from '../sim/debris.js';
 
 /**
@@ -1019,7 +1019,10 @@ export class CarView {
   update(
     transform: { position: Vec3; rotation: Quat },
     state: VehicleState,
-    damage: DamageModel | null = null,
+    // `DamageLike`, not `DamageModel`: the local car is posed from the eased
+    // view in `foldEase.ts` so the metal is seen to bend, and a rival's live
+    // model satisfies the same interface.
+    damage: DamageLike | null = null,
     debris: DebrisModel | null = null,
   ): void {
     if (this.ghost) return;

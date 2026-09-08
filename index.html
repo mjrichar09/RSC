@@ -16,6 +16,14 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <!--
+      Relative, not rooted: GitHub Pages serves this from `/RSC/`, and an
+      absolute `/manifest.webmanifest` is a 404 there. The manifest asks for
+      `display: fullscreen` in landscape, which is the only route to a real
+      fullscreen game on an iPhone — Safari has no Fullscreen API on a phone,
+      so "Add to Home Screen" and launch from the icon is the whole answer.
+    -->
+    <link rel="manifest" href="manifest.webmanifest" />
     <title>RSC — Rally Stage Challenge</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230c0f14'/%3E%3Crect x='9' y='6' width='14' height='20' rx='3' fill='%23c8442e'/%3E%3Crect x='11' y='4' width='10' height='5' rx='2' fill='%23f2c14e'/%3E%3Crect x='11' y='13' width='10' height='7' rx='1.5' fill='%231b2129'/%3E%3C/svg%3E" />
     <link rel="stylesheet" href="/src/ui/style.css" />

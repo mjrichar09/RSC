@@ -14,7 +14,7 @@ import * as THREE from 'three';
 import { type PropKind, type Stage } from '../sim/stage.js';
 import { CORRIDOR } from '../sim/corridor.js';
 import { DRESSING, type SceneryItem, type SceneryKind } from '../sim/scenery.js';
-import type { Markers, Signs } from '../sim/markers.js';
+import type { Markers } from '../sim/markers.js';
 import type { Vec3 } from '../sim/math.js';
 import { SURFACES } from '../sim/surfaces.js';
 import { groundHeight } from '../sim/terrain.js';
@@ -1393,6 +1393,20 @@ function signTexture(direction: 'left' | 'right', severity: number): THREE.Canva
 }
 
 /**
+ * What these two views actually need, which is less than the simulation's own
+ * objects — and that is the point: the crash cinematic hands them a *recorded*
+ * roadside, so neither may insist on the live `Signs` and `Markers`.
+ */
+export interface SignsLike {
+  version: number;
+  all: readonly { fallen: number; knockedToward: number }[];
+}
+export interface MarkersLike {
+  version: number;
+  all: readonly { position: Vec3; fallen: number; knockedToward: number }[];
+}
+
+/**
  * A corner board and the post under it, as one thing that falls over.
  *
  * Not instanced, because every board carries its own texture — direction and
@@ -1408,6 +1422,15 @@ export class SignsView {
 
   /** Where each post meets the ground, which is what it pivots about. */
   private readonly feet: THREE.Vector3[] = [];
+  /**
+   * The standing pose, kept so a board can be stood back up.
+   *
+   * Falling used to be one-way — the only thing that ever un-fell a board was
+   * building the stage again — and that was fine until the crash cinematic
+   * started posing the roadside from a recording, where a board that goes over
+   * during the crash has to be upright for the run-up to it.
+   */
+  private readonly standing: { position: THREE.Vector3; quaternion: THREE.Quaternion }[] = [];
   /** The `Signs.version` the meshes were last posed for. */
   private posedAt = -1;
 
@@ -1423,6 +1446,9 @@ export class SignsView {
     this.boards.push(board);
     this.feet.push(foot);
     this.down.push(false);
+    for (const mesh of [post, board]) {
+      this.standing.push({ position: mesh.position.clone(), quaternion: mesh.quaternion.clone() });
+    }
   }
 
   /**
@@ -1437,7 +1463,7 @@ export class SignsView {
    * for an event that happens once or twice a lap is work for nothing, and
    * `version` is what the simulation bumps when one goes over.
    */
-  sync(signs: Signs): void {
+  sync(signs: SignsLike): void {
     if (signs.version === this.posedAt) return;
     this.posedAt = signs.version;
     for (let i = 0; i < this.posts.length; i++) {
@@ -1445,7 +1471,19 @@ export class SignsView {
       const post = this.posts[i]!;
       const board = this.boards[i]!;
       if (!state) break;
-      if (state.fallen <= 0) continue;
+      if (state.fallen <= 0) {
+        // Standing, and possibly standing *again*: the cinematic replays a
+        // recording in which the board it is about to flatten is still up.
+        if (this.down[i]) {
+          this.down[i] = false;
+          for (const [n, mesh] of [post, board].entries()) {
+            const pose = this.standing[i * 2 + n]!;
+            mesh.position.copy(pose.position);
+            mesh.quaternion.copy(pose.quaternion);
+          }
+        }
+        continue;
+      }
       this.down[i] = true;
 
       // About the foot, in the direction the car was going.
@@ -1698,7 +1736,7 @@ export class MarkerView {
   }
 
   /** Redraw if the poles have changed since last time. */
-  sync(markers: Markers): void {
+  sync(markers: MarkersLike): void {
     if (markers.version === this.version) return;
     this.version = markers.version;
 

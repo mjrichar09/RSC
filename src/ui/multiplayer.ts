@@ -60,6 +60,15 @@ export class MultiplayerPanel {
    * host or a guest who wanted to stop had to reload the page.
    */
   onLeave: (() => void) | null = null;
+  /**
+   * Raised whenever a connection is dropped, whether or not the panel closes.
+   *
+   * `onLeave` used to carry both meanings — hang up, *and* go back to the front
+   * door — which is why there was no way to hang up and stay. Splitting them is
+   * what lets **Back** exist: it drops the session and returns to the choice,
+   * where `leave` drops it and shows the menu.
+   */
+  onDisconnect: (() => void) | null = null;
 
   private readonly root: HTMLElement;
   private screen: Screen = 'choose';
@@ -638,12 +647,45 @@ export class MultiplayerPanel {
     const wasIn = this.inLobby;
     this.reset();
     this.setOpen(false);
-    if (wasIn) this.onLeave?.();
+    if (wasIn) {
+      this.onDisconnect?.();
+      this.onLeave?.();
+    }
+  }
+
+  /**
+   * Back to the choice of hosting or joining.
+   *
+   * Picking one used to be final. Hosting opens a room the moment the button is
+   * pressed, joining puts you on a screen with a code box and nothing else, and
+   * neither screen had a way back to the other — a player who meant to join and
+   * tapped Host had to close the panel, which leaves the room open behind them,
+   * or reload the page. **Close** was never the answer either: closing the panel
+   * deliberately leaves the lobby up behind it.
+   *
+   * `reset` already knows how to take the whole thing down, including closing
+   * the room so a code that was read out stops working, and it lands on the
+   * choose screen — so this is that, plus telling the game a session went away.
+   */
+  private back(): void {
+    const wasIn = this.inLobby;
+    this.reset();
+    if (wasIn) this.onDisconnect?.();
   }
 
   /** Whether there is a lobby to go back to at all. */
   get inLobby(): boolean {
     return this.host !== null || this.guest !== null;
+  }
+
+  /**
+   * Whether there is a choice to go back to.
+   *
+   * Not on the classification: a race has just ended, the one thing anybody
+   * wants is who won, and its own button already says where it goes next.
+   */
+  private get canGoBack(): boolean {
+    return !this.showingResults && this.screen !== 'choose';
   }
 
   // ---- Joining ------------------------------------------------------------
@@ -788,6 +830,7 @@ export class MultiplayerPanel {
             <div class="lobby-title">MULTIPLAYER</div>
             <div class="lobby-sub">Up to ${MAX_PLAYERS} cars, contact and all</div>
           </div>
+          ${this.canGoBack ? '<button data-act="back">Back</button>' : ''}
           ${this.inLobby ? '<button data-act="leave">Leave</button>' : ''}
           <button data-act="close">Close</button>
         </div>
@@ -1055,6 +1098,7 @@ export class MultiplayerPanel {
 
     on('close', () => this.setOpen(false));
     on('leave', () => this.leave());
+    on('back', () => this.back());
     on('to-lobby', () => this.returnToLobby());
     on('host', () => this.startHosting());
     on('join', () => {

@@ -20,12 +20,12 @@
  * afford to record whatever the picture needs.
  *
  * It holds only what the renderer actually reads: component health, part
- * attachment, brake heat and where the animals were. Not the whole simulation —
- * a replay does not need to be re-simulatable, it needs to look like what
- * happened.
+ * attachment, brake heat, where the animals were, and how much of the roadside
+ * was still standing. Not the whole simulation — a replay does not need to be
+ * re-simulatable, it needs to look like what happened.
  */
 
-import { COMPONENTS, type ComponentId, type DamageModel, type Dent } from '../sim/damage.js';
+import { COMPONENTS, type ComponentId, type Dent } from '../sim/damage.js';
 import { PARTS, type DebrisModel, type PartId, type PartState } from '../sim/debris.js';
 import type { Quat, Vec3 } from '../sim/math.js';
 import type { Animal } from '../sim/wildlife.js';
@@ -81,6 +81,46 @@ export interface ReelFrame {
    */
   dents: Dent[];
   animals: ReelAnimal[];
+  /**
+   * The world the car was driving through, as far as the picture is concerned.
+   *
+   * The car was recorded and everything around it was not, so a replay of the
+   * seconds before a crash was drawn against the road *after* it: the skid
+   * marks the car was still in the middle of laying were already on the tarmac,
+   * and the boards and poles it was about to flatten were already flat. Both
+   * are cheap to record — a stamp and two 0..1 arrays — and both are the
+   * difference between watching a crash and watching its aftermath.
+   */
+  skidStamp: number;
+  signsFallen: Float32Array;
+  markersFallen: Float32Array;
+}
+
+/**
+ * What the reel reads off a damage model.
+ *
+ * Structural rather than the class, because what it is handed is the
+ * *renderer's* eased view — the reel records what a person saw, and on screen a
+ * fold takes a tenth of a second to arrive. A `DamageModel` satisfies this too.
+ */
+export interface ReelDamage {
+  get(id: ComponentId): number;
+  brakeGlow(index: number): number;
+  brakeTint(index: number): number;
+  readonly dents: readonly Dent[];
+}
+
+/** What the reel needs from the world besides the car. */
+export interface ReelProps {
+  /** `SkidMarks.stamp`: the road as it was at this instant. */
+  skidStamp: number;
+  /**
+   * Only `fallen` is recorded. `knockedToward` is set once, when a thing goes
+   * over, and never changes — so the live value is the recorded one, and a
+   * board that has not fallen yet has `fallen` 0 and does not use it.
+   */
+  signs: readonly { fallen: number }[];
+  markers: readonly { fallen: number }[];
 }
 
 /**
@@ -176,6 +216,9 @@ export const EMPTY_REEL_FRAME: ReelFrame = {
   brakeTint: [0, 0, 0, 0],
   dents: [],
   animals: [],
+  skidStamp: 0,
+  signsFallen: new Float32Array(0),
+  markersFallen: new Float32Array(0),
 };
 
 export class CrashReel {
@@ -196,9 +239,10 @@ export class CrashReel {
     wallDt: number,
     transform: { position: Vec3; rotation: Quat },
     state: VehicleState,
-    damage: DamageModel | null,
+    damage: ReelDamage | null,
     debris: DebrisModel | null,
     animals: readonly Animal[],
+    props: ReelProps,
   ): void {
     this.clock += wallDt;
     this.since += wallDt;
@@ -235,6 +279,9 @@ export class CrashReel {
         roll: a.roll,
         gone: a.state === 'gone',
       })),
+      skidStamp: props.skidStamp,
+      signsFallen: Float32Array.from(props.signs, (sign) => sign.fallen),
+      markersFallen: Float32Array.from(props.markers, (marker) => marker.fallen),
     };
 
     if (this.frames.length < CAPACITY) this.frames.push(frame);

@@ -201,6 +201,32 @@ if (!/room/i.test(routed)) {
 }
 console.log(`room code in the invite box: ${routed}`);
 
+// Picking host or join is not final.
+//
+// It used to be: hosting opens a room the moment the button is pressed and
+// joining lands on a screen with a code box and nothing else, and neither had a
+// way back to the other. Close is not that way — closing the panel deliberately
+// leaves the lobby up behind it — so the only exit from a wrong tap was a
+// reload. Checked from both screens, because they are two different teardowns:
+// a guest with nothing connected, and a host with a room open.
+await page.goto('http://localhost:5181/?vision=0&drama=0&rooms=http://127.0.0.1:9/none');
+await page.waitForSelector('[data-action="multiplayer"]', { timeout: 20_000 });
+await page.click('[data-action="multiplayer"]');
+for (const screen of ['join', 'host'] as const) {
+  await page.waitForSelector(`.lobby.is-open [data-act="${screen}"]`, { timeout: 10_000 });
+  await page.click(`[data-act="${screen}"]`);
+  await page.waitForSelector('.lobby.is-open [data-act="back"]', { timeout: 10_000 });
+  await page.click('[data-act="back"]');
+  await page.waitForSelector('.lobby.is-open [data-act="host"]', { timeout: 10_000 });
+  if (!(await page.$('[data-act="join"]'))) {
+    throw new Error(`Back from ${screen} did not reach the choice of host or join`);
+  }
+  if (await page.$('[data-act="back"]')) {
+    throw new Error('the choice screen has a Back button, which goes nowhere');
+  }
+}
+console.log('the lobby can go back and pick again, from either screen');
+
 // And with no broker the lobby is exactly what it always was.
 //
 // An empty `?rooms=` is how that is reached now that one is configured by

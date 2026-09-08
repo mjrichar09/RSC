@@ -14,7 +14,12 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { CrashReel, RecordedDamage, RecordedDebris } from '../src/game/crashReel.js';
+import {
+  CrashReel,
+  RecordedDamage,
+  RecordedDebris,
+  type ReelProps,
+} from '../src/game/crashReel.js';
 import { DamageModel } from '../src/sim/damage.js';
 import { DebrisModel, PART_BY_ID } from '../src/sim/debris.js';
 import type { VehicleState } from '../src/sim/vehicle.js';
@@ -31,6 +36,9 @@ const state = {
   })),
 } as unknown as VehicleState;
 
+/** The roadside, when a test does not care about it. */
+const NO_PROPS = { skidStamp: 0, signs: [], markers: [] };
+
 /** Feed the reel `seconds` of wall time at 60 fps. */
 function run(
   reel: CrashReel,
@@ -38,9 +46,10 @@ function run(
   damage: DamageModel | null,
   debris: DebrisModel | null,
   animals: Animal[] = [],
+  props: () => ReelProps = () => NO_PROPS,
 ) {
   for (let i = 0; i < seconds * 60; i++) {
-    reel.capture(1 / 60, transform, state, damage, debris, animals);
+    reel.capture(1 / 60, transform, state, damage, debris, animals, props());
   }
 }
 
@@ -136,5 +145,34 @@ describe('the crash reel', () => {
     const view = new RecordedDebris(strip.at(0));
     expect(view.at(strip.at(0)).stateOf('bumperFront')).toBe('attached');
     expect(view.at(strip.at(strip.duration)).stateOf('bumperFront')).toBe('gone');
+  });
+
+  it('remembers the road as it was, not as the crash left it', () => {
+    // The other half of the same complaint. The car was recorded and the road
+    // was not, so a replay of the run-up to a crash was drawn over the marks
+    // the car laid *during* it and past the boards it had already flattened.
+    const reel = new CrashReel();
+    // A pole and a board, both standing, and no marks on the road yet.
+    const props: ReelProps = { skidStamp: 0, signs: [{ fallen: 0 }], markers: [{ fallen: 0 }] };
+    run(reel, 1.0, null, null, [], () => props);
+
+    // The crash: tracks get laid and both go over.
+    props.skidStamp = 40;
+    props.signs = [{ fallen: 1 }];
+    props.markers = [{ fallen: 1 }];
+    run(reel, 0.5, null, null, [], () => props);
+
+    const strip = reel.take(1.5)!;
+    expect(strip).not.toBeNull();
+
+    const before = strip.at(0.2);
+    expect(before.skidStamp).toBe(0);
+    expect(before.signsFallen[0]).toBe(0);
+    expect(before.markersFallen[0]).toBe(0);
+
+    const after = strip.at(strip.duration);
+    expect(after.skidStamp).toBe(40);
+    expect(after.signsFallen[0]).toBe(1);
+    expect(after.markersFallen[0]).toBe(1);
   });
 });

@@ -20,7 +20,7 @@
 
 import * as THREE from 'three';
 import type { VisionState } from '../sim/vision.js';
-import { NEUTRAL_GRADE, gradeStrength, type Grade } from './grade.js';
+import { NEUTRAL_GRADE, crashGrade, gradeStrength, type Grade } from './grade.js';
 
 const VERTEX = /* glsl */ `
   varying vec2 vUv;
@@ -565,6 +565,21 @@ export class VisionPass {
   grade: Grade = NEUTRAL_GRADE;
 
   /**
+   * How hard the world is being shaken by an impact right now, 0..1.
+   *
+   * Driven straight from `ImpactDrama` rather than being an envelope of its
+   * own, so it cannot drift out of step with the slow motion it belongs to —
+   * and so `?drama=0`, the K key and a network race all switch it off for free,
+   * because all three drive that one number to zero.
+   */
+  impact = 0;
+
+  /** The grade actually applied: the stage's, plus whatever the crash is doing. */
+  private get liveGrade(): Grade {
+    return crashGrade(this.grade, this.impact);
+  }
+
+  /**
    * True when nothing is being *hidden* — so the blur target is not worth
    * filling. Cracks are deliberately not part of this: they interrupt the
    * picture rather than obscuring it, and they carry their own small softening.
@@ -588,7 +603,7 @@ export class VisionPass {
     return (
       this.clearScreen(state) &&
       state.cracks * this.strength < 0.02 &&
-      gradeStrength(this.grade) < 0.02
+      gradeStrength(this.liveGrade) < 0.02
     );
   }
 
@@ -654,7 +669,7 @@ export class VisionPass {
     c.uWiper!.value = state.wiper ?? -1;
     c.uWiperBack!.value = state.wiperReturning ? 1 : 0;
 
-    const grade = this.grade;
+    const grade = this.liveGrade;
     (c.uGain!.value as THREE.Vector3).set(grade.gain[0], grade.gain[1], grade.gain[2]);
     (c.uLift!.value as THREE.Vector3).set(grade.lift[0], grade.lift[1], grade.lift[2]);
     c.uSaturation!.value = grade.saturation;

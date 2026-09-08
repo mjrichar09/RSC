@@ -19,6 +19,7 @@ import {
   EMPTY_REEL_FRAME,
   RecordedDamage,
   RecordedDebris,
+  type ReelFrame,
 } from './game/crashReel.js';
 import { TouchControls } from './ui/touch.js';
 import { type QualityTier, RenderScale, guessTier, qualityFor } from './render/quality.js';
@@ -38,11 +39,15 @@ import { TRACES, sampleTrace } from './sim/trace.js';
 import { SimWorld, initPhysics } from './sim/world.js';
 import { Mixer } from './audio/mixer.js';
 import { CarView } from './render/carView.js';
+import { EasedDamage } from './render/foldEase.js';
 import {
   ParticleField,
   Precipitation,
   SkidMarks,
+  emitCrashDebris,
   emitDragSparks,
+  emitImpactBurst,
+  emitImpactSparks,
   emitSteam,
   updateWheelEffects,
 } from './render/fx.js';
@@ -68,7 +73,8 @@ import { ReplayUi } from './ui/replay.js';
 import { MultiplayerSession } from './game/multiplayer.js';
 import { LiveStageMap } from './ui/stageMap.js';
 import * as THREE from 'three';
-import { rotate } from './sim/math.js';
+import { rotate, type Vec3 } from './sim/math.js';
+import type { VehicleState } from './sim/vehicle.js';
 import { Vision } from './sim/vision.js';
 import { VisionPass } from './render/vision.js';
 import { gradeFor } from './render/grade.js';
@@ -176,7 +182,18 @@ async function main(): Promise<void> {
   window.addEventListener(
     'pointerdown',
     (event) => {
-      if (event.pointerType === 'touch') touch.setVisible(true);
+      if (event.pointerType !== 'touch') return;
+      touch.setVisible(true);
+      // And ask for fullscreen from *this* gesture, whatever it was for.
+      //
+      // It used to be asked for on the first thumb on the steering pad, which
+      // is the first gesture of the race — so Android's "now full screen"
+      // toast landed across the start countdown every single time. Any touch
+      // will carry the request, so the earliest one takes it: by the time the
+      // lights run, the toast has been and gone. Here rather than inside
+      // `TouchControls` because the request is refused while the controls are
+      // hidden, and this is the line that shows them.
+      touch.requestFullscreen();
     },
     { capture: true },
   );
@@ -192,6 +209,23 @@ async function main(): Promise<void> {
 
   /** Bright torn road where bodywork has been dragged along it. */
 const SCRAPE_COLOR = new THREE.Color(0xb9b2a4);
+/** The ground going up at an impact, in whatever the ground is made of. */
+const BURST_COLOR = new THREE.Color();
+
+/**
+ * The crash cinematic's window, in real seconds either side of the impact.
+ *
+ * The lead is the run-up — enough to see the car arrive at whatever it hit and
+ * understand why. The lag is the part the replay used to be missing entirely:
+ * the strip was taken on the frame the impact was *detected*, so it ended with
+ * the car straight and intact and the crash happened after the last frame of
+ * the recording of it. Half a second of real time is about a second and a half
+ * of playback at 0.34×, which covers the fold, the parts leaving and the car
+ * coming to rest — and it is short enough that the cut still reads as a
+ * reaction to the hit rather than an afterthought.
+ */
+const REPLAY_LEAD = 1.25;
+const REPLAY_LAG = 0.5;
 
 const params = new URLSearchParams(location.search);
   // `?vision=0.6` scales the whole windscreen effect. It is the setting most
@@ -290,6 +324,31 @@ const params = new URLSearchParams(location.search);
   const replayUi = new ReplayUi(hudRoot);
   let ghost: GhostPlayer | null = null;
   const recorder = new GhostRecorder();
+  /**
+   * Real seconds left before the armed cinematic cuts in, or 0 for none.
+   *
+   * The replay used to be taken and opened on the frame the impact was
+   * detected, so its last frame *was* the impact and the crash it was there to
+   * show had not happened yet: the strip ended with the car straight and
+   * intact, a moment before everything interesting. Waiting half a second and
+   * taking the strip then puts the fold, the parts leaving and the car coming
+   * to rest inside it.
+   *
+   * Declared up here rather than beside the cinematic that reads it: `loadStage`
+   * clears it and runs during boot, so a `let` further down this very long
+   * function is in its temporal dead zone and the whole game fails to start.
+   */
+  let crashReplayIn = 0;
+  /**
+   * The damage the *renderer* shows, which lags the real thing by a tenth of a
+   * second so a fold is seen to arrive rather than to appear.
+   *
+   * Only the local car. Rival cars keep reading their live models: they are
+   * seen from across a stage, the cinematic never poses them, and four of these
+   * would be four more things to remember to advance.
+   */
+  const shownDamage = new EasedDamage();
+
   /**
    * The last couple of seconds, for the crash cinematic.
    *
@@ -416,6 +475,7 @@ const params = new URLSearchParams(location.search);
     terminal = null;
     lights.arm();
     drama.reset();
+    crashReplayIn = 0;
     celebrations.clear();
     damagePanel.reset();
     raceHud.setStage(stage, variant.name, variant.medals);
@@ -442,6 +502,11 @@ const params = new URLSearchParams(location.search);
 
   /** Seed the world's damage model with the condition the car is actually in. */
   const applyCarCondition = () => {
+    // Before the early return, and here rather than at either call site: this
+    // is the one line both a stage load and a restart already go through, and
+    // a renderer still easing from the *previous* car's damage is exactly the
+    // bug this pairing exists to prevent.
+    shownDamage.attach(world.damage);
     if (!world.damage) return;
     for (const [id, health] of Object.entries(sessionHealth)) {
       if (typeof health === 'number') world.damage.health.set(id as ComponentId, health);
@@ -517,6 +582,7 @@ const params = new URLSearchParams(location.search);
       terminal = null;
       lights.arm();
       drama.reset();
+      crashReplayIn = 0;
       celebrations.clear();
       raceHud.setLedger(null);
       damagePanel.reset();
@@ -629,6 +695,7 @@ const params = new URLSearchParams(location.search);
     // exactly this, and it makes the other two belt and braces.
     drama.strength = 0;
     drama.reset();
+    crashReplayIn = 0;
 
     session = new MultiplayerSession(
       { ...(start.host ? { host: start.host } : {}), ...(start.guest ? { guest: start.guest } : {}) },
@@ -706,14 +773,21 @@ const params = new URLSearchParams(location.search);
   const updateBanner = new UpdateBanner();
   updates.start();
 
-  // Leaving a lobby drops the session and goes back to the front door. Without
-  // it the only way out of a race you had joined was to reload the page.
-  multiplayer.onLeave = () => {
+  // Dropping a connection and going back to the front door are two different
+  // things, and only the first happens when the lobby's Back button takes a
+  // player from hosting to the choice of hosting or joining — the panel stays
+  // open on top of whatever is behind it.
+  multiplayer.onDisconnect = () => {
     if (session) {
       session.leave();
       session = null;
     }
     sessionHealth = {};
+  };
+
+  // Leaving a lobby goes back to the front door. Without it the only way out of
+  // a race you had joined was to reload the page.
+  multiplayer.onLeave = () => {
     menu.setOpen(true);
   };
 
@@ -827,7 +901,11 @@ const params = new URLSearchParams(location.search);
     // It takes effect on the way out, in `restoreDrama`.
     if (!session) {
       drama.strength = next;
-      if (next === 0) drama.reset();
+      if (next === 0) {
+        drama.reset();
+        // An armed cinematic is part of the effect being turned off.
+        crashReplayIn = 0;
+      }
     }
     damagePanel.notice(next === 0 ? 'Crash slow-motion off' : `Crash slow-motion ${Math.round(next * 100)}%`);
     void save.update((profile) => {
@@ -896,7 +974,7 @@ const params = new URLSearchParams(location.search);
     // The reel, not the ghost. A ghost knows where the car was and nothing
     // else, so a cinematic built from one shows the car already wrecked on the
     // way in and whatever it hit missing entirely.
-    const strip = crashReel.take(1.25);
+    const strip = crashReel.take(REPLAY_LEAD + REPLAY_LAG);
     if (!strip) return;
     const ghost = recorder.finish(currentKey(), race.time);
     const player = new GhostPlayer(ghost);
@@ -923,6 +1001,12 @@ const params = new URLSearchParams(location.search);
 
   const endCrashReplay = () => {
     replayUi.close();
+    // Back to the road as it is. The signs and poles repose themselves on the
+    // next live `sync` — the recorded version they were left on is negative and
+    // can never match the live counter — but the skid cutoff is a uniform
+    // nobody else writes, so it has to be put back here.
+    skids.showUpTo(null);
+    debrisView.group.visible = true;
     // The world resumes from exactly where it stopped, so nothing is owed —
     // but `settleRun` and the ghost both read `race.time`, and the frame that
     // closes the replay must not hand back a clock that drifted while paused.
@@ -1185,7 +1269,10 @@ const params = new URLSearchParams(location.search);
   const drawOnce = (alpha: number, dt: number) => {
     const state = world.state();
     const transform = world.renderTransform(alpha);
-    carView.update(transform, state, world.damage, world.debris);
+    // Real seconds: the fold is a duration a person watches, and during a crash
+    // the world's clock is the one being slowed down.
+    shownDamage.advance(dt);
+    carView.update(transform, state, shownDamage, world.debris);
     debrisView.update(world.loose);
 
     // The other cars, and a name over each. Everything else about them — their
@@ -1281,13 +1368,178 @@ const params = new URLSearchParams(location.search);
   };
 
   /**
-   * One frame of photo mode.
+   * What an impact throws off: sparks, dust and debris, all from one point.
    *
-   * The car is posed from the recording rather than simulated, so what is on
-   * screen is exactly what happened. Its damage is whatever the car is carrying
-   * now, which is a small lie in the middle of a replay and the right one: the
-   * alternative is recording forty-three component healths twenty times a
-   * second to be able to un-break a wing.
+   * Here rather than inside `fx.ts` because this is the layer that knows where
+   * the hit landed and what is under the car; the emitters themselves take a
+   * point, a colour and a severity and have no opinion about either.
+   *
+   * Gated by the same `shakenFor` bar that gates the shake and the impact
+   * sound, at the call site — `lastImpact` is the hardest contact of the step
+   * and not an event, so a car rolling down an embankment would otherwise throw
+   * a full burst on every one of the sixty steps it spends in contact.
+   */
+  const throwCrashFx = (state: VehicleState, severity: number) => {
+    if (severity <= 0.02) return;
+
+    // The contact, out of the car's frame and into the world's.
+    const offset = rotate(state.rotation, world.lastImpactAt);
+    const at = {
+      x: state.position.x + offset.x,
+      y: state.position.y + offset.y,
+      z: state.position.z + offset.z,
+    };
+    // Outward from the middle of the car, which is the direction anything
+    // coming off the contact should go. Normalised from the offset itself: a
+    // point on the nose gives a forward normal, one on a flank gives a sideways
+    // one, and the degenerate centre hit (a landing) gives straight up.
+    const reach = Math.hypot(offset.x, offset.y, offset.z);
+    const normal =
+      reach > 0.05
+        ? { x: offset.x / reach, y: offset.y / reach, z: offset.z / reach }
+        : { x: 0, y: 1, z: 0 };
+
+    // What is under the car, for the dust's colour and the debris' floor. The
+    // lowest wheel that is actually touching something knows both; airborne,
+    // the ground is wherever the car is about to be and the surface is a guess
+    // nobody will see, because dust off nothing is not drawn.
+    let ground: number | null = null;
+    let surface = state.wheels[0]?.surface ?? null;
+    for (const wheel of state.wheels) {
+      if (!wheel.grounded) continue;
+      if (ground === null || wheel.contact.y < ground) {
+        ground = wheel.contact.y;
+        surface = wheel.surface;
+      }
+    }
+
+    emitImpactSparks(particles, at, normal, severity);
+    if (ground !== null && surface) {
+      BURST_COLOR.setHex(surface.color).offsetHSL(0, 0, 0.1);
+      // From the ground under the contact, not from the contact: the dust is
+      // the *ground* being kicked up, and a cloud that starts at bumper height
+      // hangs in the air like smoke.
+      emitImpactBurst(particles, { x: at.x, y: ground, z: at.z }, BURST_COLOR, severity);
+    }
+    emitCrashDebris(
+      particles,
+      at,
+      state.velocity,
+      // With no ground under it — mid-air, mid-roll — the shards simply fall
+      // and fade, which is better than resting on a floor that is not there.
+      ground ?? -Infinity,
+      severity,
+    );
+  };
+
+  /**
+   * Everything a hit does to the *presentation*: the shake, the thud, the FX.
+   *
+   * One function because there are two paths that drive a car into things and
+   * only one of them is the frame loop — the screenshot harness steps the world
+   * directly and never calls `frame()`, so an effect written only there produces
+   * nothing in any composite and reads as broken when it is merely unreachable.
+   * `shoot --cells=crash1.4:quarry-run@26` is the check, and it only works if the
+   * seek loop goes through here as well.
+   *
+   * Returns the severity, or 0 if the hit did not count, so the caller can
+   * decide about the cinematic. That is deliberately *not* in here: it pauses
+   * the world, which is the one thing a harness seek must never do.
+   */
+  const reactToImpact = (state: VehicleState, dt: number): number => {
+    // The bar the next impact has to clear to count as a new one, decaying over
+    // about a second so a second accident is always felt.
+    //
+    // `lastImpact` is the hardest contact of the step, not an event — a car
+    // rolling down an embankment is in contact on every one of them — so
+    // without this the mixer is asked for an impact sound sixty times a second
+    // while a car grinds along a wall, and the dust never stops going up.
+    shakenFor *= Math.pow(0.25, dt);
+    if (world.lastImpact <= 1200 || world.lastImpact <= shakenFor * 1.35) return 0;
+
+    const severity = Math.min((world.lastImpact - 1200) / 26_000, 1);
+    shakenFor = world.lastImpact;
+    camera.shake(severity);
+    mixer.impact(severity);
+    throwCrashFx(state, severity);
+    return severity;
+  };
+
+  /**
+   * Stand-ins for the live roadside, posed from a recorded frame.
+   *
+   * Built once and mutated, because the alternative is forty objects a frame
+   * for something that runs for a second and a half. Only `fallen` comes from
+   * the recording: a position never moves, and `knockedToward` is written once
+   * when the thing goes over and never again — so the live value *is* the
+   * recorded one.
+   *
+   * The version is derived from the frame's own timestamp and made negative.
+   * Both views skip a `sync` whose version they have already posed, so it has
+   * to change with the frame; negative so it can never collide with the live
+   * counter, which is what makes the live state repose itself the moment the
+   * cinematic ends.
+   */
+  const recordedSigns: { version: number; all: { fallen: number; knockedToward: number }[] } = {
+    version: -2,
+    all: [],
+  };
+  const recordedMarkers: {
+    version: number;
+    all: { position: Vec3; fallen: number; knockedToward: number }[];
+  } = { version: -2, all: [] };
+
+  const poseRecordedRoadside = (frame: ReelFrame, yaw: number) => {
+    if (!stageView) return;
+    const version = -2 - Math.round(frame.t * 1000);
+    const signs = world.signs;
+    if (signs) {
+      if (recordedSigns.all.length !== signs.all.length) {
+        recordedSigns.all = signs.all.map(() => ({ fallen: 0, knockedToward: 0 }));
+      }
+      for (let i = 0; i < recordedSigns.all.length; i++) {
+        const to = recordedSigns.all[i]!;
+        to.fallen = frame.signsFallen[i] ?? signs.all[i]!.fallen;
+        to.knockedToward = signs.all[i]!.knockedToward;
+      }
+      recordedSigns.version = version;
+      stageView.signs.sync(recordedSigns);
+    }
+    const markers = world.markers;
+    if (markers) {
+      if (recordedMarkers.all.length !== markers.all.length) {
+        recordedMarkers.all = markers.all.map((marker) => ({
+          position: marker.position,
+          fallen: 0,
+          knockedToward: 0,
+        }));
+      }
+      for (let i = 0; i < recordedMarkers.all.length; i++) {
+        const to = recordedMarkers.all[i]!;
+        to.fallen = frame.markersFallen[i] ?? markers.all[i]!.fallen;
+        to.knockedToward = markers.all[i]!.knockedToward;
+      }
+      recordedMarkers.version = version;
+      stageView.markers.sync(recordedMarkers);
+    }
+    // After the sync, not before: standing a board back up restores the pose it
+    // was built with, which would undo this. The cinematic looks from three
+    // eighths round and a board is only readable face-on; live this happens in
+    // `drawOnce`, which this path never reaches, so every standing board was
+    // edge-on to the replay.
+    stageView.signs.faceCamera(yaw);
+  };
+
+  /**
+   * One frame of a replay — photo mode, or the crash cinematic.
+   *
+   * Both pose the car from a recording rather than simulating it, so what is on
+   * screen is exactly what happened, and they differ in what the recording
+   * carries. The cinematic plays a `ReelStrip`: damage, parts, wildlife and the
+   * roadside as they were at that instant. Photo mode plays a ghost, which is
+   * position and nothing else, so the car wears whatever damage it is carrying
+   * now — a small lie, and the right one, because a ghost is saved to disk and
+   * compared across sessions and its format has to stay small and stable.
    */
   const drawReplay = (dt: number) => {
     const state = replayUi.state;
@@ -1296,6 +1548,10 @@ const params = new URLSearchParams(location.search);
     // where the shake used to decay — so the crash cinematic ran with the
     // camera frozen at the amplitude the crash set it to.
     camera.advanceShake(dt);
+    // Kept caught up even though the cinematic poses from the reel: the world
+    // is still there behind the replay, and the frame that closes it must not
+    // start easing a fold that finished two seconds ago.
+    shownDamage.advance(dt);
     const at = replayUi.advance(dt);
     if (state.reel) {
       // The crash cinematic: the car as it *was*, with the damage it had at
@@ -1303,6 +1559,25 @@ const params = new URLSearchParams(location.search);
       const frame = state.reel.at(at);
       carView.updateFromReel(frame, reelDamage.at(frame), reelDebris.at(frame));
       wildlifeView.updateFromReel(frame.animals);
+      // And the road it was driving on, as it was then: the marks it had laid
+      // by that instant and nothing after them, and the boards and poles that
+      // were still standing. Without this the replay of a crash is drawn over
+      // the wreckage of that same crash, which is how a car ends up sliding
+      // along tracks it has not made yet, past signs it has not hit yet.
+      skids.showUpTo(frame.skidStamp);
+      poseRecordedRoadside(frame, state.yaw);
+      /*
+       * And the shed parts, which are the loudest version of the same problem.
+       *
+       * `world.loose` is the bumper and the bonnet lying in the road *now* —
+       * put there by the crash being replayed — and nothing updates it while
+       * the cinematic plays, so every one of them sat in shot from the first
+       * frame, before the car had touched anything. The reel records whether
+       * each part is on the car, which is what the replay needs; where a part
+       * that has left it flew to is not recorded and not worth recording, so
+       * the honest picture is no loose part at all.
+       */
+      debrisView.group.visible = false;
       camera.setYaw(state.yaw);
       camera.setViewSize(state.zoom);
       camera.jumpTo(frame.position);
@@ -1310,6 +1585,9 @@ const params = new URLSearchParams(location.search);
       const sample = state.player.sampleAt(at);
       if (sample) {
         carView.updateFromGhost(sample);
+        // Photo mode poses from a ghost, which carries none of this — the road
+        // it shows is simply the road as it is.
+        skids.showUpTo(null);
         camera.setYaw(state.yaw);
         camera.setViewSize(state.zoom);
         camera.jumpTo(sample.position);
@@ -1426,7 +1704,9 @@ const params = new URLSearchParams(location.search);
         // Accumulate spray and marks so a harness frame shows the same effects
         // a player would see, rather than a suspiciously clean road.
         updateWheelEffects(particles, skids, world.state().wheels, world.state().velocity, world.dt);
-        carView.update(world.renderTransform(1), world.state(), world.damage, world.debris);
+        reactToImpact(world.state(), world.dt);
+        shownDamage.advance(world.dt);
+        carView.update(world.renderTransform(1), world.state(), shownDamage, world.debris);
         dragEffects(world.dt);
         particles.update(world.dt);
         advanceVision(world.dt);
@@ -1444,6 +1724,11 @@ const params = new URLSearchParams(location.search);
           world.step({ throttle: 1, brake: 0, steer: 1, handbrake: 0 });
           race!.update(world.state(), world.dt);
           updateWheelEffects(particles, skids, world.state().wheels, world.state().velocity, world.dt);
+          // The whole point of a `crash:` cell is the sparks, the dust and the
+          // debris, so this loop above all others has to go through the shared
+          // reaction rather than merely bending the car.
+          reactToImpact(world.state(), world.dt);
+          shownDamage.advance(world.dt);
           particles.update(world.dt);
           const failure = [...(world.damage?.failures ?? [])][0];
           if (failure) race!.retire(FAILURE_LABEL[failure]);
@@ -1904,15 +2189,30 @@ const params = new URLSearchParams(location.search);
     // while `drama.strength` is 0, where `timeScale` is exactly 1.
     drama.update(dt);
     mixer.duck(drama.duck);
+    // Colour drains and the corners close in for exactly as long as the world
+    // is slow. One number, so `?drama=0`, the K key and a network race all
+    // switch it off without knowing it exists.
+    visionPass.impact = drama.duck;
     const simDt = session ? dt : dt * drama.timeScale;
+
+    // Let the crash finish happening before cutting to the replay of it.
+    //
+    // Wall time, because this is a wait a person sits through and the world is
+    // in slow motion for the whole of it — measured on the sim clock it would
+    // be three times as long. `showCrashReplay` takes its strip when this
+    // fires, so the strip ends here too: everything the impact caused is
+    // inside the recording rather than after the end of it.
+    if (crashReplayIn > 0) {
+      crashReplayIn -= wallDt;
+      if (crashReplayIn <= 0) {
+        crashReplayIn = 0;
+        showCrashReplay();
+      }
+    }
 
     // In a network race every fixed step goes through the host or the guest:
     // that is what puts inputs on the wire and takes snapshots off it.
     const alpha = session ? session.advance(dt, input) : world.advance(simDt, input);
-
-    // The bar the next impact has to clear to count as a new one, decaying
-    // over about a second so a second accident is always felt.
-    shakenFor *= Math.pow(0.25, dt);
 
     const state = world.state();
     if (race && stage) {
@@ -1924,20 +2224,11 @@ const params = new URLSearchParams(location.search);
 
       // A bump the car shrugs off should still be felt and heard, so this reads
       // the raw impulse rather than waiting for a damage event.
-      //
-      // `lastImpact` is the hardest contact of the step, not an event — a car
-      // rolling down an embankment is in contact on every one of them. The
-      // camera enforces one knock per accident itself (`Camera.shake`); this
-      // gate is here so the *mixer* is not asked for an impact sound sixty
-      // times a second while a car grinds along a wall.
-      if (world.lastImpact > 1200 && world.lastImpact > shakenFor * 1.35) {
-        const severity = Math.min((world.lastImpact - 1200) / 26_000, 1);
-        shakenFor = world.lastImpact;
-        camera.shake(severity);
-        mixer.impact(severity);
+      if (reactToImpact(state, dt) > 0) {
         // Only a hit worth watching gets the cinematic; `hit` decides, and
-        // returns false for everything below its own threshold.
-        if (!session && drama.hit(world.lastImpact)) showCrashReplay();
+        // returns false for everything below its own threshold. Armed rather
+        // than shown: see `crashReplayIn`.
+        if (!session && drama.hit(world.lastImpact)) crashReplayIn = REPLAY_LAG;
       }
 
       // What happened first, then what it broke.
@@ -2032,9 +2323,19 @@ const params = new URLSearchParams(location.search);
         wallDt,
         t,
         state,
-        world.damage,
+        // The eased view, not the live model: the reel is a record of what a
+        // person saw, and a fold that is halfway in on screen has to be halfway
+        // in when the cinematic replays that instant.
+        shownDamage,
         world.cars[0]?.debris ?? null,
         world.wildlife?.animals ?? [],
+        {
+          // The roadside as it stood, so the replay is not drawn against the
+          // road the crash left behind.
+          skidStamp: skids.stamp,
+          signs: world.signs?.all ?? [],
+          markers: world.markers?.all ?? [],
+        },
       );
     }
 

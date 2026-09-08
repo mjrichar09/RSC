@@ -253,6 +253,19 @@ export class SimWorld {
    */
   lastImpact = 0;
   /**
+   * Where that impact landed, in the car's own frame.
+   *
+   * The impulse alone says how hard; it does not say *where*, and every crash
+   * effect worth having is anchored to a point — sparks come off the corner
+   * that hit, dust comes off the ground under it, debris leaves from it. Every
+   * path that reports an impact already has this point, because the damage
+   * model needs it too; it was simply thrown away on the way out.
+   *
+   * Only meaningful while `lastImpact` is above zero, and only ever the local
+   * car's — the same rule `lastImpact` follows.
+   */
+  readonly lastImpactAt: Vec3 = { x: 0, y: 0, z: 0 };
+  /**
    * Headline events since the last drain — "Deer strike", "Heavy landing".
    *
    * Damage events name the component that broke, which is the wrong headline
@@ -482,6 +495,26 @@ export class SimWorld {
   }
 
   /**
+   * Record an impact for the local car, keeping the impulse and its point in step.
+   *
+   * The two would drift the moment they were tracked separately: `lastImpact`
+   * takes the hardest hit of the step, so a point written by whichever contact
+   * came last would put a hard nose-first hit's sparks on the rear corner that
+   * happened to clip a marker pole in the same step. They move together or not
+   * at all.
+   */
+  private noteImpact(impulse: number, at: Vec3): void {
+    if (impulse <= this.lastImpact) return;
+    this.lastImpact = impulse;
+    // Written into the existing object rather than replacing it: a car grinding
+    // along a wall reports a contact every step, and this is not a place to
+    // allocate sixty times a second.
+    this.lastImpactAt.x = at.x;
+    this.lastImpactAt.y = at.y;
+    this.lastImpactAt.z = at.z;
+  }
+
+  /**
    * Turn this step's contact forces into component damage.
    *
    * Rapier reports a force magnitude and the direction of the strongest
@@ -509,8 +542,6 @@ export class SimWorld {
 
       const impulse = event.totalForceMagnitude() * this.dt;
       if (impulse <= 0) return;
-      // Only the local car's hits shake the local camera.
-      if (first === 0 || second === 0) this.lastImpact = Math.max(this.lastImpact, impulse);
 
       const worldDirection = event.maxForceDirection() as Vec3;
 
@@ -520,8 +551,11 @@ export class SimWorld {
       for (const index of [first, second]) {
         if (index === undefined) continue;
         const car = this.cars[index]!;
-        if (!car.damage) continue;
-
+        // No `if (!car.damage) continue` here, deliberately. Reporting the hit
+        // is not the same thing as billing for it: a car with no damage model
+        // is still a car that hit something, and gating the report on the model
+        // silently took the shake, the thud and the crash effects away from it.
+        //
         // Rapier's force direction points from collider1 toward collider2. For
         // collider1 that is away from it and has to be flipped, or a nose-first
         // impact lands through the back of the car.
@@ -534,7 +568,10 @@ export class SimWorld {
         });
 
         const at = impactPointFromForce(local);
-        car.damage.applyImpact(at, impulse);
+        // Only the local car's hits shake the local camera — and now only the
+        // local car's hits place its sparks.
+        if (index === 0) this.noteImpact(impulse, at);
+        car.damage?.applyImpact(at, impulse);
         // The same hit works the mounts loose. One impact, two consequences:
         // what it costs to repair, and whether the part is still on the car.
         car.debris?.applyImpact(at, impulse);
@@ -604,7 +641,7 @@ export class SimWorld {
           // very small crash, and the dent it leaves is the point of it.
           car.damage.applyImpact(clipped.at, clipped.impulse);
           car.debris?.applyImpact(clipped.at, clipped.impulse);
-          if (local) this.lastImpact = Math.max(this.lastImpact, clipped.impulse);
+          if (local) this.noteImpact(clipped.impulse, clipped.at);
         }
       }
 
@@ -614,7 +651,7 @@ export class SimWorld {
         if (board) {
           car.damage.applyImpact(board.at, board.impulse);
           car.debris?.applyImpact(board.at, board.impulse);
-          if (local) this.lastImpact = Math.max(this.lastImpact, board.impulse);
+          if (local) this.noteImpact(board.impulse, board.at);
         }
       }
 
@@ -633,7 +670,7 @@ export class SimWorld {
           if (local) {
             // Felt and heard, not just billed: this is what the camera shake
             // and the impact sound read.
-            this.lastImpact = Math.max(this.lastImpact, hit.impulse);
+            this.noteImpact(hit.impulse, v3(0, 0, 1.8));
             this.notices.push('Deer strike');
           }
           // And the car loses the momentum it gave the deer, which at speed is
@@ -648,7 +685,9 @@ export class SimWorld {
       // A landing that bottomed out is an impact the player has to feel.
       if (car.vehicle.landingImpact > 0) {
         if (local) {
-          this.lastImpact = Math.max(this.lastImpact, car.vehicle.landingImpact);
+          // A landing lands on the underside, which is where its dust and any
+          // parts it shakes loose should come from.
+          this.noteImpact(car.vehicle.landingImpact, v3(0, -CAR.halfExtents.y, 0));
           if (car.vehicle.landingImpact > 8000) this.notices.push('Heavy landing');
         }
         car.vehicle.landingImpact = 0;
@@ -670,7 +709,7 @@ export class SimWorld {
           for (const stone of this.ambient.drainStones()) {
             car.damage.applyImpact(stone.at, stone.impulse);
             // A stone is cosmetic, but it is a sharp crack you should hear.
-            this.lastImpact = Math.max(this.lastImpact, stone.impulse * 0.4);
+            this.noteImpact(stone.impulse * 0.4, stone.at);
           }
         }
       }

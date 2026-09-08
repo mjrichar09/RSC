@@ -2195,6 +2195,42 @@ textarea, input { -webkit-user-select: text; user-select: text; }
   60%, 100% { transform: rotate(90deg); }
 }
 
+/*
+ * The iOS home-screen note.
+ *
+ * Along the top edge and out of the way of both thumbs: an iPhone in landscape
+ * is about 390 px tall, and anything that takes a band out of the middle of
+ * that is covering the road. `pointer-events` stays on only for the button —
+ * the note sits over the steering third, and the whole reason the steering pad
+ * can be that big is that everything drawn over it lets a thumb through.
+ */
+.ios-fs { display: none; }
+.ios-fs.is-on {
+  display: flex;
+  position: fixed;
+  top: calc(env(safe-area-inset-top) + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 95;
+  align-items: center;
+  gap: 10px;
+  max-width: min(560px, 92vw);
+  padding: 7px 8px 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(12, 15, 20, 0.92);
+  color: var(--dim);
+  font-size: var(--step--1);
+  pointer-events: none;
+}
+.ios-fs b { color: var(--ink); }
+.ios-fs button {
+  pointer-events: auto;
+  flex: none;
+  padding: 5px 10px;
+  font-size: var(--step--1);
+}
+
 /* Key hints are noise on a device with no keys. */
 #hud:has(.touch.is-on) .menu-foot,
 #hud:has(.touch.is-on) .help { display: none; }
