@@ -35,12 +35,38 @@ const LIMITER_AFTER = 0.9;
  * through it is to read the rhythm of the lamps — they step every `STEP`
  * seconds, which is a countdown you can time — and go on the beat rather than
  * on the sight of the green. That is the skill a rally start actually has.
+ *
+ * Halved again from 0.15. At a twelfth of a second it is comfortably inside
+ * reaction time in both directions, so it cannot be stumbled into either by
+ * being quick or by being early — anticipating the beat by a frame or two is
+ * the only thing that fits through it.
  */
-const PERFECT_WINDOW = 0.15;
+const PERFECT_WINDOW = 0.075;
 /** Past this the launch is merely late rather than mistimed. Seconds. */
 const LATE_WINDOW = 0.75;
 /** How long a bogged launch keeps costing power. Seconds. */
 const BOG_FOR = 1.6;
+/**
+ * How much power a full bog takes at its worst, as a fraction.
+ *
+ * Calibrated against distance off the line rather than chosen, because power
+ * and distance are not proportional — gearing, rolling resistance and traction
+ * all sit in between, and halving the throttle does not halve the metres.
+ *
+ * Measured on gravel, from the line, holding flat through the whole countdown:
+ *
+ *   depth   1.0 s    1.5 s
+ *   0.45     2.0 m    5.4 m   (what it was)
+ *   0.725    1.4 m    3.9 m
+ *   0.85     1.0 m    3.2 m   (half the old distance at one second)
+ *   0.90     0.9 m    2.9 m
+ *
+ * A clean launch covers 2.9 m in that first second, so a full bog now leaves
+ * the line at about a third of the pace of one that did not — which is what
+ * sitting on the limiter through the countdown should cost, and what it did
+ * not cost at 0.45.
+ */
+const BOG_DEPTH = 0.85;
 
 export type StartPhase = 'waiting' | 'counting' | 'go' | 'done';
 
@@ -98,7 +124,7 @@ export class StartLights {
   get throttleScale(): number {
     if (this.bogged <= 0 || this.sinceGreen === null) return 1;
     const left = Math.max(1 - this.sinceGreen / BOG_FOR, 0);
-    return 1 - this.bogged * 0.45 * left;
+    return 1 - this.bogged * BOG_DEPTH * left;
   }
 
   /**

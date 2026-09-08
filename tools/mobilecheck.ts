@@ -282,6 +282,60 @@ try {
   console.log('portrait asks for the phone to be turned');
   await upright.close();
 
+  /*
+   * The finish panel's buttons, on the narrowest phone worth supporting.
+   *
+   * This is the one that got out: `.touch` is `z-index: 40` and `.race-panel`
+   * sets no z-index, so the whole thumb layer sits *on top of* the results
+   * panel — and the steering pad is the left 38% of the screen with
+   * `pointer-events: auto`. The panel is centred, so the pad covered the left
+   * edge of the left-hand button and ate every tap that landed there. Retry
+   * answered only near its right-hand edge, which is exactly how it was
+   * reported.
+   *
+   * It is width-dependent, which is why it survived: the pad's right edge is
+   * 0.38W and the button's left edge is about W/2 − 100, so they only overlap
+   * below about 833 px. The 844 px viewport this check already used missed it
+   * by eleven pixels. Measured before the fix: 70% reachable at 568 px, 80% at
+   * 667, 90% at 740, clean at 812.
+   */
+  const small = await browser.newContext({
+    ...phone,
+    viewport: { width: 568, height: 320 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  const tight = await small.newPage();
+  await tight.goto('http://localhost:5185/?stage=pine-loop&t=1&wreck=52000&vision=0&drama=0');
+  await tight.waitForFunction(() => window.RSC?.ready === true);
+  // The thumb controls only exist once something has touched the screen.
+  await tight.dispatchEvent('body', 'pointerdown', { pointerType: 'touch', clientX: 300, clientY: 160 });
+  await tight.dispatchEvent('body', 'pointerup', { pointerType: 'touch', clientX: 300, clientY: 160 });
+  await tight.evaluate(() => window.RSC!.finishWithAi(240));
+  await tight.waitForSelector('.race-panel.is-open', { timeout: 120_000 });
+
+  const unreachable = await tight.evaluate(() => {
+    const bad: string[] = [];
+    for (const el of Array.from(document.querySelectorAll<HTMLElement>('.finish-btn'))) {
+      el.scrollIntoView({ block: 'center' });
+      const b = el.getBoundingClientRect();
+      const label = (el.textContent ?? '').replace(/\s+/g, ' ').trim();
+      for (let f = 0.05; f <= 0.96; f += 0.1) {
+        const hit = document.elementFromPoint(b.left + b.width * f, b.top + b.height / 2);
+        if (hit !== el && !el.contains(hit)) {
+          const h = hit as HTMLElement | null;
+          bad.push(`${label} at ${(f * 100).toFixed(0)}% hits ${h?.tagName}.${h?.className}`);
+          break;
+        }
+      }
+    }
+    return bad;
+  });
+  if (unreachable.length) fail(`a finish button cannot be tapped: ${unreachable.join('; ')}`);
+  const buttons = await tight.locator('.finish-btn').count();
+  console.log(`finish panel: all ${buttons} buttons tappable across their width at 568px`);
+  await small.close();
+
   console.log('OK — it plays on a phone. shots/mobile.png');
 } finally {
   await browser.close();

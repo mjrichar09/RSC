@@ -1926,12 +1926,28 @@ html, body {
 }
 .touch.is-on { display: block; }
 
-/* Menus own the screen while they are up; driving controls under them would
-   only be pressed by accident. */
+/*
+ * Menus own the screen while they are up; driving controls under them would
+ * only be pressed by accident.
+ *
+ * The finish panel is one of them, and was missing — which made its buttons
+ * unpressable over most of their width on a phone. `.touch` is `z-index: 40`
+ * and `.race-panel` sets no z-index at all, so the whole touch layer sits on
+ * top of the panel; the steering pad is the left 38% of the screen with
+ * `pointer-events: auto`, and the panel is centred, so the pad covered the
+ * left part of it and swallowed every tap that landed there. Retry is the
+ * left-hand button, so it took the worst of it and answered only near its
+ * right-hand edge — which is exactly how it was reported.
+ *
+ * Hiding the controls is the right fix rather than raising the panel: the race
+ * is over, there is nothing left to steer, and a steering pad live underneath
+ * a results screen can only be pressed by mistake.
+ */
 #hud.in-menu .touch,
 #hud.in-garage .touch,
 #hud.in-lobby .touch,
-#hud.in-replay .touch { display: none; }
+#hud.in-replay .touch,
+#hud:has(.race-panel.is-open) .touch { display: none; }
 
 /*
  * The steering pad. Deliberately enormous and mostly invisible: the whole left

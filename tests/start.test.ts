@@ -154,3 +154,72 @@ describe('timing the light', () => {
     expect(lights.released).toBe(true);
   });
 });
+
+describe('the perfect window, and what it costs to miss it', () => {
+  const dt = 1 / 120;
+
+  /** Wait `delay` seconds after the green, then go flat. */
+  const goAfter = (delay: number) => {
+    const lights = new StartLights();
+    lights.arm();
+    while (!lights.released) lights.update(dt, 0);
+    for (let t = 0; t < delay; t += dt) lights.update(dt, 0);
+    lights.update(dt, 1);
+    return lights.launch;
+  };
+
+  it('is narrow enough that reacting to the green is not enough', () => {
+    // The existing "rewards going at the light" test cannot pin this: grading
+    // happens on the *first* flat frame after the green, so holding the pedal
+    // down for a tenth of a second scores whatever the first frame scored and
+    // the width of the window never enters into it. These go flat once, after
+    // a measured wait.
+    //
+    // Simple reaction to a light is about 0.2 s, so a window a player can hit
+    // by reacting is not a skill. Anything past a twelfth of a second is
+    // clean, which is a good start and not a perfect one.
+    expect(goAfter(0)).toBe('perfect');
+    expect(goAfter(0.05)).toBe('perfect');
+    expect(goAfter(0.12)).toBe('clean');
+    expect(goAfter(0.2)).toBe('clean');
+  });
+
+  it('takes most of the power away from a full bog', () => {
+    // Held flat through the whole countdown, which is the mistake this exists
+    // to punish. At 0.45 depth the car left on 55% throttle and covered 2.0 m
+    // in the first second against a clean launch's 2.9 — a penalty small
+    // enough to ignore. It leaves on about 15% now.
+    const lights = new StartLights();
+    lights.arm();
+    while (!lights.released) lights.update(dt, 1);
+    lights.update(dt, 1);
+
+    expect(lights.launch).toBe('bogged');
+    expect(lights.throttleScale).toBeLessThan(0.2);
+    // And still moving: a launch that took *everything* would be a stall, and
+    // a stall is not a mistimed start, it is the end of the run.
+    expect(lights.throttleScale).toBeGreaterThan(0.05);
+  });
+
+  it('scales the punishment with how early the pedal went down', () => {
+    // A driver who went a little early should not be punished like one who
+    // held it flat from the first lamp, or there is nothing to get better at.
+    const early = (flat: number) => {
+      const lights = new StartLights();
+      lights.arm();
+      const total = 0.9 * 4;
+      let t = 0;
+      while (t < total) {
+        lights.update(dt, total - t <= flat ? 1 : 0);
+        t += dt;
+      }
+      lights.update(dt, 1);
+      return lights.throttleScale;
+    };
+
+    const slight = early(1.2);
+    const full = early(3.0);
+    expect(full).toBeLessThan(slight);
+    expect(slight).toBeLessThan(1);
+  });
+});
