@@ -40,6 +40,8 @@ export interface DebrisLike {
 
 /** One recorded frame, as much of it as the car needs. */
 export interface PosedFrame {
+  /** The recording's own clock, so anything animated runs at the replay's rate. */
+  t: number;
   position: Vec3;
   rotation: Quat;
   steer: number;
@@ -928,7 +930,7 @@ export class CarView {
    * hangs at one corner and scrapes. The dragging pose is the telegraph — it is
    * the only warning the player gets before the part finally lets go.
    */
-  private applyDebris(debris: DebrisLike): void {
+  private applyDebris(debris: DebrisLike, clock = performance.now() * 0.001): void {
     for (const [id, mesh] of this.parts) {
       const state = debris.stateOf(id);
       mesh.visible = state !== 'gone';
@@ -941,7 +943,10 @@ export class CarView {
         // panel that has simply been moved; the flap is what says it is only
         // still attached by one bolt, and it is the last warning the player
         // gets before it lets go.
-        const beat = performance.now() * 0.011 + rest.z;
+        // On the caller's clock, not the wall's. The cinematic runs at a third
+        // speed, and a panel flapping at full rate against a car falling apart
+        // in slow motion is the one thing in the frame that is not slowed down.
+        const beat = clock * 11 + rest.z;
         mesh.position.set(rest.x - 0.12, rest.y - 0.2 + Math.sin(beat) * 0.035, rest.z);
         mesh.rotation.set(Math.sin(beat * 1.3) * 0.16, 0, 0.5 + Math.sin(beat) * 0.12);
       } else if (debris.isLoose(id)) {
@@ -994,7 +999,9 @@ export class CarView {
   updateFromReel(frame: PosedFrame, damage: DamageLike, debris: DebrisLike): void {
     this.applyDamage(damage);
     this.reshape(damage);
-    this.applyDebris(debris);
+    // The recorded frame's own timestamp, so a dragging panel flaps at the rate
+    // the rest of the replay is moving at.
+    this.applyDebris(debris, frame.t);
 
     this.group.position.set(frame.position.x, frame.position.y, frame.position.z);
     this.group.quaternion.set(

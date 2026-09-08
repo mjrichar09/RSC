@@ -435,7 +435,28 @@ scannable as it grows; it is append-only.
   `reactToImpact` for exactly this reason, and
   `shoot --cells=crash1.4:quarry-run@26` is the frame that shows it. The
   cinematic is deliberately *not* in there: it pauses the world, which a harness
-  seek must never do.
+  seek must never do. The reel itself was the same bug one level up — fed only
+  from the frame loop, so `?replay=1` found it empty, opened nothing, and
+  reported no error; `captureReel` is shared now, and `RSC.draw()` routes to
+  `drawReplay` when a replay is open instead of photographing the live scene
+  behind it. `shoot --replay --cells=crash1.5:quarry-run@26` is the check that
+  the cinematic's *first* frame is the run-up: car straight, no crash skid
+  marks, no burst, while the live car is dented with a bumper dragging.
+- **One particle pool shared by an emitter that fills it in half a second.**
+  Wheel spray on a loose surface throws about 2 400 particles a second into a
+  900-slot ring, so a crash's sparks, dust and debris were *entirely recycled
+  within half a second* of a three-second lifetime — emitted, correct, and
+  invisible, and worst in the exact case they exist for, because a crash happens
+  while the car is sliding on gravel with every wheel spraying. `ParticleField`
+  takes a capacity now and the impact effects have their own. `survivors(n)` is
+  the probe: `alive` stays pinned at capacity throughout, because the pool is
+  full of the thing doing the churning.
+- **Sizing an effect by eye instead of against the camera.** It is orthographic
+  at about 14 m of half-height, so on a 1080-tall window a metre is roughly
+  39 px and a 0.12 m spark is five pixels. And a shard thrown as high as the
+  dust it comes with, under the spray's 0.55 g, is still in the air two and a
+  half seconds later — debris is only evidence once it is on the road, so each
+  layer carries its own gravity: dust 0.35, sparks 1.6, debris 2.4.
 - **A crash that only subtracts.** Damage took the car apart and the picture
   stayed exactly as it was, so slowing the clock down made the moment longer
   rather than bigger. What reads as an impact is what it *adds*: sparks along
@@ -445,6 +466,13 @@ scannable as it grows; it is append-only.
   (`crashGrade`, riding `drama.duck` so one number switches all of it off). All
   of it needs a *point*, which is why `SimWorld.lastImpactAt` exists: every path
   that reports an impact already had it for the damage model and threw it away.
+- **A recorded flag that can never be true.** `RecordedDebris.isLoose` asked
+  whether a part was `attached` *and* coded `dragging`, which is never — so
+  every part in a replay read as sound, and the panel sitting proud that is the
+  car's last warning snapped flat the instant the cinematic started. Two facts
+  need two bits; `LOOSE_BIT` is beside the state now. Its neighbour: the drag
+  flap ran on `performance.now()`, so the one thing in a 0.34× replay that was
+  not slowed down was the panel hanging off the car.
 - **Damage arriving between two frames.** `applyImpact` is a step, so the wing
   was bent on the next frame drawn — correct, and it reads as the car cutting to
   a damaged version of itself. `render/foldEase.ts` is a `DamageLike` that lags

@@ -13,6 +13,10 @@ import type { Weather } from '../sim/conditions.js';
 import type { Vec3 } from '../sim/math.js';
 import type { WheelState } from '../sim/vehicle.js';
 
+/**
+ * The default pool. Big enough for wheel spray, which is by far the hungriest
+ * emitter — and small enough that it is worth knowing what else shares it.
+ */
 const MAX_PARTICLES = 900;
 /**
  * Quads in the track ring buffer, and how far the car travels per quad.
@@ -60,13 +64,13 @@ const PARTICLE_FRAGMENT = `
 export class ParticleField {
   readonly points: THREE.Points;
 
-  private readonly positions = new Float32Array(MAX_PARTICLES * 3);
-  private readonly colors = new Float32Array(MAX_PARTICLES * 3);
-  private readonly sizes = new Float32Array(MAX_PARTICLES);
-  private readonly alphas = new Float32Array(MAX_PARTICLES);
-  private readonly velocities = new Float32Array(MAX_PARTICLES * 3);
-  private readonly life = new Float32Array(MAX_PARTICLES);
-  private readonly maxLife = new Float32Array(MAX_PARTICLES);
+  private readonly positions: Float32Array;
+  private readonly colors: Float32Array;
+  private readonly sizes: Float32Array;
+  private readonly alphas: Float32Array;
+  private readonly velocities: Float32Array;
+  private readonly life: Float32Array;
+  private readonly maxLife: Float32Array;
   /**
    * A height each particle will not fall through, or `-Infinity` for none.
    *
@@ -78,13 +82,54 @@ export class ParticleField {
    * ground under that point is flat enough for the second the shards are in
    * the air.
    */
-  private readonly floor = new Float32Array(MAX_PARTICLES);
+  private readonly floor: Float32Array;
+  /**
+   * Gravity multiplier per particle.
+   *
+   * One number, because the three things a crash throws are three different
+   * materials sharing one integrator: dust hangs, sparks arc, and a shard of
+   * bodywork falls like the lump of steel it is. Thrown at the same speed under
+   * the same gravity they all read as confetti — measured off a `shoot` frame,
+   * the debris was still in the air two and a half seconds after the impact.
+   */
+  private readonly drop: Float32Array;
   private next = 0;
+  /** How many slots this field has. Its own, not the module's. */
+  private readonly capacity: number;
+  /**
+   * How the alpha falls off over a particle's life: `alpha = t ** fade`.
+   *
+   * 2 for spray, which should be gone almost as soon as it is thrown. Well
+   * below 1 for anything that has to stay *legible* while it sits there — a
+   * shard of bodywork lying in the road is evidence, and evidence that has
+   * faded to a quarter opacity a third of the way through its life is not.
+   */
+  fade = 2;
 
   private readonly geometry = new THREE.BufferGeometry();
   private readonly material: THREE.ShaderMaterial;
 
-  constructor(parent: THREE.Object3D) {
+  /**
+   * `capacity` is a whole separate pool, and that is the point of it.
+   *
+   * Everything used to share one 900-slot ring, and wheel spray on a loose
+   * surface fills it at about 2 400 particles a second — measured, a crash's
+   * debris was *entirely* recycled within half a second of a three-second
+   * lifetime, and a crash happens while the car is sliding on gravel with
+   * every wheel spraying. Its own field cannot be evicted by anything.
+   */
+  constructor(parent: THREE.Object3D, capacity = MAX_PARTICLES) {
+    this.capacity = capacity;
+    this.positions = new Float32Array(capacity * 3);
+    this.colors = new Float32Array(capacity * 3);
+    this.sizes = new Float32Array(capacity);
+    this.alphas = new Float32Array(capacity);
+    this.velocities = new Float32Array(capacity * 3);
+    this.life = new Float32Array(capacity);
+    this.maxLife = new Float32Array(capacity);
+    this.floor = new Float32Array(capacity).fill(-Infinity);
+    this.drop = new Float32Array(capacity).fill(1);
+
     this.geometry.setAttribute('position', new THREE.BufferAttribute(this.positions, 3));
     this.geometry.setAttribute('aColor', new THREE.BufferAttribute(this.colors, 3));
     this.geometry.setAttribute('size', new THREE.BufferAttribute(this.sizes, 1));
@@ -119,8 +164,11 @@ export class ParticleField {
     color: THREE.Color,
     size: number,
     life: number,
-    /** A height to come to rest on, for anything that should land. */
-    floor = -Infinity,
+    /**
+     * `floor` is a height to come to rest on, for anything that should land;
+     * `drop` scales gravity, for anything heavier or lighter than spray.
+     */
+    options?: { floor?: number; drop?: number },
   ): void {
     if (this.density < 1) {
       // Deterministic thinning: an accumulator rather than a random draw, so a
@@ -130,7 +178,7 @@ export class ParticleField {
       this.thin -= 1;
     }
     const i = this.next;
-    this.next = (this.next + 1) % MAX_PARTICLES;
+    this.next = (this.next + 1) % this.capacity;
 
     this.positions[i * 3] = at.x;
     this.positions[i * 3 + 1] = at.y;
@@ -144,12 +192,13 @@ export class ParticleField {
     this.sizes[i] = size;
     this.life[i] = life;
     this.maxLife[i] = life;
-    this.floor[i] = floor;
+    this.floor[i] = options?.floor ?? -Infinity;
+    this.drop[i] = options?.drop ?? 1;
     this.alphas[i] = 1;
   }
 
   update(dt: number): void {
-    for (let i = 0; i < MAX_PARTICLES; i++) {
+    for (let i = 0; i < this.capacity; i++) {
       if (this.life[i]! <= 0) {
         this.alphas[i] = 0;
         continue;
@@ -158,7 +207,7 @@ export class ParticleField {
 
       // Gravity plus a little drag, so spray arcs and settles instead of
       // flying off in a straight line.
-      this.velocities[i * 3 + 1]! -= 9.81 * dt * 0.55;
+      this.velocities[i * 3 + 1]! -= 9.81 * dt * 0.55 * this.drop[i]!;
       const drag = 1 - Math.min(dt * 1.8, 0.9);
       this.velocities[i * 3]! *= drag;
       this.velocities[i * 3 + 1]! *= drag;
@@ -182,12 +231,45 @@ export class ParticleField {
       }
 
       const t = this.life[i]! / this.maxLife[i]!;
-      this.alphas[i] = t * t;
+      this.alphas[i] = this.fade === 2 ? t * t : t ** this.fade;
     }
 
     for (const name of ['position', 'aColor', 'size', 'alpha']) {
       this.geometry.getAttribute(name).needsUpdate = true;
     }
+  }
+
+  /** How many particles are currently alive. The harness and the tests read it. */
+  get alive(): number {
+    let n = 0;
+    for (let i = 0; i < this.capacity; i++) if (this.life[i]! > 0) n++;
+    return n;
+  }
+
+  /**
+   * Living particles that were given at least `minLifespan` seconds to live.
+   *
+   * The way to ask "is the crash debris still here" without tagging particles:
+   * nothing else in the game is thrown with a lifespan over two seconds, so a
+   * lifespan is an identity. A pool being churned faster than its contents can
+   * live shows up here and nowhere else — `alive` stays pinned at the capacity
+   * the whole time, because it is full of the thing doing the churning.
+   */
+  survivors(minLifespan: number): number {
+    let n = 0;
+    for (let i = 0; i < this.capacity; i++) {
+      if (this.life[i]! > 0 && this.maxLife[i]! >= minLifespan) n++;
+    }
+    return n;
+  }
+
+  /** The lowest living particle, so a test can see that debris came to rest. */
+  get lowest(): number {
+    let low = Infinity;
+    for (let i = 0; i < this.capacity; i++) {
+      if (this.life[i]! > 0) low = Math.min(low, this.positions[i * 3 + 1]!);
+    }
+    return low;
   }
 
   /**
@@ -202,6 +284,7 @@ export class ParticleField {
     this.life.fill(0);
     this.alphas.fill(0);
     this.floor.fill(-Infinity);
+    this.drop.fill(1);
     this.geometry.getAttribute('alpha').needsUpdate = true;
   }
 }
@@ -589,8 +672,11 @@ export function emitImpactSparks(
   severity: number,
 ): void {
   if (severity <= 0) return;
-  const count = Math.round(6 + severity * 34);
-  const speed = 5 + severity * 12;
+  // Sized against what the camera actually is: orthographic at about 14 m of
+  // half-height, which puts a metre at roughly 39 px on a 1080-tall window. A
+  // 0.12 m spark is five pixels — real, emitted, and invisible from the seat.
+  const count = Math.round(8 + severity * 40);
+  const speed = 6 + severity * 14;
   for (let n = 0; n < count; n++) {
     // Along the normal with a wide scatter: a tight jet reads as a welder, and
     // a hit at an isometric camera angle has to throw some of it sideways to
@@ -598,13 +684,10 @@ export function emitImpactSparks(
     scratch.x = normal.x * speed + (Math.random() - 0.5) * speed * 1.2;
     scratch.y = normal.y * speed * 0.5 + 1.5 + Math.random() * speed * 0.5;
     scratch.z = normal.z * speed + (Math.random() - 0.5) * speed * 1.2;
-    particles.emit(
-      at,
-      scratch,
-      SPARK_COLOR,
-      0.1 + Math.random() * 0.14,
-      0.2 + Math.random() * 0.35,
-    );
+    // Hot metal, thrown hard and falling fast: a spark that floats is an ember.
+    particles.emit(at, scratch, SPARK_COLOR, 0.16 + Math.random() * 0.2, 0.25 + Math.random() * 0.4, {
+      drop: 1.6,
+    });
   }
 }
 
@@ -623,8 +706,8 @@ export function emitImpactBurst(
   severity: number,
 ): void {
   if (severity <= 0) return;
-  const count = Math.round(8 + severity * 26);
-  const speed = 3 + severity * 9;
+  const count = Math.round(10 + severity * 30);
+  const speed = 3.5 + severity * 10;
   for (let n = 0; n < count; n++) {
     // Spread around the ring rather than randomly: a random draw at this count
     // leaves visible gaps, and a puff with a hole in it reads as a mistake.
@@ -633,12 +716,15 @@ export function emitImpactBurst(
     scratch.x = Math.cos(angle) * out;
     scratch.y = 1.2 + Math.random() * 3.2;
     scratch.z = Math.sin(angle) * out;
+    // Dust hangs: it is the only one of the three that should still be in the
+    // air when the car has gone past.
     particles.emit(
       at,
       scratch,
       color,
-      0.5 + severity * 0.9 + Math.random() * 0.5,
-      0.35 + Math.random() * 0.4,
+      0.7 + severity * 1.3 + Math.random() * 0.6,
+      0.45 + Math.random() * 0.5,
+      { drop: 0.35 },
     );
   }
 }
@@ -659,22 +745,25 @@ export function emitCrashDebris(
   severity: number,
 ): void {
   if (severity <= 0) return;
-  const count = Math.round(4 + severity * 22);
+  const count = Math.round(6 + severity * 26);
   for (let n = 0; n < count; n++) {
     // A third of the car's momentum, which is enough to travel with it without
     // keeping pace: debris that stays level with the car looks bolted to it.
     scratch.x = carVelocity.x * 0.33 + (Math.random() - 0.5) * (4 + severity * 10);
-    scratch.y = 2 + Math.random() * (3 + severity * 5);
+    // Low, because it falls like steel. Thrown as high as the dust it comes
+    // with, a shard spends most of a three-second life in the air and reads as
+    // confetti rather than as wreckage.
+    scratch.y = 1.2 + Math.random() * (1.6 + severity * 2.4);
     scratch.z = carVelocity.z * 0.33 + (Math.random() - 0.5) * (4 + severity * 10);
     particles.emit(
       at,
       scratch,
       DEBRIS_COLORS[n % DEBRIS_COLORS.length]!,
-      0.12 + Math.random() * 0.2,
+      0.18 + Math.random() * 0.26,
       // Long enough to still be on the road as the car leaves, short enough
       // that a stage does not slowly fill with litter.
       2.2 + Math.random() * 1.4,
-      ground,
+      { floor: ground, drop: 2.4 },
     );
   }
 }

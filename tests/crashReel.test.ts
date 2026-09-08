@@ -175,4 +175,69 @@ describe('the crash reel', () => {
     expect(after.signsFallen[0]).toBe(1);
     expect(after.markersFallen[0]).toBe(1);
   });
+
+  it('keeps the impact events, so the cinematic can throw the burst again', () => {
+    /*
+     * Particles are not recorded and should not be — nine hundred of them
+     * thirty times a second is a different order of thing from forty component
+     * healths. The event is tiny, and re-throwing it at the right moment of the
+     * playback is better than a recording: the sparks then fly at the replay's
+     * own rate along with everything else.
+     *
+     * Without this the cinematic drew the *live* burst, thrown 1.75 s after the
+     * frame on screen and a car's length down the road from where the camera
+     * was pointing.
+     */
+    const reel = new CrashReel();
+    run(reel, 1.0, null, null);
+    reel.impact({
+      at: { x: 1, y: 0.5, z: 2 },
+      normal: { x: 0, y: 0, z: 1 },
+      velocity: { x: 0, y: 0, z: 20 },
+      ground: 0,
+      color: 0x8a7a5e,
+      severity: 0.8,
+    });
+    run(reel, 0.5, null, null);
+
+    const strip = reel.take(1.5)!;
+    // It sits where it happened: a second in, with half a second after it.
+    const whole = strip.impactsBetween(0, strip.duration);
+    expect(whole.length).toBe(1);
+    expect(whole[0]!.severity).toBe(0.8);
+    const at = whole[0]!.t - (strip.at(0).t);
+    expect(at).toBeGreaterThan(0.8);
+    expect(at).toBeLessThan(strip.duration);
+
+    // A playhead that has not reached it yet gets nothing...
+    expect(strip.impactsBetween(0, 0.5).length).toBe(0);
+    // ...and no window may hand back the same burst twice, or the cinematic
+    // throws it once per frame for as long as it is on that frame.
+    expect(strip.impactsBetween(0, at).length).toBe(1);
+    expect(strip.impactsBetween(at, strip.duration).length).toBe(0);
+  });
+
+  it('records a part that is working loose as well as one that has gone', () => {
+    // `isLoose` used to ask whether a part was `attached` and coded `dragging`
+    // at the same time, which is never — so every recorded part read as sound
+    // and the panel sitting proud that is the car's last warning snapped flat
+    // the instant the cinematic started.
+    const reel = new CrashReel();
+    const debris = new DebrisModel({ seed: 1 });
+    run(reel, 0.5, null, debris);
+    const sound = new RecordedDebris(reel.take(0.4)!.at(0));
+    expect(sound.isLoose('bumperFront')).toBe(false);
+
+    // Enough to work the mounts loose without taking it off the car: measured,
+    // 15 000 N·s through the nose leaves the front bumper at 34% and hanging.
+    debris.applyImpact({ x: 0, y: 0, z: 1.9 }, 15_000);
+    expect(debris.stateOf('bumperFront')).toBe('attached');
+    expect(debris.isLoose('bumperFront')).toBe(true);
+
+    run(reel, 0.5, null, debris);
+    const strip = reel.take(0.4)!;
+    const view = new RecordedDebris(strip.at(strip.duration));
+    expect(view.stateOf('bumperFront')).toBe('attached');
+    expect(view.isLoose('bumperFront')).toBe(true);
+  });
 });

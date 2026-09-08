@@ -20,6 +20,7 @@ import {
   RecordedDamage,
   RecordedDebris,
   type ReelFrame,
+  type ReelImpact,
 } from './game/crashReel.js';
 import { TouchControls } from './ui/touch.js';
 import { type QualityTier, RenderScale, guessTier, qualityFor } from './render/quality.js';
@@ -167,6 +168,23 @@ async function main(): Promise<void> {
   ghostView.visible = false;
   const particles = new ParticleField(scene);
   particles.density = quality.particles;
+  /**
+   * A second pool, for what a crash throws off.
+   *
+   * Not a tidiness split — a correctness one. Wheel spray on a loose surface
+   * fills the shared ring at about 2 400 particles a second, and a crash
+   * happens while the car is sliding on gravel with every wheel spraying: the
+   * measurement was that *every* shard of debris was recycled within half a
+   * second of a three-second lifetime, so the sparks, the dust and the debris
+   * were all real, all emitted, and all gone before anybody could see them.
+   *
+   * Its own field cannot be evicted, holds its brightness while the debris
+   * lies there (`fade` well under 1), and can be run on the replay's clock
+   * during the cinematic while the spray stays frozen.
+   */
+  const impacts = new ParticleField(scene, 320);
+  impacts.density = quality.particles;
+  impacts.fade = 0.6;
   const skids = new SkidMarks(scene);
   const precipitation = new Precipitation(scene);
   const mixer = new Mixer();
@@ -487,6 +505,7 @@ const params = new URLSearchParams(location.search);
     camera.jumpTo(world.state().position);
     stuckFor = 0;
     particles.clear();
+    impacts.clear();
     skids.clear();
     vision.reset();
 
@@ -577,6 +596,7 @@ const params = new URLSearchParams(location.search);
       vision.reset();
       applyCarCondition();
       particles.clear();
+      impacts.clear();
       skids.clear();
       settled = false;
       terminal = null;
@@ -990,6 +1010,14 @@ const params = new URLSearchParams(location.search);
       zoom: 8,
       auto: { label: 'REPLAY', until: strip.duration },
     });
+    // Emptied so the cinematic can throw the burst again from the start.
+    //
+    // What is in there now is the *live* burst, half a second past the frame
+    // the replay opens on and a car's length down the road from it — the same
+    // class of wrongness as the skid marks and the shed parts, and the reason
+    // the reel keeps the impact events at all.
+    impacts.clear();
+
     // Where the race clock has to be put back to: the replay pauses the world,
     // and a crash that gave you two free seconds would be worth having.
     crashReplayFrom = race.time;
@@ -1007,6 +1035,7 @@ const params = new URLSearchParams(location.search);
     // nobody else writes, so it has to be put back here.
     skids.showUpTo(null);
     debrisView.group.visible = true;
+    particles.points.visible = true;
     // The world resumes from exactly where it stopped, so nothing is owed —
     // but `settleRun` and the ghost both read `race.time`, and the frame that
     // closes the replay must not hand back a clock that drifted while paused.
@@ -1211,7 +1240,9 @@ const params = new URLSearchParams(location.search);
 
   /** Screen pixels per world metre under the orthographic camera. */
   const updateParticleScale = () => {
-    particles.setScale(window.innerHeight / (2 * camera.effectiveViewSize));
+    const scale = window.innerHeight / (2 * camera.effectiveViewSize);
+    particles.setScale(scale);
+    impacts.setScale(scale);
   };
   window.addEventListener('resize', onResize);
   onResize();
@@ -1413,22 +1444,81 @@ const params = new URLSearchParams(location.search);
       }
     }
 
-    emitImpactSparks(particles, at, normal, severity);
-    if (ground !== null && surface) {
-      BURST_COLOR.setHex(surface.color).offsetHSL(0, 0, 0.1);
+    const hit = {
+      at,
+      normal,
+      velocity: { ...state.velocity },
+      ground,
+      color: surface?.color ?? 0x8a7a5e,
+      severity,
+    };
+    throwRecordedFx(hit);
+    // And kept, so the cinematic can throw it again at the right moment rather
+    // than showing the live burst from 1.75 s after the frame on screen.
+    crashReel.impact(hit);
+  };
+
+  /**
+   * Throw one impact's three layers. The only place that emits them.
+   *
+   * Takes a plain record rather than the world, because it is called from two
+   * clocks: live, at the moment of the hit, and again from inside the crash
+   * cinematic when the playhead reaches that moment. Feeding it a recording is
+   * the whole reason the replay can show the sparks at all.
+   */
+  const throwRecordedFx = (hit: ReelImpact | Omit<ReelImpact, 't'>) => {
+    emitImpactSparks(impacts, hit.at, hit.normal, hit.severity);
+    if (hit.ground !== null) {
+      BURST_COLOR.setHex(hit.color).offsetHSL(0, 0, 0.1);
       // From the ground under the contact, not from the contact: the dust is
       // the *ground* being kicked up, and a cloud that starts at bumper height
       // hangs in the air like smoke.
-      emitImpactBurst(particles, { x: at.x, y: ground, z: at.z }, BURST_COLOR, severity);
+      emitImpactBurst(
+        impacts,
+        { x: hit.at.x, y: hit.ground, z: hit.at.z },
+        BURST_COLOR,
+        hit.severity,
+      );
     }
     emitCrashDebris(
-      particles,
-      at,
-      state.velocity,
+      impacts,
+      hit.at,
+      hit.velocity,
       // With no ground under it — mid-air, mid-roll — the shards simply fall
       // and fade, which is better than resting on a floor that is not there.
-      ground ?? -Infinity,
-      severity,
+      hit.ground ?? -Infinity,
+      hit.severity,
+    );
+  };
+
+  /**
+   * One frame into the crash reel.
+   *
+   * Wall time, because it is a record of what a person saw and the world's
+   * clock is the one being slowed down. Shared with the harness seek loops for
+   * the usual reason — they step the world directly and never call `frame()`,
+   * and a reel fed only from the frame loop is empty when `?replay=1` asks for
+   * a cinematic, so the whole thing was unphotographable and quietly did
+   * nothing rather than failing.
+   */
+  const captureReel = (elapsed: number, alpha: number) => {
+    crashReel.capture(
+      elapsed,
+      world.renderTransform(alpha),
+      world.state(),
+      // The eased view, not the live model: the reel is a record of what a
+      // person saw, and a fold that is halfway in on screen has to be halfway
+      // in when the cinematic replays that instant.
+      shownDamage,
+      world.cars[0]?.debris ?? null,
+      world.wildlife?.animals ?? [],
+      {
+        // The roadside as it stood, so the replay is not drawn against the road
+        // the crash left behind.
+        skidStamp: skids.stamp,
+        signs: world.signs?.all ?? [],
+        markers: world.markers?.all ?? [],
+      },
     );
   };
 
@@ -1552,8 +1642,24 @@ const params = new URLSearchParams(location.search);
     // is still there behind the replay, and the frame that closes it must not
     // start easing a fold that finished two seconds ago.
     shownDamage.advance(dt);
+    const was = replayUi.state?.time ?? 0;
     const at = replayUi.advance(dt);
     if (state.reel) {
+      /*
+       * The sparks, the dust and the debris, thrown again at the moment they
+       * belong to.
+       *
+       * The live burst is 1.75 s ahead of the frame on screen and at a place
+       * this camera is no longer pointed at, so the spray field is frozen and
+       * hidden for the cinematic and the impact field is emptied and replayed
+       * into. It runs on the *replay's* clock rather than the wall's, which is
+       * what makes the burst fly apart in slow motion with everything else —
+       * and what keeps a three-second shard alive across a playback that takes
+       * five seconds of real time to show one and three quarters.
+       */
+      particles.points.visible = false;
+      for (const hit of state.reel.impactsBetween(was, at)) throwRecordedFx(hit);
+      impacts.update(dt * state.rate);
       // The crash cinematic: the car as it *was*, with the damage it had at
       // that moment and whatever it was about to hit still standing there.
       const frame = state.reel.at(at);
@@ -1582,6 +1688,7 @@ const params = new URLSearchParams(location.search);
       camera.setViewSize(state.zoom);
       camera.jumpTo(frame.position);
     } else {
+      impacts.update(dt);
       const sample = state.player.sampleAt(at);
       if (sample) {
         carView.updateFromGhost(sample);
@@ -1604,7 +1711,11 @@ const params = new URLSearchParams(location.search);
     key.target.position.copy(key.position).sub(new THREE.Vector3(sun.x, sun.y, sun.z));
     key.target.updateMatrixWorld();
 
-    particles.update(dt);
+    // The spray is frozen for the cinematic, not advanced and hidden: hiding it
+    // alone would age five real seconds of gravel while the world was paused,
+    // and the road would come back out of the replay with nothing on it. Photo
+    // mode is the other case and has always run it.
+    if (!state.reel) particles.update(dt);
     updateParticleScale();
     visionPass.render(
       scene,
@@ -1706,9 +1817,11 @@ const params = new URLSearchParams(location.search);
         updateWheelEffects(particles, skids, world.state().wheels, world.state().velocity, world.dt);
         reactToImpact(world.state(), world.dt);
         shownDamage.advance(world.dt);
+        captureReel(world.dt, 1);
         carView.update(world.renderTransform(1), world.state(), shownDamage, world.debris);
         dragEffects(world.dt);
         particles.update(world.dt);
+        impacts.update(world.dt);
         advanceVision(world.dt);
         // The crowd scatters as the car arrives, and a screenshot taken at the
         // end of a seek should show a scattered crowd rather than a tidy one.
@@ -1729,7 +1842,9 @@ const params = new URLSearchParams(location.search);
           // reaction rather than merely bending the car.
           reactToImpact(world.state(), world.dt);
           shownDamage.advance(world.dt);
+          captureReel(world.dt, 1);
           particles.update(world.dt);
+          impacts.update(world.dt);
           const failure = [...(world.damage?.failures ?? [])][0];
           if (failure) race!.retire(FAILURE_LABEL[failure]);
         }
@@ -1799,7 +1914,12 @@ const params = new URLSearchParams(location.search);
     draw() {
       updateParticleScale();
       precipitation.update(1 / 60, camera.focus, window.innerHeight / (2 * camera.effectiveViewSize));
-      drawOnce(1, 1 / 60);
+      // A cinematic is drawn by the path that draws cinematics. `draw` used to
+      // call `drawOnce` unconditionally, so `?replay=1` opened the replay,
+      // photographed the live scene behind it, and looked for all the world
+      // like the replay simply rendered the present.
+      if (replayUi.active) drawReplay(1 / 60);
+      else drawOnce(1, 1 / 60);
       window.RSC!.rendered = true;
     },
     async finishWithAi(timeout = 240) {
@@ -1868,6 +1988,12 @@ const params = new URLSearchParams(location.search);
         // Multiplayer, for the two-page check: how many cars are in this
         // world, where they are, and who this machine thinks it is talking to.
         skidQuads: skids.laid,
+        // What the crash is throwing, and whether the cinematic is up. Both are
+        // otherwise only answerable by looking, and "I cannot see the sparks"
+        // is exactly the report that needs a number rather than an opinion.
+        crashFx: impacts.alive,
+        crashShards: impacts.survivors(2),
+        replay: replayUi.state?.auto ? 'crash' : replayUi.active ? 'photo' : null,
         dents: (world.damage?.dents.length ?? 0) + '/' + (career.profile.carDents?.length ?? 0),
         markersDown: world.markers?.flattened ?? 0,
         recorded: recorder.frameCount,
@@ -1968,6 +2094,7 @@ const params = new URLSearchParams(location.search);
         carView.update(world!.renderTransform(1), state(), world!.damage, world!.debris);
         dragEffects(world!.dt);
         particles.update(world!.dt);
+        impacts.update(world!.dt);
       }
       camera.jumpTo(world!.state().position);
     }
@@ -2006,6 +2133,7 @@ const params = new URLSearchParams(location.search);
           world!.dt,
         );
         particles.update(world!.dt);
+        impacts.update(world!.dt);
       }
       camera.jumpTo(world!.state().position);
     }
@@ -2314,29 +2442,9 @@ const params = new URLSearchParams(location.search);
     }
 
     // The crash reel: what the last couple of seconds looked like, so the
-    // cinematic can replay them rather than re-stage them. Wall time, because
-    // it is a record of what a person saw. Not while a menu is up and not in a
-    // network race, where there is no cinematic to feed.
+    // cinematic can replay them rather than re-stage them.
     if (!garage.isOpen && !session && race?.phase === 'running') {
-      const t = world.renderTransform(alpha);
-      crashReel.capture(
-        wallDt,
-        t,
-        state,
-        // The eased view, not the live model: the reel is a record of what a
-        // person saw, and a fold that is halfway in on screen has to be halfway
-        // in when the cinematic replays that instant.
-        shownDamage,
-        world.cars[0]?.debris ?? null,
-        world.wildlife?.animals ?? [],
-        {
-          // The roadside as it stood, so the replay is not drawn against the
-          // road the crash left behind.
-          skidStamp: skids.stamp,
-          signs: world.signs?.all ?? [],
-          markers: world.markers?.all ?? [],
-        },
-      );
+      captureReel(wallDt, alpha);
     }
 
     // Spray, marks and sound all read straight off tyre saturation — the same
@@ -2370,6 +2478,7 @@ const params = new URLSearchParams(location.search);
       mixer.quiet();
     }
     particles.update(dt);
+    impacts.update(dt);
     updateParticleScale();
     precipitation.update(dt, camera.focus, window.innerHeight / (2 * camera.effectiveViewSize));
 
