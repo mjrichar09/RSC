@@ -22,9 +22,36 @@
  *     that arrives late is worse than one that never arrives at all: the
  *     netcode is built to cover a gap and cannot use stale news, so resending
  *     it would cost latency to deliver something that gets thrown away.
+ *
+ * That second rule was written about *retransmission* and then not applied to
+ * *queueing*, which is where the whole thing came apart on a phone. A data
+ * channel rides SCTP, and SCTP applies congestion control to the association
+ * even where the channel itself is unordered with no retransmits — so on a leg
+ * that cannot carry the offered rate the packets are not dropped, they wait.
+ * `send` queued into that unconditionally.
+ *
+ * Measured on the loopback wire with a packet-rate limit, driving a slalom for
+ * twenty seconds: at 70 packets a second of uplink the guest took 1 snap and
+ * the queue stayed at 20 ms; at 55 it took 56 snaps and the queue reached 1.3
+ * seconds; at 35 it took 111 snaps and 13.5 seconds. A cliff, and it sits just
+ * under the rate the guest was sending at. Everything on the far side of it is
+ * a guest whose inputs reach the host seconds after they were pressed.
+ *
+ * So the fast channel now refuses to queue. See `FAST_BACKLOG`.
  */
 
 import type { Link, NetMessage } from './protocol.js';
+
+/**
+ * Bytes already waiting on the fast channel before a new one is dropped.
+ *
+ * About one packet on the wire. More than that outstanding means the previous
+ * message has not left yet, so this one cannot be timely either — and the
+ * whole value of an input or a snapshot is that it is current. Deliberately
+ * far below the browser's own 64 kB default, which is sized for file transfer:
+ * 64 kB of snapshots is ninety of them, or four and a half seconds.
+ */
+const FAST_BACKLOG = 1500;
 
 /**
  * STUN only. A TURN relay would make connections work behind the strictest
@@ -443,6 +470,8 @@ export class RtcLink implements Link {
   private closed = false;
   /** Queued until the channels open, so a `hello` sent too early survives. */
   private pending: NetMessage[] = [];
+  /** Fast packets thrown away because the channel was already behind. */
+  private dropped = 0;
   private openNow!: () => void;
   /** Resolves when the reliable channel is up and messages will actually go. */
   readonly opened: Promise<void>;
@@ -483,14 +512,46 @@ export class RtcLink implements Link {
 
   send(message: NetMessage): void {
     if (this.closed) return;
-    const channel = isFast(message) ? this.fast : this.control;
+    const fast = isFast(message);
+    const channel = fast ? this.fast : this.control;
     if (channel.readyState !== 'open') {
       // Only the reliable traffic is worth holding: an input from before the
       // connection opened is of no interest by the time it does.
-      if (!isFast(message)) this.pending.push(message);
+      if (!fast) this.pending.push(message);
+      return;
+    }
+    // The fast channel never queues. If a packet's worth is already waiting,
+    // this leg is not keeping up with realtime traffic, and adding to the
+    // queue would deliver this message late *and* push the next one later
+    // still. Dropping it costs one input or one snapshot, which the netcode
+    // covers; queueing it costs every packet after it, for as long as the
+    // congestion lasts, which the netcode cannot cover at all.
+    if (fast && channel.bufferedAmount > FAST_BACKLOG) {
+      this.dropped++;
       return;
     }
     channel.send(JSON.stringify(message));
+  }
+
+  /** Fast packets dropped rather than queued, so a bad link is diagnosable. */
+  get droppedForBacklog(): number {
+    return this.dropped;
+  }
+
+  /** Bytes waiting on the fast channel right now. */
+  get backlog(): number {
+    return this.fast.readyState === 'open' ? this.fast.bufferedAmount : 0;
+  }
+
+  /**
+   * Behind on realtime traffic, so the sender should ease off.
+   *
+   * Half the drop threshold, deliberately: by the time packets are actually
+   * being thrown away the radio has already carried them, and the point of
+   * slowing down is to not pay for that.
+   */
+  get congested(): boolean {
+    return this.backlog > FAST_BACKLOG / 2;
   }
 
   onMessage(handler: (message: NetMessage) => void): void {

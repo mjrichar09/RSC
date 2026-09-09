@@ -623,6 +623,39 @@ now — steering first and squared, because steering is the only channel that
 changes a car's *course* — and the brake is held to the end, since a car nobody
 is driving should be slowing down.
 
+**A guest was bad over mobile and none of the obvious suspects were the cause.**
+Latency, jitter and loss all measured fine — 200 ms with 4% burst loss holds
+together, and the *asymmetric* profile measured better than the symmetric one at
+the same round trip. What was actually happening is that a leg offered more
+packets than it can carry does not drop the excess, it **queues** it: a data
+channel rides SCTP, which applies congestion control to the association even
+where the channel is unordered with no retransmits. The guest was sending 60
+inputs a second into a mobile uplink that is narrow in *packets* rather than in
+bytes. Measured over a 20 s slalom, it is a cliff sitting just under the send
+rate:
+
+| uplink | snaps | worst error | queued |
+|---|---|---|---|
+| 70 pkt/s | 1 | 1.44 m | 20 ms |
+| 55 pkt/s | 56 | 4.41 m | 1.3 s |
+| 45 pkt/s | 107 | 5.11 m | 6.0 s |
+| 35 pkt/s | 111 | 5.17 m | 13.5 s |
+
+Two things fix it and both are needed. **The fast channel never queues** — over
+`FAST_BACKLOG` bytes outstanding it drops instead, turning congestion into the
+loss the netcode already covers. And **the input rate follows the link**:
+`Link.congested` comes from the transport, because the transport is the only
+layer that can see its own send queue. The rate needs hysteresis (`EASE_OFF`) or
+it fights its own effect — backing off empties the queue, an empty queue reads
+as healthy, and going straight back to full rate refills it. With both: zero
+drops at every capacity, 49 ms of queue, and healthy links unchanged.
+
+**A wire with no capacity cannot show any of that**, which is why nothing found
+it for months. `LoopbackWire` takes `capacity` (packets/s), `uplink` (extra
+one-way delay toward the host) and `burst` (mean run of consecutive drops) now.
+The asymmetry found nothing and is kept anyway: it is cheap, and "half a round
+trip is the one-way delay" is an assumption worth being able to falsify.
+
 **`LoopbackWire` had fixed latency, so it could never reorder**, and every test
 written against it was quietly asserting that reordering does not happen — which
 is exactly what the unordered `fast` channel does not promise. It takes a
@@ -637,6 +670,15 @@ everything healthy. Drive a slalom.
 
 Three things about the transport are easy to get wrong twice:
 
+- **`npm run netcheck` must not need the broker.** It drives the invite-code
+  path, which is peer to peer and needs no infrastructure — so pointing it at
+  the default broker made it a coin toss on whether this machine could reach a
+  live service. When it cannot, the host's lobby re-renders around the failing
+  publish and the click on "Make an invite" loses its own button to the
+  re-render: a 30-second timeout on an element that is plainly there, and
+  nothing to do with the netcode. It runs with `rooms=` empty. The room-code
+  path is covered where it belongs — `uicheck` against a dead address,
+  `tests/rooms.test.ts` against the real logic in process.
 - **`npm run netcheck` drives both directions.** It used to drive only the host
   and check the guest saw it, which left "the joiner's car does not move on my
   screen" untestable — guest inputs travelling *up* the wire and being applied

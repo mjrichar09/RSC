@@ -26,8 +26,24 @@ export const PROTOCOL_VERSION = 1;
 /** How many cars can share a race. */
 export const MAX_PLAYERS = 4;
 
-/** Guest input send rate, Hz. */
+/**
+ * Guest input send rate, Hz, and the slower rate used on a struggling link.
+ *
+ * Two of them because neither number is right on its own. Measured over twenty
+ * seconds of slalom: at 60 Hz on a healthy link the guest's mean standing error
+ * is 0.55 m and at 30 Hz it is 0.80 m, because the host's picture of the wheel
+ * is twice as old. But a mobile uplink is narrow in *packets* rather than in
+ * bytes, and 60 a second is more than some of them can carry — at 35 packets a
+ * second of capacity, 60 Hz had 510 of 1200 inputs thrown away where 30 Hz had
+ * none, and measured worse for it.
+ *
+ * So the rate follows the link: full speed while the transport says it is
+ * keeping up, half speed while it is not. `Link.congested` is that signal, and
+ * it comes from the transport because the transport is the only thing that can
+ * see its own queue.
+ */
 export const INPUT_HZ = 60;
+export const INPUT_HZ_CONGESTED = 30;
 /** Host snapshot rate, Hz. Below about 15 the interpolation starts to show. */
 export const SNAPSHOT_HZ = 20;
 
@@ -132,6 +148,14 @@ export interface Link {
   close: () => void;
   /** Round-trip time in milliseconds, or null before the first ping. */
   readonly rtt: number | null;
+  /**
+   * True while this link is behind on its realtime traffic.
+   *
+   * The transport is the only layer that can see its own send queue, and the
+   * only one that knows a packet handed to it now will not leave now. Optional
+   * so a link that cannot tell simply never claims to be struggling.
+   */
+  readonly congested?: boolean;
 }
 
 /** Pack a snapshot's floats a little, since these go out twenty times a second. */

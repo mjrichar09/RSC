@@ -49,7 +49,22 @@ async function main(): Promise<void> {
   // Small and plain: two pages rendering a full-size scene through software
   // WebGL run at a few frames a second, and the simulation is capped at a
   // quarter-second per frame, so a big window makes this a test of SwiftShader.
-  const url = 'http://localhost:5178/?vision=0';
+  /*
+   * `rooms=` empty: no broker, deliberately.
+   *
+   * This check drives the invite-code path, which is peer to peer and needs no
+   * infrastructure at all — so depending on a live external service to run it
+   * is not a gate, it is a coin toss. It was one: with the default broker
+   * configured and no route to it from this machine, the host's lobby re-renders
+   * around the failing publish and the click on "Make an invite" loses its own
+   * button to the re-render, which reads as a mysterious 30-second timeout on an
+   * element that is plainly right there.
+   *
+   * The room-code path keeps its own coverage where it belongs: `uicheck` points
+   * it at a dead address and asserts what the lobby says, and `tests/rooms.test.ts`
+   * drives the real broker logic in process.
+   */
+  const url = 'http://localhost:5178/?vision=0&rooms=';
 
   const executablePath = findChromium();
   const browser = await chromium.launch({

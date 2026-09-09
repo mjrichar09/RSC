@@ -43,6 +43,7 @@ import { clamp, length, lerpVec, slerp, sub } from '../sim/math.js';
 import {
   type CarSnapshot,
   INPUT_HZ,
+  INPUT_HZ_CONGESTED,
   type Link,
   type NetMessage,
   type PlayerId,
@@ -62,6 +63,16 @@ export const INTERP_DELAY = 0.1;
 
 /** Seconds over which a prediction error is blended away. */
 const BLEND_TIME = 0.25;
+
+/**
+ * How long the input rate stays halved after the link last looked congested.
+ *
+ * Two seconds, because the thing being waited out is a congested radio leg and
+ * those clear in seconds rather than in frames. Shorter and the rate flaps
+ * against its own effect; much longer and a link that briefly hiccuped drives
+ * at half rate for the rest of the corner.
+ */
+const EASE_OFF = 2;
 
 /** How much of our own past to keep, seconds. Comfortably over a round trip. */
 const HISTORY_SECONDS = 1;
@@ -165,6 +176,8 @@ export class RaceGuest {
   private playback = 0;
 
   private seq = 0;
+  /** Seconds left at the reduced input rate. See where it is set. */
+  private easeOff = 0;
   private sinceInput = 0;
   private sincePing = 0;
   private clock = 0;
@@ -474,7 +487,24 @@ export class RaceGuest {
     this.sinceInput += dt;
     this.sincePing += dt;
 
-    if (this.open && this.sinceInput >= 1 / INPUT_HZ) {
+    /*
+     * Full rate while the link is keeping up, half while it is not.
+     *
+     * Sending into a queue that is already behind buys nothing: the packet is
+     * dropped by the transport anyway, and on a phone it costs a radio
+     * transmission to find that out.
+     *
+     * Held for a while after the link looks clear again, and that is not
+     * caution — it is what stops the two rates fighting. Backing off empties
+     * the queue, an empty queue reads as healthy, and going straight back to
+     * full rate fills it again; measured, that flapping left more standing
+     * error than either fixed rate. `EASE_OFF` is long enough that the link
+     * has to be genuinely clear, not merely clear for one packet.
+     */
+    if (this.link.congested) this.easeOff = EASE_OFF;
+    else this.easeOff = Math.max(this.easeOff - dt, 0);
+    const rate = this.easeOff > 0 ? INPUT_HZ_CONGESTED : INPUT_HZ;
+    if (this.open && this.sinceInput >= 1 / rate) {
       this.sinceInput = 0;
       this.link.send({ t: 'input', seq: ++this.seq, input: { ...localInput } });
     }

@@ -27,6 +27,9 @@ import { codec } from '../src/net/webrtc.js';
 
 const DT = 1 / 120;
 
+/** Full throttle and a fixed lock: a car going round and round, for the host. */
+const CIRCLE: DriverInput = { throttle: 0.7, brake: 0, steer: 0.35, handbrake: 0 };
+
 const SETUP = {
   stageId: 'test',
   variantId: 'day-clear',
@@ -35,12 +38,25 @@ const SETUP = {
 };
 
 /** A host and one guest, wired together, both with a world of `cars` cars. */
-async function pair(options: { latency?: number; loss?: number; jitter?: number; cars?: number } = {}) {
+async function pair(
+  options: {
+    latency?: number;
+    uplink?: number;
+    loss?: number;
+    burst?: number;
+    jitter?: number;
+    capacity?: number;
+    cars?: number;
+  } = {},
+) {
   const cars = options.cars ?? 2;
   const wire = new LoopbackWire({
     latency: options.latency ?? 0,
+    uplink: options.uplink ?? 0,
     loss: options.loss ?? 0,
+    burst: options.burst ?? 1,
     jitter: options.jitter ?? 0,
+    capacity: options.capacity ?? 0,
     // Seeded, so a run that fails fails again.
     random: (() => {
       let s = 12345;
@@ -81,7 +97,28 @@ async function pair(options: { latency?: number; loss?: number; jitter?: number;
     }
   };
 
-  return { wire, host, guest, hostWorld, guestWorld, run };
+  /**
+   * The same, with the guest driving a slalom.
+   *
+   * Its own helper because the clock has to carry across calls: a test that
+   * samples something every step calls this one step at a time, and a slalom
+   * restarted from zero on each call is a constant input wearing a disguise.
+   */
+  let slalomClock = 0;
+  const runSlalom = (steps: number) => {
+    for (let i = 0; i < steps; i++) {
+      slalomClock += DT;
+      host.step(CIRCLE, DT);
+      host.maybeSnapshot(DT, progressOf);
+      guest.step(
+        { throttle: 0.7, brake: 0, steer: Math.sin(slalomClock * 1.6) * 0.6, handbrake: 0 },
+        DT,
+      );
+      wire.advance(DT * 1000);
+    }
+  };
+
+  return { wire, host, guest, hostWorld, guestWorld, run, runSlalom };
 }
 
 /** How far apart the host's car `hostCar` is from the guest's `guestCar`. */
@@ -375,7 +412,6 @@ describe('snapshots coming down', () => {
  * netcode. A circle keeps both copies on the ground and puts a continuous
  * rotation through the reconciliation as a bonus.
  */
-const CIRCLE: DriverInput = { throttle: 0.7, brake: 0, steer: 0.35, handbrake: 0 };
 
 describe('results', () => {
   it('carries a guest finish to the host and to the other guests', async () => {
@@ -730,4 +766,102 @@ describe("somebody else's car, on a guest", () => {
     // The assertion is that the lag is *bounded*, not that it is absent.
     expect(Math.abs(moved - hostMoved)).toBeLessThan(9);
   }, 60_000);
+});
+
+/**
+ * A phone on a mobile network, which is where this stopped being pleasant.
+ *
+ * Reported as "works fine on the same network, really bad for the guest over
+ * mobile". Latency, jitter and loss turned out not to be the cause at all — a
+ * guest at 200 ms with 4% burst loss holds together fine, and the *asymmetric*
+ * profile measured better than the symmetric one at the same round trip. What
+ * a symmetric, uncapped wire could not reproduce was the actual fault:
+ *
+ * A leg that is offered more packets than it can carry does not drop the
+ * excess, it queues it. WebRTC data channels ride SCTP, which applies
+ * congestion control to the association even where the channel is unordered
+ * with no retransmits — so nothing is lost, everything is simply late, and
+ * each packet is later than the one before it. The guest was sending sixty
+ * inputs a second into a leg that is narrow in *packets* rather than in bytes.
+ *
+ * Measured over twenty seconds of slalom before the fix:
+ *
+ *     uplink 70 pkt/s    1 snap     1.44 m worst    20 ms queued
+ *     uplink 55 pkt/s   56 snaps    4.41 m worst   1337 ms queued
+ *     uplink 45 pkt/s  107 snaps    5.11 m worst   6031 ms queued
+ *     uplink 35 pkt/s  111 snaps    5.17 m worst  13465 ms queued
+ *
+ * A cliff, sitting just under the rate the guest was sending at, with a guest
+ * whose inputs reach the host seconds after they were pressed on the far side
+ * of it. Two things fixed it and both are needed: the fast channel refuses to
+ * queue, so congestion becomes loss the netcode already covers; and the input
+ * rate halved, so far fewer links reach the cliff at all.
+ */
+const MOBILE = { latency: 70, uplink: 60, jitter: 50, loss: 0.04, burst: 8 };
+
+describe('a guest on a mobile link', () => {
+  it('holds together at 200 ms with burst loss', async () => {
+    // A slalom rather than a fixed lock, and not only for the usual reason. A
+    // car held at 0.35 of lock on full throttle is balanced on its tyres, where
+    // two copies of the same physics diverge on their own and the snaps are
+    // chaos rather than netcode — measured, that input snaps 38 times on a
+    // perfect link. The wire is not what this is meant to be measuring.
+    const { guest, runSlalom } = await pair(MOBILE);
+    runSlalom(120 * 20);
+    // Corrections are a blend; a snap is the exception `HARD_SNAP` exists for.
+    expect(guest.stats.snaps * 10).toBeLessThan(guest.stats.blends);
+  });
+
+  it('does not fall off a cliff when the uplink runs out of packets', async () => {
+    /*
+     * The regression this whole investigation was about. 35 packets a second
+     * is well under the rate the guest offers even after halving it, so the
+     * link is genuinely saturated and packets are genuinely being dropped —
+     * the point is that dropping them is survivable and queueing them is not.
+     */
+    const { hostWorld, guestWorld, guest, runSlalom } = await pair({ ...MOBILE, capacity: 35 });
+    runSlalom(120 * 20);
+
+    // Before the fast channel refused to queue: 111 snaps and 5.17 m.
+    expect(guest.stats.snaps).toBeLessThan(10);
+    expect(guest.stats.worstError).toBeLessThan(2.5);
+    expect(disagreement(hostWorld, guestWorld, guest.car, 0)).toBeLessThan(3);
+  });
+
+  it('never lets the uplink queue grow without bound', async () => {
+    // The mechanism, measured directly rather than through its consequences.
+    // Before: 13.5 seconds of backlog. A queue this size is the fault itself.
+    const { wire, runSlalom } = await pair({ ...MOBILE, capacity: 35 });
+    let worst = 0;
+    for (let i = 0; i < 120 * 20; i++) {
+      runSlalom(1);
+      worst = Math.max(worst, wire.backlog(true));
+    }
+    expect(worst).toBeLessThan(250);
+  });
+
+  it('plays the other car smoothly through jitter wider than the buffer', async () => {
+    /*
+     * The other half of "bad": a rival played back from an under-filled buffer
+     * runs out of samples, extrapolates, and lurches when the next packet
+     * lands. Nothing measured it, so this counts frames in which the rival
+     * barely moved. It reads 0% at every jitter up to 250 ms — and the check
+     * that it is measuring anything at all is that with `INTERP_DELAY` set to
+     * zero it climbs to 9%, which is how this number was trusted.
+     */
+    const { guestWorld, runSlalom } = await pair({ latency: 70, jitter: 250, loss: 0.02, burst: 6 });
+    const steps: number[] = [];
+    let last: { x: number; y: number; z: number } | null = null;
+    for (let i = 0; i < 120 * 20; i++) {
+      runSlalom(1);
+      const r = guestWorld.cars[1]!.vehicle.body.translation();
+      // After the launch: a car accelerating from rest genuinely moves very
+      // little per frame, and counting that as a stall measures the start line.
+      if (last && i > 120 * 5) steps.push(Math.hypot(r.x - last.x, r.y - last.y, r.z - last.z));
+      last = { x: r.x, y: r.y, z: r.z };
+    }
+    const mean = steps.reduce((a, b) => a + b, 0) / steps.length;
+    const stalls = steps.filter((d) => d < mean * 0.25).length / steps.length;
+    expect(stalls).toBeLessThan(0.02);
+  });
 });
