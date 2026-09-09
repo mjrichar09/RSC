@@ -7,6 +7,7 @@
  */
 
 import type { DriverInput } from '../sim/input.js';
+import { isTyping } from './typing.js';
 import { clamp, moveToward } from '../sim/math.js';
 
 const KEY_STEER_RATE = 3.2;
@@ -47,6 +48,10 @@ export class Controls {
     target.addEventListener('keydown', (e) => {
       const ev = e as KeyboardEvent;
       if (ev.repeat) return;
+      // Not while there is a text field with the caret in it. Every action
+      // below is a bare letter or digit, so typing a room code drove the game:
+      // `RMX-2XU` restarted the run, muted the sound and jumped to a stage.
+      if (isTyping()) return;
       this.held.add(ev.code);
       if (ev.code === 'KeyR' || ev.code === 'Enter') this.onReset?.();
       if (ev.code === 'KeyT') this.onToggleTuning?.();

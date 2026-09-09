@@ -26,7 +26,14 @@ import { DEFAULT_LIVERY, LIVERIES, liveryById } from '../data/liveries.js';
 import { RaceHost } from '../net/host.js';
 import { RaceGuest } from '../net/guest.js';
 import { acceptInvite, createInvite, type Invite, type RtcLink } from '../net/webrtc.js';
-import { formatRoomCode, makeRoomCode, normaliseRoomCode, type Room } from '../net/room.js';
+import {
+  ROOM_ALPHABET,
+  ROOM_CODE_LENGTH,
+  formatRoomCode,
+  makeRoomCode,
+  normaliseRoomCode,
+  type Room,
+} from '../net/room.js';
 import { brokerFor } from '../net/roomHttp.js';
 import type { BoardEntry, Leaderboard } from '../net/leaderboard.js';
 import { escapeHtml } from './escape.js';
@@ -92,6 +99,12 @@ export class MultiplayerPanel {
   private served: ServedRoom | null = null;
   /** What the guest typed, kept so a bad code stays on screen to be corrected. */
   private roomEntry = '';
+  /**
+   * Whether this is a machine driven by a thumb, which decides how a room code
+   * is entered. Told rather than sniffed, from the same first-touch signal that
+   * puts the on-screen driving controls up.
+   */
+  private touch = false;
   private status = '';
   private busy = false;
   private stageIndex = 0;
@@ -113,6 +126,19 @@ export class MultiplayerPanel {
 
   /** Raised when the player edits their name, so one identity is kept. */
   onName: ((name: string) => void) | null = null;
+
+  /**
+   * Switch the room-code field between a text input and the built-in keypad.
+   *
+   * Re-rendered on the change, but only while the lobby is actually open: the
+   * first touch usually lands on the front door, long before there is a lobby
+   * to redraw.
+   */
+  setTouchInput(on: boolean): void {
+    if (this.touch === on) return;
+    this.touch = on;
+    if (this.open) this.render();
+  }
 
   /** Set the name from the saved profile, without raising a change. */
   setName(name: string): void {
@@ -286,6 +312,34 @@ export class MultiplayerPanel {
    * handshake. Reading the clipboard is one, and the textarea stays for the
    * browsers that refuse to be read.
    */
+  /**
+   * Take a room code from the clipboard.
+   *
+   * The keypad covers a code read out loud; this covers the far more common
+   * one that arrives in a message. Normalised on the way in, so pasting the
+   * whole line somebody sent — dash, spaces, lower case and all — works.
+   */
+  private async pasteRoom(): Promise<void> {
+    try {
+      const text = await navigator.clipboard.readText();
+      const code = normaliseRoomCode(text);
+      if (!code) {
+        this.say('That did not look like a room code. Six characters, no O or I.');
+        this.render();
+        return;
+      }
+      this.roomEntry = code;
+      this.render();
+      void this.joinByRoom(code);
+    } catch {
+      // Refused, which several browsers do without a user gesture they like.
+      // The keypad is right there, so this is a shortcut failing rather than
+      // the path failing.
+      this.say('Could not read the clipboard — tap the code in instead.');
+      this.render();
+    }
+  }
+
   private async pasteReply(): Promise<void> {
     try {
       const text = await navigator.clipboard.readText();
@@ -999,6 +1053,64 @@ export class MultiplayerPanel {
     return url.toString();
   }
 
+  /**
+   * The room code field, and on a phone a keypad of its own to fill it.
+   *
+   * A phone's own keyboard is the wrong tool for this in three separate ways,
+   * and all three were reported together. It autocorrects — a room code is six
+   * characters of nonsense and every soft keyboard on earth wants to make a
+   * word of it. It takes half the screen, on a device that is 390 px tall in
+   * landscape. And its key presses reach the window, where the game reads bare
+   * letters as commands.
+   *
+   * A keypad built from `ROOM_ALPHABET` fixes all of it at once and throws in
+   * something the text field could never do: there is no key for a character a
+   * code cannot contain, so "that code had invalid characters" stops being a
+   * thing anyone can be told. The field stays — it is what a pasted code lands
+   * in, and pasting is still the fastest way in when the code arrives in a
+   * message — but on touch it is `readonly`, which is what keeps the phone's
+   * keyboard down.
+   */
+  private roomField(): string {
+    if (!this.touch) {
+      return `
+        <input class="lobby-room" data-act="room-in" placeholder="K7F-M29"
+               autocapitalize="characters" autocomplete="off" autocorrect="off"
+               spellcheck="false" inputmode="text" enterkeyhint="go"
+               maxlength="8" value="${escapeHtml(this.roomEntry)}">`;
+    }
+    // Boxes rather than a text field: with no caret to place and no keyboard to
+    // raise, what is left is showing how many characters are in and how many
+    // are wanted.
+    const keys = [...ROOM_ALPHABET]
+      .map((ch) => `<button type="button" data-key="${ch}">${ch}</button>`)
+      .join('');
+    return `
+      <div class="room-slots">${this.roomSlots()}</div>
+      <input type="hidden" data-act="room-in" value="${escapeHtml(this.roomEntry)}">
+      <div class="room-pad">
+        ${keys}
+        <button type="button" class="room-wide" data-key="del">⌫</button>
+        <button type="button" class="room-wide" data-key="paste">Paste</button>
+      </div>`;
+  }
+
+  /** Redraw just the six boxes, and keep the hidden field in step with them. */
+  private paintRoomSlots(): void {
+    const slots = this.root.querySelector('.room-slots');
+    if (slots) slots.innerHTML = this.roomSlots();
+    const box = this.root.querySelector<HTMLInputElement>('[data-act="room-in"]');
+    if (box) box.value = this.roomEntry;
+  }
+
+  private roomSlots(): string {
+    const typed = escapeHtml(this.roomEntry.toUpperCase().replace(/[^A-Z0-9]/g, ''));
+    return Array.from({ length: ROOM_CODE_LENGTH }, (_, i) => {
+      const ch = typed[i] ?? '';
+      return `<b class="${ch ? 'is-set' : ''}">${ch || '·'}</b>`;
+    }).join('');
+  }
+
   private joinBody(): string {
     if (!this.guest && !this.reply) {
       // With a broker, the room code is the way in and the invite code is the
@@ -1006,15 +1118,15 @@ export class MultiplayerPanel {
       // is not presented as a fallback — it is simply how the game works.
       const paste = `
         <h3>${this.broker ? 'Or paste an invite code' : 'Paste the invite'}</h3>
-        <textarea data-act="invite-in" placeholder="the code the host sent you"></textarea>
+        <textarea data-act="invite-in" placeholder="the code the host sent you"
+                  autocapitalize="off" autocomplete="off" autocorrect="off"
+                  spellcheck="false"></textarea>
         <button data-act="use-invite">Continue</button>`;
       if (!this.broker) return paste;
       return `
         <h3>Room code</h3>
         <p class="lobby-hint">Six characters, from whoever is hosting.</p>
-        <input class="lobby-room" data-act="room-in" placeholder="K7F-M29"
-               autocapitalize="characters" autocomplete="off" spellcheck="false"
-               maxlength="8" value="${this.roomEntry}">
+        ${this.roomField()}
         <button class="wide primary" data-act="use-room" ${this.busy ? 'disabled' : ''}>Join</button>
         <details class="lobby-raw"><summary>No room code?</summary>${paste}</details>`;
     }
@@ -1131,8 +1243,32 @@ export class MultiplayerPanel {
       if (this.reply) void this.handOver(this.reply, 'My RSC reply code');
     });
     on('paste', () => void this.pasteReply());
+    /*
+     * The keypad. One listener on the pad rather than one per key, because
+     * there are thirty-three of them and they are rebuilt on every render.
+     */
+    this.root.querySelector('.room-pad')?.addEventListener('click', (event) => {
+      const key = (event.target as HTMLElement).closest('[data-key]') as HTMLElement | null;
+      if (!key) return;
+      const what = key.dataset.key!;
+      if (what === 'del') this.roomEntry = this.roomEntry.slice(0, -1);
+      else if (what === 'paste') {
+        void this.pasteRoom();
+        return;
+      } else if (this.roomEntry.length < ROOM_CODE_LENGTH) this.roomEntry += what;
+      // The slots, not the panel. A full re-render would rebuild all
+      // thirty-three keys under the thumb that just pressed one — the same
+      // destroy-and-recreate that makes a button impossible to click twice, and
+      // a lot of work on a phone for six characters that fit in one element.
+      this.paintRoomSlots();
+      // Six characters is a whole code and there is nothing else it could be,
+      // so it goes. Making somebody reach for Join after the last key is a step
+      // that exists only because a text field cannot know when it is finished.
+      if (this.roomEntry.length === ROOM_CODE_LENGTH) void this.joinByRoom(this.roomEntry);
+    });
+
     const roomBox = pick('room-in') as HTMLInputElement | null;
-    if (roomBox) {
+    if (roomBox && roomBox.type !== 'hidden') {
       // A single short field: pressing Enter is what everyone will do, and
       // making them find the button instead is the kind of friction this
       // whole feature exists to remove.

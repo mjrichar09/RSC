@@ -427,6 +427,16 @@ scannable as it grows; it is append-only.
   colour it is painted, so a street of cream houses rendered as dark slabs. A
   small emissive floor on the material — a tenth of its own colour — keeps a
   shape's colour in its own shadow without reading as a light source.
+- **Simulating and drawing a world nobody can see.** The menu, the garage and
+  the lobby all cover the window at 96–97% opacity, and the world went on being
+  stepped at 120 Hz and rendered behind them — 19–41 ms of CPU per second of
+  nothing, plus the whole 3D scene, plus tyres laying skid marks on a car nobody
+  is driving. On a phone that is heat and battery for no picture, and it is what
+  made the menus feel sticky. The frame loop returns early now. Two things are
+  deliberately outside the test: a network race steps whatever is on screen,
+  because a client that stops stepping desynchronises from the host; and a race
+  genuinely in progress is never frozen, which is checked rather than assumed
+  because `settleRun` is asynchronous.
 - **Effects written only inside the frame loop.** `shoot` and the `?stage=&t=`
   harness step the world directly and never call `frame()`, so anything that
   only lives there produces nothing in any screenshot and looks broken when it
@@ -525,6 +535,24 @@ scannable as it grows; it is append-only.
 
 ### DOM and UI
 
+- **A game that binds bare letters, and a text field in the same window.**
+  Every action in `ui/controls.ts` is a single letter on a *window* listener, so
+  typing a room code played the game: `RMX-2XU` restarted the run, muted the
+  sound and jumped to a stage, and `N` closed the very lobby the code was being
+  entered into. Space and the arrows were worse — the handler `preventDefault`s
+  them, so a space could not be typed and the caret could not be moved.
+  `ui/typing.ts` is the one guard, used by all three window listeners, and the
+  third one matters as much as the first two: a soft keyboard's key presses were
+  taking the thumb controls away mid-lobby.
+- **A phone's keyboard is the wrong tool for a code.** It autocorrects six
+  characters of deliberate nonsense, it takes half of a 390 px-tall landscape
+  screen, and its keys reach the window. The room-code field is a keypad built
+  from `ROOM_ALPHABET` on touch, which answers all three and throws in something
+  a text field cannot: there is no key for a character a code may not contain,
+  so "that code had invalid characters" stops being something anyone can be
+  told. It repaints the six slots rather than the panel — rebuilding
+  thirty-three keys under the thumb that just pressed one is the
+  destroy-and-recreate that makes a button impossible to press twice.
 - **Setting SVG `fill` with `setAttribute`.** A stylesheet rule outranks a
   presentation attribute, so the damage panel's zones stayed green however
   wrecked the car was. Use `style.fill`.
@@ -670,6 +698,14 @@ everything healthy. Drive a slalom.
 
 Three things about the transport are easy to get wrong twice:
 
+- **A check that waits on a transient can only ever be a coin toss.** `uicheck`
+  waited for `.lights-word.go`, which is on screen for about 1.2 s — six frames,
+  on a page rendering at five or six frames a second through software WebGL.
+  `waitForSelector` resolves and re-checks on the same main thread and misses a
+  window that small often enough to be useless. Measured at 6 frames before the
+  menus stopped simulating and 7 after, which is how it was established that the
+  failure was never a regression in whatever had just been changed. Latch the
+  observation inside the page with `waitForFunction`, which runs every frame.
 - **`npm run netcheck` must not need the broker.** It drives the invite-code
   path, which is peer to peer and needs no infrastructure — so pointing it at
   the default broker made it a coin toss on whether this machine could reach a

@@ -50,6 +50,8 @@ export class TouchControls {
   /** Raised by the on-screen menu button. */
   onMenu: (() => void) | null = null;
   onHandbrakeTap: (() => void) | null = null;
+  /** Raised when the thumb controls come or go, for anything else that cares. */
+  onVisible: ((on: boolean) => void) | null = null;
 
   private steer = 0;
   private throttle = 0;
@@ -161,6 +163,7 @@ export class TouchControls {
       this.ios.classList.remove('is-on');
       this.release();
     }
+    this.onVisible?.(on);
   }
 
   /**

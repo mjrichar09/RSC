@@ -1130,6 +1130,67 @@ html, body {
   outline: none;
   border-color: var(--accent);
 }
+
+/*
+ * The room code, tapped in rather than typed.
+ *
+ * A phone's own keyboard autocorrects six characters of deliberate nonsense,
+ * takes half of a 390 px-tall landscape screen, and sends its key presses to a
+ * window where the game reads bare letters as commands. A keypad of the code's
+ * own alphabet answers all three, and cannot produce a character a code is not
+ * allowed to contain.
+ */
+.room-slots {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  margin: 8px 0 10px;
+}
+.room-slots b {
+  flex: 0 0 auto;
+  width: 38px;
+  padding: 8px 0;
+  font-family: var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace);
+  font-size: 24px;
+  font-weight: 700;
+  text-align: center;
+  color: var(--dim);
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.room-slots b.is-set {
+  color: var(--ink);
+  border-color: var(--accent);
+}
+
+/*
+ * Eight to a row, which is what puts all thirty-one characters plus the two
+ * actions on a landscape phone without scrolling. `min-height` rather than a
+ * fixed one so the keys grow on a desktop, where there is room and no reason
+ * to make them tiny.
+ */
+.room-pad {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 5px;
+  margin-bottom: 12px;
+}
+.room-pad button {
+  min-height: 40px;
+  padding: 0;
+  font-family: var(--mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace);
+  font-size: var(--step-0);
+  font-weight: 700;
+  /* A thumb on a key must not also scroll the panel out from under itself. */
+  touch-action: manipulation;
+}
+.room-pad .room-wide { grid-column: span 4; }
+@media (max-height: 460px) {
+  /* Landscape on a phone: the keys shrink before the panel starts scrolling. */
+  .room-pad button { min-height: 30px; }
+  .room-slots b { width: 32px; padding: 5px 0; font-size: 19px; }
+}
 .lobby-status {
   margin-top: 18px;
   padding: 10px 12px;

@@ -88,9 +88,28 @@ await page.locator('.menu-row[data-id="quarry-run:night"]').click();
 await page.waitForFunction(() => (window.RSC!.status() as { stage: string }).stage === 'quarry-run');
 console.log(`arcade lists ${rows} races and drives one`);
 
-// Wait for the start lights. The car is held on the line until the green, so a
-// check that stamps on the throttle immediately is checking the countdown.
-await page.waitForSelector('.lights-word.go', { timeout: 20_000 });
+/*
+ * Wait for the start lights. The car is held on the line until the green, so a
+ * check that stamps on the throttle immediately is checking the countdown.
+ *
+ * Latched from inside the page rather than waited on as a selector, because the
+ * green is a *transient*: it is on screen for about 1.2 s, and this page renders
+ * at five or six frames a second through software WebGL, so it exists for six
+ * frames. `waitForSelector` resolves and then re-checks, competing for the same
+ * main thread, and misses a window that small often enough to be useless —
+ * measured at 6 frames before this was written and 7 after, which is to say it
+ * was always a coin toss and never a regression in whatever ran last.
+ * `waitForFunction` runs on every animation frame, so latching the observation
+ * catches it whenever it happens.
+ */
+await page.waitForFunction(
+  () => {
+    const w = window as unknown as { __green?: boolean };
+    if (document.querySelector('.lights-word.go')) w.__green = true;
+    return w.__green === true;
+  },
+  { timeout: 20_000 },
+);
 console.log('start lights count down and go green');
 
 // Drive it, and check the run banks nothing.
@@ -226,6 +245,26 @@ for (const screen of ['join', 'host'] as const) {
   }
 }
 console.log('the lobby can go back and pick again, from either screen');
+
+/*
+ * Typing a room code must not play the game.
+ *
+ * Every action in `ui/controls.ts` is a bare letter on a window listener, and a
+ * room code is six letters and digits — so typing one drove the game. `N` is
+ * the probe because its effect is the most visible of the lot: it toggles this
+ * very panel, so the lobby closed itself halfway through entering the code for
+ * the room it was going to join. `T` opens the tuning panel and `R` restarts
+ * the run, and both are checked here for the same money.
+ */
+await page.click('[data-act="join"]');
+await page.waitForSelector('[data-act="room-in"]');
+await page.focus('[data-act="room-in"]');
+await page.keyboard.type('NTR2X9');
+if (!(await page.$('.lobby.is-open'))) throw new Error('typing N in the room field closed the lobby');
+if (await page.$('.tuning.is-open')) throw new Error('typing T in the room field opened the tuning panel');
+const typed = await page.inputValue('[data-act="room-in"]');
+if (typed !== 'NTR2X9') throw new Error(`the room field did not get what was typed: "${typed}"`);
+console.log(`typing a room code stays in the room code field: "${typed}"`);
 
 // And with no broker the lobby is exactly what it always was.
 //

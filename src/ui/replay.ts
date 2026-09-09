@@ -19,6 +19,7 @@
 
 import type { GhostPlayer } from '../sim/replay.js';
 import type { ReelStrip } from '../game/crashReel.js';
+import { isTyping } from './typing.js';
 
 export interface ReplayHandle {
   player: GhostPlayer;
@@ -133,6 +134,9 @@ export class ReplayUi {
   private key(event: KeyboardEvent): void {
     const handle = this.handle;
     if (!handle) return;
+    // Photo mode binds bare letters too, and a replay can be open with the
+    // lobby's fields on top of it.
+    if (isTyping()) return;
     // An automatic replay is not a mode the player is in, it is something
     // happening to them. The only control it offers is getting out of it.
     if (handle.auto) {

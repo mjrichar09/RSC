@@ -83,8 +83,19 @@ export interface Room {
  * will see — and the check on joining is "is anybody in this room", so a
  * collision is a failed join rather than two races merging.
  */
-const ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
-const CODE_LENGTH = 6;
+/**
+ * The characters a room code can contain, and how many of them there are.
+ *
+ * No 0, 1, I, L or O: a code is read out loud down a phone as often as it is
+ * copied, and those are the pairs people get wrong. Exported because the
+ * on-screen keypad is built from it — a keypad with only these keys on it
+ * cannot produce an unreadable code, which is a better answer to "invalid
+ * characters" than saying so afterwards.
+ */
+export const ROOM_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+export const ROOM_CODE_LENGTH = 6;
+const ALPHABET = ROOM_ALPHABET;
+const CODE_LENGTH = ROOM_CODE_LENGTH;
 
 /** A fresh room code, formatted the way it is shown: `K7F-M29`. */
 export function makeRoomCode(): string {

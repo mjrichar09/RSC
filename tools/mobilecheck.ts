@@ -247,6 +247,49 @@ try {
   }
   await page.screenshot({ path: 'shots/mobile-menu.png' });
 
+  /*
+   * A room code is tapped in, not typed.
+   *
+   * A phone's own keyboard is wrong for this three times over: it autocorrects
+   * six characters of deliberate nonsense, it takes half of a 390 px-tall
+   * landscape screen, and its key presses reach the window where the game reads
+   * bare letters as commands. The keypad answers all three, and because it is
+   * built from the code's own alphabet there is no key for a character a code
+   * cannot contain — so "that code had invalid characters" stops being
+   * something anyone can be told.
+   */
+  {
+    await page.click('[data-action="menu"]').catch(() => {});
+    await page.waitForSelector('.menu.is-open', { timeout: 10_000 });
+    await page.click('[data-action="multiplayer"]');
+    if (await page.locator('.name-entry input').count()) {
+      await page.fill('.name-entry input', 'Thumbs');
+      await page.click('[data-action="save-name"]');
+    }
+    await page.waitForSelector('.lobby.is-open [data-act="join"]', { timeout: 15_000 });
+    await page.click('[data-act="join"]');
+    await page.waitForSelector('.room-pad', { timeout: 10_000 });
+
+    // No text field to raise a keyboard over, and no key that can produce a
+    // character the code's alphabet forbids.
+    if (await page.$('input.lobby-room')) fail('the phone still gets a text field for the room code');
+    const labels = await page.$$eval('.room-pad [data-key]', (els) =>
+      els.map((e) => (e as HTMLElement).dataset.key!),
+    );
+    for (const bad of ['0', '1', 'I', 'L', 'O']) {
+      if (labels.includes(bad)) fail(`the keypad offers "${bad}", which a room code cannot contain`);
+    }
+
+    for (const ch of ['K', '7', 'F', 'M', '2']) await page.click(`.room-pad [data-key="${ch}"]`);
+    const five = (await page.textContent('.room-slots'))?.trim();
+    await page.click('.room-pad [data-key="del"]');
+    const four = (await page.textContent('.room-slots'))?.trim();
+    if (five !== 'K7FM2·' || four !== 'K7FM··') {
+      fail(`the keypad filled the slots wrongly: "${five}" then "${four}"`);
+    }
+    console.log(`room code tapped in on ${labels.length} keys, no keyboard: "${five}" -> "${four}"`);
+  }
+
   // Portrait. There is no layout for it and there should not be — a portrait
   // phone is narrower than the car is on screen — so the one thing that has to
   // happen is that the player is told which way up to hold it.

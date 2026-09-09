@@ -23,6 +23,7 @@ import {
   type ReelImpact,
 } from './game/crashReel.js';
 import { TouchControls } from './ui/touch.js';
+import { isTyping } from './ui/typing.js';
 import { type QualityTier, RenderScale, guessTier, qualityFor } from './render/quality.js';
 import { useRelay } from './net/webrtc.js';
 import { StartLights } from './game/startLights.js';
@@ -215,7 +216,17 @@ async function main(): Promise<void> {
     },
     { capture: true },
   );
-  window.addEventListener('keydown', () => touch.setVisible(false), { capture: true });
+  // A key press means a keyboard machine — unless it came from the on-screen
+  // keyboard the phone put up for a text field, which is every character of a
+  // name or a room code. That used to take the thumb controls away mid-lobby.
+  window.addEventListener(
+    'keydown',
+    () => {
+      if (isTyping()) return;
+      touch.setVisible(false);
+    },
+    { capture: true },
+  );
 
   const hud = new Hud(hudRoot);
   const raceHud = new RaceHud(hudRoot);
@@ -648,6 +659,18 @@ const params = new URLSearchParams(location.search);
   const board = boardFor(params);
 
   const multiplayer = new MultiplayerPanel(hudRoot);
+  /*
+   * The lobby needs the same first-touch signal the driving controls use: a
+   * room code is tapped on a built-in keypad on a phone and typed into a text
+   * field on a keyboard machine.
+   *
+   * Wired here rather than in the `pointerdown` listener near the top of this
+   * file, which runs during boot — a touch that landed while the world was
+   * still being built would reach a `const` that does not exist yet and throw
+   * out of the handler. `TouchControls` already knows when it changes.
+   */
+  touch.onVisible = (on) => multiplayer.setTouchInput(on);
+  multiplayer.setTouchInput(touch.shown);
   multiplayer.board = board;
   // One identity across both modes. Multiplayer races the same stock car as
   // arcade and posts to the same table, so two names for one player would put
@@ -2277,12 +2300,40 @@ const params = new URLSearchParams(location.search);
     if (renderScale.update(wallDt)) onResize();
     fps += (1 / Math.max(dt, 1e-4) - fps) * 0.08;
 
-    // The world keeps stepping behind the garage so the scene stays alive, but
-    // it takes no input while a menu is up.
     if (replayUi.active) {
       drawReplay(dt);
       // An automatic replay closes itself; photo mode waits for the player.
       if (replayUi.finished) endCrashReplay();
+      requestAnimationFrame(frame);
+      return;
+    }
+
+    /*
+     * Nothing behind a full-screen panel is worth simulating or drawing.
+     *
+     * The menu, the garage and the lobby all cover the whole window at 96–97%
+     * opacity, and the world went on being stepped at 120 Hz and rendered
+     * behind them — a stage step with damage costs 156–344 µs, so that is 19–41
+     * ms of CPU per second of *nothing anybody can see*, plus the whole 3D
+     * scene, plus the tyres laying skid marks on a car nobody is driving. On a
+     * phone that is heat and battery for no picture at all, and it is why the
+     * menus felt sticky.
+     *
+     * Two things are deliberately not part of the test. A network race steps
+     * whatever is on screen, because the host is authoritative and a client
+     * that stops stepping desynchronises from it. And a race that is genuinely
+     * running is never frozen: every path that opens one of these panels settles
+     * the run first, so this only ever means "no race in progress" — but it is
+     * checked rather than assumed, because `settleRun` is asynchronous and there
+     * are a couple of frames where both are true.
+     *
+     * The garage keeps its car: it has its own renderer and its own loop, and
+     * has never had anything to do with this one.
+     */
+    const covered = menu.isOpen || garage.isOpen || multiplayer.isOpen;
+    if (covered && !session && race?.phase !== 'running') {
+      // Or the engine note hangs on the last frame before the panel opened.
+      mixer.quiet();
       requestAnimationFrame(frame);
       return;
     }
