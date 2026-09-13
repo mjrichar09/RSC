@@ -50,8 +50,6 @@ const SEVERITY_RADIUS = [14, 22, 34, 52, 80, 125];
 const STRAIGHT = 1 / 160;
 /** A corner has to bend by at least this much to be one, degrees. */
 const MIN_TURN = 12;
-/** Two corners closer than this are linked, and the note says so. */
-export const LINK_DISTANCE = 45;
 
 /** Severity for a radius: 1 is a hairpin, 6 is flat. */
 export function severityFor(radius: number): number {

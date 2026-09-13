@@ -18,5 +18,3 @@ export interface DriverInput {
 }
 
 export const NEUTRAL_INPUT: DriverInput = { throttle: 0, brake: 0, steer: 0, handbrake: 0 };
-
-export const cloneInput = (i: DriverInput): DriverInput => ({ ...i });

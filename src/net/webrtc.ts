@@ -198,6 +198,28 @@ const isNumericAddress = (address: string): boolean => {
   return /^\d{1,3}(\.\d{1,3}){3}$/.test(plain);
 };
 
+/**
+ * The characters ICE allows in a ufrag or a password (RFC 8839's `ice-char`).
+ *
+ * Checked because `putTogether` builds an SDP by joining lines with CRLF, and
+ * three of the values it interpolates arrive inside somebody else's invite
+ * code. A ufrag carrying a newline is not a malformed ufrag, it is however
+ * many extra SDP lines the sender wants — a fingerprint of their choosing, or
+ * candidates pointing anywhere — in a description this side is about to hand
+ * to `setRemoteDescription`. A code from a stranger reaches here by two routes
+ * and the second is the one that matters: `?join=<code>` is a link, so the
+ * whole exchange can be somebody else's URL.
+ */
+const ICE_CHARS = /^[A-Za-z0-9+/]{1,256}$/;
+
+/**
+ * An mDNS candidate address, which is the one address form carried as text.
+ *
+ * Same reasoning as the ufrag: it goes into an `a=candidate:` line verbatim.
+ * A hostname has no business containing anything but these.
+ */
+const MDNS_NAME = /^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$/;
+
 const one = (sdp: string, pattern: RegExp): string => pattern.exec(sdp)?.[1]?.trim() ?? '';
 
 function pullApart(description: RTCSessionDescriptionInit): Compact | null {
@@ -249,6 +271,13 @@ function pullApart(description: RTCSessionDescriptionInit): Compact | null {
 
 /** Rebuild the SDP a browser will accept from the handful of fields above. */
 function putTogether(c: Compact): RTCSessionDescriptionInit {
+  // Rejected rather than escaped: there is no escaping in SDP, the grammar is
+  // one value per line, and a ufrag with a character that cannot appear in one
+  // did not come from a browser.
+  if (!ICE_CHARS.test(c.ufrag) || !ICE_CHARS.test(c.pwd)) {
+    throw new Error('that code is not a readable invite');
+  }
+  if (c.print.length !== 32) throw new Error('that code is not a readable invite');
   const print = [...c.print].map((b) => b.toString(16).padStart(2, '0').toUpperCase()).join(':');
   const lines = [
     'v=0',
@@ -270,12 +299,23 @@ function putTogether(c: Compact): RTCSessionDescriptionInit {
     'a=sctp-port:5000',
     'a=max-message-size:262144',
   ];
-  c.candidates.forEach((candidate, i) => {
-    const ip = candidate.address.replace(/^\[|\]$/g, '');
-    lines.push(
-      `a=candidate:${i + 1} 1 udp ${PRIORITY[candidate.type] ?? 1} ${ip} ${candidate.port} typ ${candidate.type}`,
-    );
-  });
+  // A candidate that cannot be written as one line is dropped, not refused:
+  // losing one address costs a path to try, and losing the whole code costs
+  // the race. Anything that is neither an IP nor a plain hostname is the
+  // injection above by another door.
+  c.candidates
+    .filter((candidate) => {
+      const ip = candidate.address.replace(/^\[|\]$/g, '');
+      const port = candidate.port;
+      if (!Number.isInteger(port) || port < 1 || port > 65535) return false;
+      return isNumericAddress(ip) || MDNS_NAME.test(ip);
+    })
+    .forEach((candidate, i) => {
+      const ip = candidate.address.replace(/^\[|\]$/g, '');
+      lines.push(
+        `a=candidate:${i + 1} 1 udp ${PRIORITY[candidate.type] ?? 1} ${ip} ${candidate.port} typ ${candidate.type}`,
+      );
+    });
   // Says the list is complete, so ICE starts checking rather than waiting for
   // a trickle that is never coming.
   lines.push('a=end-of-candidates');
@@ -422,12 +462,32 @@ async function encode(description: RTCSessionDescriptionInit): Promise<string> {
 
 async function decode(code: string): Promise<RTCSessionDescriptionInit> {
   const trimmed = code.trim();
-  const body = unbase64(trimmed.slice(1));
+  // `atob` throws "The string to be decoded is not correctly encoded", which
+  // is a sentence about base64 shown to somebody who pasted half a code. The
+  // one thing they can act on is that the code is not a code.
+  let body: Uint8Array;
+  try {
+    body = unbase64(trimmed.slice(1));
+  } catch {
+    throw new Error('that code is not a readable invite');
+  }
   if (trimmed[0] === 'C') return putTogether(unpack(body));
   const bytes = trimmed[0] === 'Z' ? ((await squeeze(body, 'unpack')) ?? body) : body;
   const json = JSON.parse(new TextDecoder().decode(bytes)) as { t: RTCSdpType; s: string };
   return { type: json.t, sdp: json.s };
 }
+
+/**
+ * The most a code is allowed to inflate to, bytes.
+ *
+ * A whole SDP deflates to well under a kilobyte and the broker will not carry
+ * more than four, so a megabyte is far past anything real. The cap is here
+ * because deflate is asymmetric and the input is a string somebody sent us: a
+ * few kilobytes of zeroes expand to gigabytes, and `new Response(stream)
+ * .arrayBuffer()` reads until the stream ends, which is a tab killed by a
+ * pasted code. Read in chunks and stop, rather than trust the length.
+ */
+const MAX_INFLATED = 1 << 20;
 
 async function squeeze(bytes: Uint8Array, mode: 'pack' | 'unpack'): Promise<Uint8Array | null> {
   // Both directions name the *format*, which is 'deflate-raw' either way — the
@@ -442,7 +502,30 @@ async function squeeze(bytes: Uint8Array, mode: 'pack' | 'unpack'): Promise<Uint
     const stream = new Blob([bytes as BlobPart])
       .stream()
       .pipeThrough(new (Stream as new (f: string) => TransformStream)('deflate-raw'));
-    return new Uint8Array(await new Response(stream).arrayBuffer());
+    const reader = (stream as ReadableStream<Uint8Array>).getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.length;
+        if (size > MAX_INFLATED) {
+          await reader.cancel();
+          return null;
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    const out = new Uint8Array(size);
+    let at = 0;
+    for (const chunk of chunks) {
+      out.set(chunk, at);
+      at += chunk.length;
+    }
+    return out;
   } catch {
     return null;
   }

@@ -23,7 +23,7 @@
  * builds its world from stock tuning rather than the player's.
  */
 
-const ROOM_BROKER = 'https://rsc-rooms.rsc-rooms.workers.dev';
+import { brokerBase } from './roomHttp.js';
 
 /** How long any call is allowed to take before it is abandoned, ms. */
 const TIMEOUT = 4000;
@@ -33,6 +33,27 @@ export interface BoardEntry {
   time: number;
   at: number;
 }
+
+/**
+ * Keep only the rows that are actually rows.
+ *
+ * The board is the one thing in the game that hands back text somebody else
+ * typed, and the callers treat what comes out of here as a `BoardEntry` — they
+ * call `.toLowerCase()` on the name and `.toFixed()` on the time. A response
+ * that is merely *shaped* wrong (a null name, a time that is a string) is then
+ * a thrown exception on the finish panel, which is the screen that must never
+ * be the thing that breaks. Escaping happens where it is drawn; this is only
+ * about the shape.
+ */
+const entriesIn = (raw: unknown): BoardEntry[] =>
+  Array.isArray(raw)
+    ? (raw.filter(
+        (row) =>
+          typeof (row as BoardEntry)?.name === 'string' &&
+          typeof (row as BoardEntry)?.time === 'number' &&
+          Number.isFinite((row as BoardEntry).time),
+      ) as BoardEntry[])
+    : [];
 
 export class Leaderboard {
   constructor(private readonly base: string) {}
@@ -56,9 +77,9 @@ export class Leaderboard {
   /** The fastest `limit` times for a track, or null if they cannot be had. */
   async top(track: string, limit = 10): Promise<BoardEntry[] | null> {
     const body = (await this.call(`/b/${encodeURIComponent(track)}?n=${limit}`)) as {
-      top?: BoardEntry[];
+      top?: unknown;
     } | null;
-    return Array.isArray(body?.top) ? body.top : null;
+    return Array.isArray(body?.top) ? entriesIn(body.top) : null;
   }
 
   /**
@@ -72,9 +93,12 @@ export class Leaderboard {
     if (tracks.length === 0) return {};
     const query = `?n=${limit}&t=${tracks.map(encodeURIComponent).join(',')}`;
     const body = (await this.call(`/bs${query}`)) as {
-      boards?: Record<string, BoardEntry[]>;
+      boards?: Record<string, unknown>;
     } | null;
-    return body?.boards ?? null;
+    if (!body?.boards || typeof body.boards !== 'object') return null;
+    const out: Record<string, BoardEntry[]> = {};
+    for (const [track, rows] of Object.entries(body.boards)) out[track] = entriesIn(rows);
+    return out;
   }
 
   /**
@@ -99,11 +123,11 @@ export class Leaderboard {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name, time }),
-    })) as { rank?: number; top?: BoardEntry[]; was?: string | null } | null;
+    })) as { rank?: unknown; top?: unknown; was?: unknown } | null;
     if (!body || !Array.isArray(body.top)) return null;
     return {
       rank: typeof body.rank === 'number' && body.rank >= 0 ? body.rank : null,
-      top: body.top,
+      top: entriesIn(body.top),
       was: typeof body.was === 'string' ? body.was : null,
     };
   }
@@ -114,9 +138,12 @@ export class Leaderboard {
  *
  * `?rooms=` points the game at a local `wrangler dev`, exactly as it does for
  * the broker — the board lives in the same worker, so one switch moves both and
- * there is no second address to keep in step.
+ * there is no second address to keep in step. That is now literally true:
+ * the address and the rules about overriding it are `roomHttp.ts`'s, and this
+ * file had its own copy of the URL until one of them would have been changed
+ * alone.
  */
 export function boardFor(params: URLSearchParams): Leaderboard | null {
-  const base = params.get('rooms') ?? ROOM_BROKER;
+  const base = brokerBase(params);
   return base ? new Leaderboard(base) : null;
 }

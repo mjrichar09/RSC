@@ -13,6 +13,7 @@
  */
 
 import type { Award } from '../game/awards.js';
+import { escapeHtml } from './escape.js';
 
 /** How long each award holds, by weight. */
 const HOLD = [1.5, 1.9, 2.4, 3.6];
@@ -93,13 +94,20 @@ export class Celebrations {
     // `data-text` carries a second copy of the word for the shimmer pass to
     // draw over the top: a gradient clipped to text cannot also carry a glow,
     // because the glow is painted from the colour the clip has thrown away.
+    // Escaped, both of them: an award's detail carries a driver's name, and
+    // the one it carries on the biggest award of all — "you have taken it
+    // from …" — is a name somebody else typed and the leaderboard handed
+    // back. That is the one string on this screen that never passed through
+    // this browser.
     this.root.innerHTML = `
       <div class="award w${next.weight} ${next.medal ?? 'none'} ${next.kind}">
         ${rays}
         <div class="award-flash"></div>
         ${sparks}
-        <div class="award-title" data-text="${next.title}">${next.title}</div>
-        <div class="award-detail">${next.detail}</div>
+        <div class="award-title" data-text="${escapeHtml(next.title)}">${escapeHtml(
+          next.title,
+        )}</div>
+        <div class="award-detail">${escapeHtml(next.detail)}</div>
       </div>`;
     this.onLand?.(next);
   }

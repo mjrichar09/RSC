@@ -14,14 +14,13 @@ bindings = [
 # namespace created any other way ("you must create a namespace using a
 # `new_sqlite_classes` migration", API error 10097). This said `new_classes`
 # first, reasoning that rooms are sixty seconds of in-memory state that is never
-# written down so there is no storage backend to pick. That reasoning was fine
-# and the platform does not care about it.
+# written down so there is no storage backend to pick.
 #
-# It changes nothing about how this works. The class still keeps its rooms in a
-# Map and still writes nothing; the SQLite backing is simply the storage engine
-# the namespace is provisioned with, and it goes unused. Nothing here survives a
-# restart and nothing needs to — a lobby that was mid-handshake reopens with a
-# new code.
+# That reasoning was wrong, and the storage this provisions is now what the
+# rooms actually run on: a Durable Object is evicted when it goes idle and
+# rebuilt on the next request, so a handshake that spans four requests cannot
+# keep anything in a field. See the header of `src/rooms.ts` — the symptom was
+# a guest waiting forever for a host that never saw its reply.
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Rooms"]

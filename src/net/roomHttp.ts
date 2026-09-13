@@ -97,15 +97,41 @@ export class HttpRoom implements Room {
 }
 
 /**
- * The broker to use, or null when there is none.
+ * Where to talk to, given the query string: the deployed broker, a local one,
+ * or nowhere.
  *
  * `?rooms=http://localhost:8787` points the game at a local `wrangler dev`,
- * which is how this gets tested without deploying — and the same switch is what
- * `netcheck` uses to drive the room path against a broker it started itself.
+ * which is how this gets tested without deploying, and it is what `netcheck`
+ * and `uicheck` drive. An empty `?rooms=` means *no* broker, which is the
+ * paste-only lobby and a supported state rather than a broken one.
+ *
+ * **Only a loopback address is accepted**, and that is the whole of what this
+ * switch was ever for. It is read from the URL, so an arbitrary one made a
+ * link into a redirect: `?rooms=https://somewhere.else` sends every room
+ * handshake and every leaderboard submission — a name and a time — to whoever
+ * wrote the link, and the lobby looks completely normal while it happens. A
+ * developer pointing at their own machine can still do so; a link handed to a
+ * player cannot move them off the address the build shipped with.
  */
-export function brokerFor(params: URLSearchParams): Room | null {
+export function brokerBase(params: URLSearchParams): string | null {
   const override = params.get('rooms');
-  const base = override ?? ROOM_BROKER;
-  if (!base) return null;
-  return new HttpRoom(base);
+  if (override === null) return ROOM_BROKER || null;
+  if (override === '') return null;
+  return isLoopback(override) ? override : ROOM_BROKER || null;
+}
+
+const isLoopback = (base: string): boolean => {
+  try {
+    const { hostname, protocol } = new URL(base);
+    if (protocol !== 'http:' && protocol !== 'https:') return false;
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
+  } catch {
+    return false;
+  }
+};
+
+/** The broker to use, or null when there is none. */
+export function brokerFor(params: URLSearchParams): Room | null {
+  const base = brokerBase(params);
+  return base ? new HttpRoom(base) : null;
 }

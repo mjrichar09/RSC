@@ -24,6 +24,10 @@ import {
   PROTOCOL_VERSION,
   type RaceSetup,
   SNAPSHOT_HZ,
+  cleanInput,
+  cleanLivery,
+  cleanName,
+  cleanNumber,
   packCar,
 } from './protocol.js';
 
@@ -114,12 +118,12 @@ export class RaceHost {
     this.options = options;
     this.players.push({
       id: 0,
-      name: options.name ?? 'Host',
+      name: cleanName(options.name, 'Host'),
       host: true,
       car: 0,
       ready: true,
       livery: options.livery ?? 'works',
-      number: options.number ?? 1,
+      number: cleanNumber(options.number),
       wins: 0,
     });
   }
@@ -161,15 +165,19 @@ export class RaceHost {
         return;
       }
 
+      // Everything in a `hello` was typed by a stranger and none of it has
+      // been checked before here: the shape as much as the content, because a
+      // guest that sends a number where a name belongs used to throw inside
+      // this handler rather than be refused.
       const id = this.nextId++;
       const info: PlayerInfo = {
         id,
-        name: message.name.slice(0, 16) || `Player ${id + 1}`,
+        name: cleanName(message.name, `Player ${id + 1}`),
         host: false,
         car: this.players.length,
         ready: false,
-        livery: message.livery,
-        number: message.number,
+        livery: cleanLivery(message.livery),
+        number: cleanNumber(message.number),
         wins: 0,
       };
       this.players.push(info);
@@ -200,17 +208,19 @@ export class RaceHost {
         // Repainting is a lobby thing. Mid-race it would change a car people
         // are using to tell each other apart, in the middle of using it.
         if (!this.started) {
-          guest.info.livery = message.livery;
-          guest.info.number = message.number;
+          guest.info.livery = cleanLivery(message.livery);
+          guest.info.number = cleanNumber(message.number, guest.info.number);
           this.broadcastLobby();
         }
         break;
       case 'input':
         // Out-of-order arrivals are dropped rather than applied backwards: an
         // input that is older than one already used is not news.
-        if (message.seq > guest.seq) {
+        if (typeof message.seq === 'number' && message.seq > guest.seq) {
           guest.seq = message.seq;
-          guest.input = message.input;
+          // Bounded here because this is the one thing a guest sends that
+          // reaches the host's physics.
+          guest.input = cleanInput(message.input);
         }
         break;
       case 'result':

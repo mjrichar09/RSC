@@ -214,6 +214,13 @@ a physics engine per test. These are the habits that pay:
   code. A single measurement is not evidence.
 - **Put long runs in the background** and keep working; `npm test` is ~100 s and
   `npm run stages` several minutes.
+- **A timeout nothing enforces is not a budget.** The two Grand Traverse
+  validation tests declared 60 s and measured 78 s each, and passed for as long
+  as the runner of the day did not apply a per-test timeout to a test that never
+  yields. Upgrading vitest turned them red with nothing about the game changed.
+  The number now comes from the measurement; if one of them goes red again it is
+  because the stage got slower, which is the only thing that assertion was ever
+  for.
 - **Apply mechanical multi-hunk edits with one patch script** in the scratchpad,
   written with `assert old in s` for every hunk. It fails loudly on a stale
   assumption instead of silently matching nothing, which a fuzzy edit will do.
@@ -574,6 +581,52 @@ scannable as it grows; it is append-only.
   strip was rebuilt only when the split *count* changed, so a run stayed looking
   clean after driving round the outside of a checkpoint. If the markup depends
   on two things, the key has both.
+
+### Things somebody else typed
+
+Every panel in `src/ui/` builds its markup as a string, and four of them draw a
+name that was typed on another machine — `menu`, `raceHud`, `multiplayer` and
+`celebrate`. `escapeHtml` exists, and it was reached in some of the places in
+three of those files and none of the places in the fourth.
+
+- **Escaping the leaderboard and forgetting the lobby.** The arcade board was
+  escaped; the multiplayer player list, the finished-race classification and the
+  HUD standings were not, and all three draw a name that arrived over the wire
+  from whoever else is in the race. So did the award overlay — *"you have taken
+  it from …"* carries a name off the global board, which is the one string on
+  that screen that never passed through this browser. A name reaching markup
+  unescaped is the default outcome; the rule is that `escapeHtml` is called at
+  every point one is drawn, and `grep -n 'name}' src/ui` is the check.
+- **Trusting the shape of a message, not just its content.** `message.name
+  .slice(0, 16)` on a `hello` is a `TypeError` thrown inside the host's own
+  handler for a guest that sent a number — a stranger able to knock over the
+  lobby they are joining by being wrong about the protocol. Nothing between the
+  data channel and that line looks at what arrived: the types describe what a
+  well-behaved client sends, and the wire is not one. `cleanName`, `cleanNumber`,
+  `cleanLivery` and `cleanInput` in `net/protocol.ts` are where that is bounded.
+- **A guest's input reaching the physics as it arrived.** `clamp` passes `NaN`
+  straight through — it is neither below the floor nor above the ceiling — so
+  one input with a missing field puts a `NaN` into a rigid body and takes every
+  car in the race out of the world together. Bounded at the wire, not in `sim/`:
+  the simulation's own inputs come from a driver or from the AI, and those are
+  already numbers.
+- **Building an SDP out of a string somebody sent you.** `putTogether` rebuilds
+  a description by joining lines with CRLF and interpolates three fields that
+  came out of an invite code. SDP has no escaping — the grammar is one value per
+  line — so a ufrag carrying a newline is however many extra lines the sender
+  wanted, in a description about to be handed to `setRemoteDescription`. And
+  `?join=<code>` means the code can arrive in a link rather than from somebody
+  you are talking to. Checked against ICE's own character set now, and refused
+  rather than escaped, because there is nothing to escape it *to*.
+- **Reading a compressed thing to the end.** `new Response(stream).arrayBuffer()`
+  on a `DecompressionStream` reads until the stream stops, and deflate is
+  asymmetric: a few kilobytes of invite code expand to gigabytes. Read in chunks
+  against a cap.
+- **A developer switch read straight out of the URL.** `?rooms=` points the game
+  at a local `wrangler dev`, and it took any address at all — so a link was a
+  redirect, sending every handshake and every leaderboard submission somewhere
+  else with a lobby that looks completely normal while it happens. It takes a
+  loopback address only, which is the whole of what it was ever for.
 
 ## Staying current
 

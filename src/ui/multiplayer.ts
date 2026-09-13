@@ -590,7 +590,7 @@ export class MultiplayerPanel {
             : '';
         return `<li class="${row.player.id === mine ? 'mine' : ''}">
           <span class="pos">${row.time === null ? '—' : i + 1}</span>
-          <span class="who">${row.player.name}</span>${time}${gap}
+          <span class="who">${escapeHtml(row.player.name)}</span>${time}${gap}
         </li>`;
       })
       .join('');
@@ -906,7 +906,7 @@ export class MultiplayerPanel {
           Whoever hosts runs the race, so pick the best connection.
         </p>
         <label class="lobby-field">Your name
-          <input data-act="name" maxlength="16" value="${this.name}">
+          <input data-act="name" maxlength="16" value="${escapeHtml(this.name)}">
         </label>
         <div class="lobby-actions">
           <button data-act="host">Host a race</button>
@@ -1183,9 +1183,14 @@ export class MultiplayerPanel {
         // Wins first, because after the first race it is the only number in
         // the room anybody cares about.
         const tally = player.wins > 0 ? `${player.wins} win${player.wins > 1 ? 's' : ''}` : '';
-        return `<li>${swatch}<b>#${player.number}</b> ${player.name}${
-          player.host ? ' (host)' : ''
-        }<span>${tally || (player.ready ? 'ready' : 'waiting')}</span></li>`;
+        // Both of these arrived over the wire from another player. The host
+        // bounds them on the way in and they are escaped again on the way out,
+        // because a guest renders the lobby from a host it did not write.
+        return `<li>${swatch}<b>#${escapeHtml(String(player.number))}</b> ${escapeHtml(
+          player.name,
+        )}${player.host ? ' (host)' : ''}<span>${
+          tally || (player.ready ? 'ready' : 'waiting')
+        }</span></li>`;
       })
       .join('')}</ul>`;
   }

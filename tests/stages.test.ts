@@ -74,12 +74,19 @@ describe.each(stages.map((s) => [s.def.name, s] as const))('%s', (_name, stage) 
     expect(result.time).toBeGreaterThan(10);
     // Conservative, so inside bronze without being anywhere near author pace.
     expect(result.time!).toBeLessThan(stage.def.medals.bronze);
-  }, 60_000);
+    // Three laps of the longest stage in the game, and it is the slowest thing
+    // in the suite by an order of magnitude. The budget said 60 s and the two
+    // tests measure 78 s each on the machine this was written on — a limit
+    // nothing enforced, because the runner of the day did not apply a
+    // per-test timeout to a test that never yielded, so it went unnoticed for
+    // as long as it was wrong. Set from the measurement, with room for a
+    // machine under load rather than room for a regression.
+  }, 180_000);
 
   it('keeps the AI mostly on the road', async () => {
     const result = await validateStage(stage);
     expect(result.offRoadFraction).toBeLessThan(0.45);
-  }, 60_000);
+  }, 180_000);
 });
 
 describe('race rules', () => {

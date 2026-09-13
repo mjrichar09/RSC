@@ -141,9 +141,11 @@ export class RaceHud {
       .map((row, i) => {
         const ahead = i === 0 ? null : (order[i - 1]!.progress - row.progress);
         const gap = ahead === null ? '' : `+${Math.round(yards(ahead))} yd`;
-        return `<div class="standing${row.you ? ' you' : ''}"><b>${i + 1}</b>${
-          row.name
-        }<span>${gap}</span></div>`;
+        // Escaped: in a network race these names came off the wire from
+        // whoever else is in the lobby, and this builds markup as a string.
+        return `<div class="standing${row.you ? ' you' : ''}"><b>${i + 1}</b>${escapeHtml(
+          row.name,
+        )}<span>${gap}</span></div>`;
       })
       .join('');
   }

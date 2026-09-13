@@ -64,6 +64,22 @@ export const ROOM_TTL = 60_000;
 /** Offers and replies are compact codes; anything much longer is not one. */
 const MAX_FIELD = 4_000;
 
+/** A ticket is `t` and a small integer. Capped for the same reason as a field. */
+const MAX_TICKET = 64;
+
+/**
+ * How many uncollected replies a room may hold.
+ *
+ * A host takes at most three guests and drains on every poll, so a real room
+ * never holds more than a handful. Anybody who knows a live code can post a
+ * reply, though, and there was nothing to stop them posting four thousand
+ * bytes of them in a loop: the room is one stored value, so it grows until a
+ * write fails and the lobby it belongs to stops working. Oldest go first —
+ * a reply that has been sitting unclaimed while dozens arrived behind it
+ * belongs to a handshake that has long since timed out.
+ */
+const MAX_REPLIES = 16;
+
 /**
  * The subset of `DurableObjectStorage` this needs.
  *
@@ -202,6 +218,7 @@ export class RoomStore {
         } | null;
         if (
           typeof body?.ticket !== 'string' ||
+          body.ticket.length > MAX_TICKET ||
           typeof body.reply !== 'string' ||
           body.reply.length > MAX_FIELD
         ) {
@@ -213,6 +230,9 @@ export class RoomStore {
         const room = await this.read(code, now);
         if (!room) return empty(204);
         room.replies.push({ ticket: body.ticket, reply: body.reply });
+        if (room.replies.length > MAX_REPLIES) {
+          room.replies.splice(0, room.replies.length - MAX_REPLIES);
+        }
         await this.write(code, room, now);
         return empty(204);
       }
