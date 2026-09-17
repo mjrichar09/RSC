@@ -974,7 +974,27 @@ function buildTerrain(stage: Stage): THREE.Group {
     geometry,
     new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, flatShading: true }),
   );
-  mesh.receiveShadow = true;
+  /*
+   * The background does not take shadows, and that is the fix for the second
+   * road.
+   *
+   * The corridor is a closed ribbon — road, verge, bank and wall in one sheet
+   * — so its whole footprint is an occluder, and this terrain is generated
+   * separately and sits below it wherever the road is on an embankment. With
+   * the sun anywhere but overhead, the ribbon's silhouette landed on the open
+   * ground *beside* the road: a dark band the width of the corridor, running
+   * parallel to it, which reads as a second track in the field. Worst on
+   * Grand Traverse, where the road is highest above the ground it crosses.
+   *
+   * Refusing the shadow here rather than turning off `road.castShadow` keeps
+   * the two cases where the corridor's shadow is the real thing: an embankment
+   * or a wall shading the road beside it, and a bridge deck darkening the
+   * section it passes over. Both of those land on the corridor, which still
+   * receives. What is given up is tree shadows on the open ground away from
+   * the road, which is the right thing to give up — this mesh is forty cells
+   * across a whole stage and exists to be distant.
+   */
+  mesh.receiveShadow = false;
   group.add(mesh);
   return group;
 }

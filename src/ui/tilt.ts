@@ -50,11 +50,17 @@ import { clamp } from '../sim/math.js';
  * Wrist roll for full lock, radians.
  *
  * Both hands on a phone in landscape, forearms still: the wrists roll about
- * thirty degrees each way before the grip has to change. Deliberately short of
- * that, so full lock is reachable without the screen turning away from the
- * player's eyes at the moment they most need to see it.
+ * thirty degrees each way before the grip has to change, and a little past
+ * that with a small shoulder movement nobody minds making.
+ *
+ * It was 26° first, reasoned from that limit alone — keep full lock inside
+ * what the wrists do and the screen never turns away from the player's eyes.
+ * Driven, it was too sharp: every degree is 4.5% of lock at 26° and the car
+ * is nervous on a straight, where the input is never quite still. 35° is the
+ * whole range rather than the comfortable part of it, and trades a movement
+ * you notice making for a car that holds a line.
  */
-const FULL_LOCK = (26 * Math.PI) / 180;
+const FULL_LOCK = (35 * Math.PI) / 180;
 
 /**
  * Roll that still counts as straight, radians.

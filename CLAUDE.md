@@ -214,13 +214,19 @@ a physics engine per test. These are the habits that pay:
   code. A single measurement is not evidence.
 - **Put long runs in the background** and keep working; `npm test` is ~100 s and
   `npm run stages` several minutes.
-- **A timeout nothing enforces is not a budget.** The two Grand Traverse
-  validation tests declared 60 s and measured 78 s each, and passed for as long
-  as the runner of the day did not apply a per-test timeout to a test that never
-  yields. Upgrading vitest turned them red with nothing about the game changed.
-  The number now comes from the measurement; if one of them goes red again it is
-  because the stage got slower, which is the only thing that assertion was ever
-  for.
+- **A timeout nothing enforces is not a budget, and a timeout set by eye is not
+  one either.** The two Grand Traverse validation tests in `stages.test.ts`
+  declared 60 s and measured 78 s each, and passed for as long as the runner of
+  the day did not apply a per-test timeout to a test that never yields;
+  upgrading vitest turned them red with nothing about the game changed. Its
+  twin in `conditions.test.ts` declared 90 s for the same shape of work and
+  measured 100.6 s and 101.2 s — enforced the whole time, simply never true on
+  a machine this size, and red only once the pair drifted the last second
+  across the line. Both numbers come from the measurement now. Grand Traverse
+  is always the one that goes: it is the longest stage and every one of these
+  drives it three times. When one goes red, check the *reason* before anything
+  else — a timeout and a failed assertion are completely different news, and
+  `git stash` plus one run says whether it was red before you arrived.
 - **Apply mechanical multi-hunk edits with one patch script** in the scratchpad,
   written with `assert old in s` for every hunk. It fails loudly on a stale
   assumption instead of silently matching nothing, which a fuzzy edit will do.
@@ -535,6 +541,18 @@ scannable as it grows; it is append-only.
   same block also has to pose the car (`carView.update`) before reading a
   dragging part's world position, or sparks come off where the bumper sat
   before it started hanging.
+- **A ribbon that casts its whole silhouette onto the scenery behind it.** The
+  corridor is one closed sheet — road, verge, bank and wall — so its entire
+  footprint is an occluder, and `sim/terrain.ts` generates the open ground
+  separately and *below* it wherever the road is on an embankment. With the sun
+  anywhere but overhead the ribbon printed itself on that ground beside the
+  road: a dark band the width of the corridor, running parallel to it, which
+  reads as a second track in the field. It was reported as exactly that. The
+  fix is the terrain refusing the shadow rather than the road refusing to cast
+  one — the two cases where the corridor's shadow is real (an embankment
+  shading the road beside it, a bridge deck darkening the section it crosses)
+  both land on the corridor, which still receives. One `shoot` frame of
+  `grand-traverse@40` shows it and the same frame shows it gone.
 - **three.js needing an explicit call after you change a shadow camera's
   frustum** (`light.shadow.camera.updateProjectionMatrix()`), and needing the
   key light on the opposite azimuth from the camera or the car sits on its own
@@ -581,6 +599,12 @@ scannable as it grows; it is append-only.
   strip was rebuilt only when the split *count* changed, so a run stayed looking
   clean after driving round the outside of a checkpoint. If the markup depends
   on two things, the key has both.
+- **A HUD row cleared by the thing that fills it, and by nothing else.** The
+  world record on the race HUD is arcade and multiplayer only, because a career
+  car is not the stock car those times were set in — and it was filled by
+  `loadStage`, which leaving an arcade race for the garage does not call. So the
+  record sat there underneath a career run. Anything shown conditionally has to
+  be cleared where the condition changes, not only where it is next set.
 
 ### Things somebody else typed
 
@@ -890,8 +914,25 @@ The sign is checked twice, and the second one is the check this project trusts
 for handedness: `tests/tilt.test.ts` for the arithmetic, and `mobilecheck`
 drives the *car* with synthetic orientation events from both of the ways a
 phone gets held. Flip the `atan2` and it goes red with "tilting right held one
-way did not steer right (-0.83)", which is how that assertion was confirmed to
-be load-bearing rather than decorative.
+way did not steer right", which is how that assertion was confirmed to be
+load-bearing rather than decorative.
+
+**A synthetic sensor event needs waiting on, not sleeping after.** The tilt
+reading only reaches the car inside the frame loop, and that loop runs five or
+six times a second on a page rendering through software WebGL — so one event
+and a fixed 250 ms wait reported the *previous* pose's steering often enough to
+be useless, and it reported it as a plausible number rather than as an error.
+`mobilecheck` holds the pose and waits on the world's own step count, which is
+the thing that actually says a frame has run. Same family as the
+`.lights-word.go` coin toss in `uicheck`. Its neighbour: a pass that ran with
+tilt accidentally switched *off* read 0.00 for every pose and sailed through
+the "held level" assertion, so the toggle is now checked rather than assumed —
+a check whose happy path and whose broken path agree is not a check.
+
+Full lock is `FULL_LOCK` in `ui/tilt.ts`, and it moved once already: 26° was
+reasoned from what wrists do comfortably and was too sharp to hold a line
+with, because every degree is 4.5% of lock at that figure. 35° is the whole
+range rather than the comfortable part of it.
 
 ## Tuning and calibration
 

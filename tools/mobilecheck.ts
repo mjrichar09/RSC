@@ -202,19 +202,44 @@ try {
    * the reading never asks the browser which way up it is, and the header of
    * `src/ui/tilt.ts` says why that would not have helped if it did.
    */
-  const orient = async (beta: number, gamma: number) => {
-    await page.evaluate(
-      ([b, g]) =>
-        window.dispatchEvent(
-          new DeviceOrientationEvent('deviceorientation', { alpha: 0, beta: b, gamma: g }),
-        ),
-      [beta, gamma],
-    );
-  };
-  /** Let the frame loop fold the reading in, then read what the car was given. */
-  const steerNow = async (): Promise<number> => {
-    await page.waitForTimeout(250);
-    return page.evaluate(() => (window.RSC!.status() as { steer: number }).steer);
+  /*
+   * Hold the phone at a pose, the way a phone actually holds one.
+   *
+   * A real accelerometer fires continuously, and the tilt reading only reaches
+   * the car inside the frame loop — which on this page is five or six frames a
+   * second through software WebGL. One event and a fixed wait is a coin toss
+   * on whether a frame ran in between, and it lands the wrong way often enough
+   * to report the *previous* pose's steering: measured, it read a left tilt as
+   * +0.60, which is the number the right tilt had just produced. Same family
+   * as the `.lights-word.go` coin toss in `uicheck`.
+   *
+   * So the pose is held for a stretch and the reading is waited *for* rather
+   * than slept on: the value has to sit still across two polls before it
+   * counts, which is what "the frame loop has caught up" actually means.
+   */
+  const orient = async (beta: number, gamma: number): Promise<number> => {
+    const before = (await status()).steps as number;
+    const until = Date.now() + 8000;
+    let steer = 0;
+    for (;;) {
+      const now = await page.evaluate(
+        ([b, g]) => {
+          window.dispatchEvent(
+            new DeviceOrientationEvent('deviceorientation', { alpha: 0, beta: b, gamma: g }),
+          );
+          const s = window.RSC!.status() as { steer: number; steps: number };
+          return [s.steer, s.steps];
+        },
+        [beta, gamma],
+      );
+      steer = now[0]!;
+      // The world's own step count, not a stopwatch: it is the thing that says
+      // the frame loop has actually run since the pose was applied, and it is
+      // the only honest way to wait on a page managing five frames a second.
+      if (now[1]! - before > 60) return steer;
+      if (Date.now() > until) fail('the world stopped stepping while tilting the phone');
+      await page.waitForTimeout(60);
+    }
   };
 
   await page.tap('[data-touch="tilt"]');
@@ -231,32 +256,35 @@ try {
     ['the other way', 90, -20, -42],
   ] as const) {
     // The first reading after a re-centre is the pose that means straight
-    // ahead, so this is the hold and the one after it is the measurement.
-    await orient(hold, gamma);
-    const straight = await steerNow();
+    // ahead, so this hold is what the two movements below are measured from.
+    const straight = await orient(hold, gamma);
     if (Math.abs(straight) > 0.05) {
       fail(`held level ${held} and the car steered ${straight.toFixed(2)}`);
     }
 
-    await orient(drop, gamma);
-    const right = await steerNow();
-    await orient(hold - (drop - hold), gamma);
-    const left = await steerNow();
+    const right = await orient(drop, gamma);
+    const left = await orient(hold - (drop - hold), gamma);
     console.log(
       `held ${held}: right side down gives ${right.toFixed(2)}, left side down ${left.toFixed(2)}`,
     );
     if (right < 0.4) fail(`tilting right held ${held} did not steer right (${right.toFixed(2)})`);
     if (left > -0.4) fail(`tilting left held ${held} did not steer left (${left.toFixed(2)})`);
 
-    // Put it back on the hold, so the next pass re-centres from level.
+    // Off and on again, which is how a hold is re-taken: the pose tilt is
+    // switched on in *is* its straight-ahead, so the next pass needs a fresh
+    // one. Checked rather than assumed — a pass that ran with tilt switched
+    // off would read 0.00 throughout and sail past the level assertion, which
+    // is exactly how this was found.
     await page.tap('[data-touch="tilt"]');
+    await page.waitForSelector('.touch-tilt:not(.is-on)');
     await page.tap('[data-touch="tilt"]');
+    await page.waitForSelector('.touch-tilt.is-on');
   }
 
   // And the pad is still the pad: turning tilt off hands the wheel back.
   await orient(-42, 90);
   await page.tap('[data-touch="tilt"]');
-  const afterOff = await steerNow();
+  const afterOff = await orient(-42, 90);
   if (Math.abs(afterOff) > 0.05) fail(`tilt kept steering after it was switched off (${afterOff})`);
   console.log('tilt steering reads the same movement the same way, turned either way round');
 

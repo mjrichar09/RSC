@@ -285,6 +285,20 @@ const params = new URLSearchParams(location.search);
   useRelay(params.get('turn'));
   const freeRoam = params.has('free') || params.has('trace');
 
+  /*
+   * The global times board, sharing the room broker's worker and its `?rooms=`
+   * override so there is only ever one address to keep in step. Null when
+   * there is no broker configured, which the menu, the HUD and the finish path
+   * all handle by simply not showing times.
+   *
+   * Up here with the rest of what the query string decides, rather than down
+   * beside the first thing that used it. `loadStage` reads it now — through
+   * `showWorldRecord` — and `loadStage` is reachable during boot, which is
+   * where a `const` declared further down is still in its temporal dead zone.
+   * Nothing calls it that early today; this is so nothing can.
+   */
+  const board = boardFor(params);
+
   let world: SimWorld;
   let stage: Stage | null = null;
   let race: Race | null = null;
@@ -423,6 +437,31 @@ const params = new URLSearchParams(location.search);
   let sessionHealth: Partial<Record<ComponentId, number>> = {};
   let settled = false;
 
+  /**
+   * Put the stage's world record on the HUD, with the name against it.
+   *
+   * Arcade and multiplayer only. A career time is set in whatever that
+   * player's garage has built, so putting a stock-car record beside it would
+   * be comparing two different cars — the same reason only arcade publishes.
+   *
+   * Everything about it fails soft. `Leaderboard` already answers null for
+   * every way a call can go wrong, and null here means the row simply is not
+   * there: a board that is empty, off, unconfigured on a fork, or merely slow
+   * must never be the reason a race does not start.
+   */
+  const showWorldRecord = async (key: string) => {
+    raceHud.setWorldRecord(null);
+    if (mode !== 'arcade' || !board) return;
+    const top = await board.top(key, 1);
+    // The player can change stage, change variant, or leave while this is in
+    // flight — it is a network call inside a stage load. Same guard as the
+    // ghost below, and for the same reason: the answer is only for the stage
+    // that asked.
+    if (!stage || !variant || currentKey() !== key) return;
+    const best = top?.[0];
+    raceHud.setWorldRecord(best ? { time: best.time, name: best.name } : null);
+  };
+
   /** Show the stored best for this pairing, and start chasing its ghost. */
   const attachGhost = async (key: string) => {
     const record = save.recordFor(key);
@@ -544,6 +583,7 @@ const params = new URLSearchParams(location.search);
     // somebody driving somewhere else.
     crashReel.reset();
     void attachGhost(currentKey());
+    void showWorldRecord(currentKey());
   };
 
   /** Seed the world's damage model with the condition the car is actually in. */
@@ -612,6 +652,10 @@ const params = new URLSearchParams(location.search);
       raceHud.setStage(stage, variant?.name, variant?.medals);
       refreshFinishActions();
       raceHud.setBest(save.recordFor(currentKey())?.time ?? null);
+      // Re-asked on a restart as well as on a load: somebody else may have
+      // taken it while this player was driving, and in a lobby that somebody
+      // is probably in the room.
+      void showWorldRecord(currentKey());
       raceHud.setSplitDeltas([]);
       raceHud.setDelta(null);
       recorder.reset();
@@ -668,11 +712,6 @@ const params = new URLSearchParams(location.search);
     world.rescue(race?.furthest);
     stuckFor = 0;
   };
-  // The global times board, sharing the room broker's worker and its `?rooms=`
-  // override so there is only ever one address to keep in step. Null when there
-  // is no broker configured, which the menu and the finish path both handle by
-  // simply not showing times.
-  const board = boardFor(params);
 
   const multiplayer = new MultiplayerPanel(hudRoot);
   /*
@@ -801,6 +840,12 @@ const params = new URLSearchParams(location.search);
   menu.onCareer = () => {
     rivalLiveries = [];
     mode = 'career';
+    // The world record goes with it, here and not at the next stage load:
+    // coming out of an arcade race into the garage reloads nothing, so the
+    // stock-car record sat on the HUD underneath a career run — which is the
+    // one thing it must never be shown beside, because it is not that car.
+    // Caught by `uicheck` rather than by reading this code.
+    raceHud.setWorldRecord(null);
     sessionHealth = { ...career.profile.carHealth };
     garage.setOpen(true);
   };

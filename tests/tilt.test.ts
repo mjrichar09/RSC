@@ -117,27 +117,31 @@ describe('roll to lock', () => {
   });
 
   it('reaches full lock at a wrist roll and no further', () => {
-    expect(steerFromRoll(rad(26), 0)).toBeCloseTo(1, 2);
+    expect(steerFromRoll(rad(35), 0)).toBeCloseTo(1, 2);
     expect(steerFromRoll(rad(90), 0)).toBe(1);
     expect(steerFromRoll(rad(-90), 0)).toBe(-1);
+    // Half the roll is not far off half the lock, which is the property that
+    // makes a tilt input predictable: it is linear between the dead zone and
+    // the stop, not eased.
+    expect(steerFromRoll(rad(18.6), 0)).toBeCloseTo(0.5, 1);
   });
 
   it('is measured from the reference, not from level', () => {
     // Playing on a sofa, holding the phone 30° off level the whole time.
     const lounging = rad(30);
     expect(steerFromRoll(lounging, lounging)).toBe(0);
-    expect(steerFromRoll(lounging + rad(26), lounging)).toBeCloseTo(1, 2);
+    expect(steerFromRoll(lounging + rad(35), lounging)).toBeCloseTo(1, 2);
   });
 
   it('does not slam the other way when the reading crosses the seam', () => {
     // A reference near the wrap — reachable by holding the phone almost upside
     // down, and reached for a moment by anybody who drops it. Twenty degrees
-    // each way from it is three quarters of lock; a plain subtraction reads
+    // each way from it is a little over half lock; a plain subtraction reads
     // the right-hand one as -340°, which is full *left* lock in the middle of
     // a right-hand corner. The assertion is the sign.
     const near = rad(170);
-    expect(steerFromRoll(rad(-170), near)).toBeCloseTo(0.75, 2);
-    expect(steerFromRoll(rad(150), near)).toBeCloseTo(-0.75, 2);
+    expect(steerFromRoll(rad(-170), near)).toBeCloseTo(0.54, 2);
+    expect(steerFromRoll(rad(150), near)).toBeCloseTo(-0.54, 2);
     expect(deg(shortestTurn(rad(170), rad(-170)))).toBeCloseTo(20, 6);
     expect(deg(shortestTurn(rad(-170), rad(170)))).toBeCloseTo(-20, 6);
   });
@@ -163,9 +167,9 @@ describe('the input as the game reads it', () => {
     const tilt = armed();
     tilt.feed(HOLD_A.level, HOLD_A.gamma);
     expect(tilt.steer).toBe(0);
-    tilt.feed(HOLD_A.level + 26, HOLD_A.gamma);
+    tilt.feed(HOLD_A.level + 35, HOLD_A.gamma);
     expect(tilt.steer!).toBeCloseTo(1, 2);
-    tilt.feed(HOLD_A.level - 26, HOLD_A.gamma);
+    tilt.feed(HOLD_A.level - 35, HOLD_A.gamma);
     expect(tilt.steer!).toBeCloseTo(-1, 2);
   });
 

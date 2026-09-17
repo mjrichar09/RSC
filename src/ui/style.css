@@ -458,6 +458,33 @@ html, body {
 }
 .race-best.none { opacity: 0.6; }
 
+/*
+ * The world record, under the personal best.
+ *
+ * Quieter than the PB and in the board's own gold, because it is context
+ * rather than a number you are racing against second by second — the PB is the
+ * one the delta is measured from. Paired `[hidden]` rule because an author
+ * `display` outranks the property, which is a trap this stylesheet has already
+ * been caught by twice.
+ */
+.race-wr {
+  font-size: 11px;
+  line-height: 1.3;
+  letter-spacing: 0.14em;
+  color: rgb(242 193 78 / 0.78);
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
+  display: block;
+  /* A long name must not push the clock's column wider on a phone. */
+  max-width: min(40vw, 240px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.race-wr[hidden] { display: none; }
+.race-wr b { font-weight: 700; letter-spacing: var(--track-ui); opacity: 0.75; }
+.race-wr span { color: var(--dim); }
+
 .race-cps span.ahead { color: #4fd6a0; background: rgba(79, 214, 160, 0.16); }
 .race-cps span.behind { color: var(--hot); background: rgba(232, 85, 47, 0.16); }
 .race-cps span.missed {

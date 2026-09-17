@@ -28,7 +28,35 @@ function findChromium(): string | undefined {
   return undefined;
 }
 
-const server = await createServer({ server: { port: 5181 }, logLevel: 'error' });
+/**
+ * A leaderboard with a known record in it, served by the page's own origin.
+ *
+ * The world record on the HUD is the one thing here that cannot be checked
+ * against no broker at all, because with no broker there is correctly nothing
+ * to show. A stub rather than the deployed worker: the assertion is that the
+ * name and the time reach the screen, and pointing it at a live service would
+ * make that a check on whether this machine has the internet.
+ *
+ * Loopback, which is also the only kind of `?rooms=` the game will follow.
+ */
+const WORLD_RECORD = { name: 'Solveig', time: 41.62, at: Date.now() };
+
+const server = await createServer({
+  server: { port: 5181 },
+  logLevel: 'error',
+  plugins: [
+    {
+      name: 'stub-board',
+      configureServer(dev) {
+        dev.middlewares.use((req, res, next) => {
+          if (!req.url?.startsWith('/b/') && !req.url?.startsWith('/bs')) return next();
+          res.setHeader('content-type', 'application/json');
+          res.end(JSON.stringify({ top: [WORLD_RECORD], boards: {} }));
+        });
+      },
+    },
+  ],
+});
 await server.listen();
 const executablePath = findChromium();
 const browser = await chromium.launch({
@@ -355,6 +383,44 @@ if (!(await page.isVisible('.update-bar'))) {
 }
 await page.$eval('.update-bar', (el) => ((el as HTMLElement).hidden = true));
 console.log('update bar: silent, and able to speak');
+
+/*
+ * The world record, on the HUD, during the race.
+ *
+ * Checked at the point the stage loads rather than after a lap: the row is
+ * filled by `loadStage`, so waiting for the green would only be waiting.
+ *
+ * Arcade and multiplayer only, and that half matters as much — a career time
+ * is set in whatever that player's garage has built, so a stock-car record
+ * beside it compares two different cars. Both halves are asserted below.
+ */
+await page.goto('http://localhost:5181/?vision=0&drama=0&rooms=http://localhost:5181');
+await page.waitForFunction(() => window.RSC?.ready === true);
+await page.waitForSelector('.menu.is-open');
+await page.click('[data-action="arcade"]');
+await page.waitForSelector('.menu-row');
+await page.locator('.menu-row[data-id="quarry-run:day-clear"]').click();
+await page.waitForFunction(() => (window.RSC!.status() as { stage: string }).stage === 'quarry-run');
+
+await page.waitForFunction(
+  () => (document.querySelector('.race-wr') as HTMLElement | null)?.hidden === false,
+  { timeout: 15_000 },
+);
+const wr = (await page.locator('.race-wr').textContent())?.replace(/\s+/g, ' ').trim();
+console.log(`world record on the HUD: "${wr}"`);
+if (!wr?.includes('Solveig')) throw new Error(`the record has no name on it: "${wr}"`);
+if (!wr?.includes('41.62')) throw new Error(`the record has the wrong time on it: "${wr}"`);
+
+// And a career run shows none of it, whatever the board says.
+await page.keyboard.press('Escape');
+await page.waitForSelector('.menu.is-open');
+await page.click('[data-action="career"]');
+await page.waitForSelector('.garage.is-open');
+const careerWr = await page.evaluate(
+  () => (document.querySelector('.race-wr') as HTMLElement | null)?.hidden !== false,
+);
+if (!careerWr) throw new Error('a career run is showing a stock-car world record');
+console.log('career shows no world record, because a career car is not that car');
 
 console.log('OK — career, arcade and multiplayer all open from the front door.');
 await browser.close();
