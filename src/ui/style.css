@@ -82,6 +82,19 @@ html, body {
 .hud-tl { top: 0; left: 0; }
 .hud-bl { bottom: 0; left: 0; }
 .hud-br { bottom: 0; right: 0; text-align: right; }
+/*
+ * The one readout you take in without looking at it, so it has to survive the
+ * brightest thing the game draws. A 60 px white numeral over snow with a soft
+ * black glow behind it is a grey smudge around a white shape; on a plate it is
+ * a number. Padded well past the digits so the halo has somewhere to land.
+ */
+.hud-br .rpm,
+.hud-br .cluster {
+  background: var(--panel);
+  border-radius: 5px;
+  padding: 2px 12px;
+}
+.hud-br .rpm { padding: 0; }
 
 .readout {
   font-size: 13px;
@@ -95,14 +108,34 @@ html, body {
 }
 .readout.dim { color: var(--dim); }
 
+/*
+ * One line, and on a plate.
+ *
+ * It was two lines of ten bindings, 430 px wide, in white text with a soft
+ * shadow — which over snow is white on white, and which left 166 px of the
+ * bottom edge for anything else. Both halves of that are the complaint this
+ * came from. The three bindings anyone needs in the first minute stay; the
+ * full list belongs on a help screen rather than permanently over the road.
+ */
 .help {
-  font-size: 12px;
+  max-width: 300px;
+  /* One line means one line: wrapped, it orphans a word and grows the box the
+     status strip is measured against. */
+  white-space: nowrap;
+  background: var(--panel);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 11px;
   color: var(--dim);
   letter-spacing: 0.05em;
   /* The HUD sits over whatever biome you are on, and a snow stage is almost
      white — every readout needs to carry its own contrast rather than relying
-     on the scene behind it being dark. */
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95), 0 0 8px rgba(0, 0, 0, 0.7);
+     on the scene behind it being dark. A shadow alone was this comment's first
+     answer and it is not enough: a blurred black glow behind white text on a
+     white background is a smudge, and the brighter the scene the more it reads
+     as the text being out of focus. The plate above is the contrast; the
+     shadow is only there to soften its edge. */
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
 }
 .help b { color: var(--ink); font-weight: 600; }
 
@@ -286,12 +319,30 @@ html, body {
 
 .race { position: absolute; inset: 0; pointer-events: none; }
 
+/*
+ * The clock, and how the run is going. Nothing else.
+ *
+ * The progress bar and the checkpoint chips used to be in here, which put five
+ * separate things in one stack at the top of the screen and left the bottom
+ * middle empty. They are `.race-status` now, along the bottom edge.
+ *
+ * On a plate, like everything else the driver has to read. Bare white text with
+ * a soft shadow is legible over tarmac and *illegible* over snow: the glow is
+ * a 10 px blur of near-black behind a white glyph, which on a white background
+ * is grey mush around a shape you can no longer resolve. Every readout that
+ * already sat on `--panel` — the minimap, the condition panel, the surface
+ * chip — was readable on the same frame that made this unreadable, which is
+ * the whole argument for making the exceptions match.
+ */
 .race-top {
   position: absolute;
   top: 16px;
   left: 50%;
   transform: translateX(-50%);
-  width: 340px;
+  min-width: 250px;
+  padding: 8px 18px 10px;
+  background: var(--panel);
+  border-radius: 5px;
   text-align: center;
 }
 
@@ -313,10 +364,35 @@ html, body {
 }
 .race-clock.staged { color: var(--dim); }
 
+/*
+ * How far round, and which checkpoints are behind you: along the bottom edge.
+ *
+ * Down here because it is a glanceable state rather than a number you read —
+ * the clock is what your eye goes to and this belongs out of its way. It sits
+ * between the two bottom corners on a desktop and between the thumbs on a
+ * phone, which is the only horizontal room either layout has left.
+ */
+.race-status {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  /*
+   * As wide as it can be without touching the two bottom corners, which is not
+   * a constant: at 1280 there is room for all of it and at 900 the keyboard
+   * hints and the speed cluster leave 300 px between them. Measured rather
+   * than guessed — `uicheck` checks the three of them do not overlap, and a
+   * fixed 340 px failed that check the first time it ran.
+   */
+  width: min(340px, 100vw - 680px);
+  text-align: center;
+}
+
 .race-progress {
   height: 4px;
-  margin: 8px 0 6px;
-  background: rgba(255, 255, 255, 0.16);
+  margin: 0 0 6px;
+  background: rgba(0, 0, 0, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
   border-radius: 2px;
   overflow: hidden;
 }
@@ -459,6 +535,30 @@ html, body {
 .race-best.none { opacity: 0.6; }
 
 /*
+ * The two times worth chasing, in the top-left corner under the readouts.
+ *
+ * The record first and the personal best under it, which is the order they
+ * matter in: the record is what the stage is worth, the PB is what you are
+ * beating today. Above the condition panel rather than below it — the panel
+ * grows downward as damage toasts arrive, so anything pinned under it is
+ * pinned under a moving edge.
+ *
+ * Empty of both in a career run with no time set, and then it is an empty
+ * plate, so the background only appears when there is something on it.
+ */
+.race-times {
+  position: absolute;
+  top: 72px;
+  left: 18px;
+  min-width: 132px;
+  padding: 6px 10px;
+  background: var(--panel);
+  border-radius: 4px;
+  text-align: left;
+}
+.race-times:not(:has(> :not([hidden]))) { display: none; }
+
+/*
  * The world record, under the personal best.
  *
  * Quieter than the PB and in the board's own gold, because it is context
@@ -528,9 +628,18 @@ html, body {
 
 /* ---- Damage panel (P4) -------------------------------------------------- */
 
+/*
+ * Below the surface readout and the times, not on top of them.
+ *
+ * At `top: 16px` this started 49 px inside `.hud-tl`, which is 65 px tall on a
+ * desktop — so the surface chip and the frame counter were printed through the
+ * word CONDITION. The phone layout had already been fixed for exactly this and
+ * the desktop one had not, which is what "two absolutely positioned panels both
+ * claiming the corner" looks like when only one of them gets measured.
+ */
 .damage {
   position: absolute;
-  top: 16px;
+  top: 132px;
   left: 18px;
   width: 168px;
   padding: 12px 14px;
@@ -2197,16 +2306,40 @@ html, body {
 
   /* The clock and the splits move up and shrink; the stage name goes, because
      you already know which stage you chose. */
-  .race-top { top: 4px; }
+  .race-top { top: 4px; padding: 4px 12px 6px; min-width: 0; }
   .race-stage { display: none; }
   .race-clock { font-size: 30px; }
-  .race-progress { width: min(46vw, 340px); }
   .race-cps span { padding: 2px 8px; }
 
-  /* Below the surface readout rather than on top of it: two absolutely
-     positioned panels both claiming the top-left corner is how "CONDITION"
-     ended up printed through "DIRT". */
-  .damage { top: 26px; left: 8px; width: 108px; padding: 6px 8px; }
+  /*
+   * The status strip sits between the thumbs rather than under one of them.
+   *
+   * Centred on a desktop, but on a phone the bottom middle is not free: the
+   * steering pad owns the left 38% and the pedals the right, and a centred
+   * 340 px strip runs a third of its width under the wheel. Pinned to the two
+   * edges those controls actually occupy — the same expressions they are laid
+   * out with, so it follows them rather than repeating a measurement.
+   */
+  .race-status {
+    left: 38%;
+    right: max(23vmin, 92px);
+    bottom: max(2vmin, 8px);
+    width: auto;
+    transform: none;
+  }
+
+  /*
+   * The left column, in the order it is read: surface, times, condition.
+   *
+   * Below the surface readout rather than on top of it: two absolutely
+   * positioned panels both claiming the top-left corner is how "CONDITION"
+   * ended up printed through "DIRT". The times block went in between them, so
+   * every number below it moved down by exactly its height.
+   */
+  .race-times { top: 32px; left: 8px; min-width: 0; padding: 3px 7px; }
+  .race-wr,
+  .race-best { font-size: 10px; }
+  .damage { top: 78px; left: 8px; width: 108px; padding: 6px 8px; }
   /* Fixed height so the damage panel below it has something to sit under. */
   .hud-tl { padding: 3px 10px; font-size: var(--step-0); line-height: 1.2; height: 24px; }
   /* A debug readout. It is not worth a line on a phone. */

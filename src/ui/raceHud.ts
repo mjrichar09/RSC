@@ -90,8 +90,12 @@ export class RaceHud {
         <div class="race-clock" id="race-clock">0:00.00</div>
         <div class="race-delta" id="race-delta"></div>
         <div class="race-pace" id="race-pace"></div>
-        <div class="race-best" id="race-best"></div>
+      </div>
+      <div class="race-times">
         <div class="race-wr" id="race-wr" hidden></div>
+        <div class="race-best" id="race-best"></div>
+      </div>
+      <div class="race-status">
         <div class="race-progress"><div id="race-progress-fill"></div></div>
         <div class="race-cps" id="race-cps"></div>
       </div>

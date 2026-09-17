@@ -605,6 +605,24 @@ scannable as it grows; it is append-only.
   `loadStage`, which leaving an arcade race for the garage does not call. So the
   record sat there underneath a career run. Anything shown conditionally has to
   be cleared where the condition changes, not only where it is next set.
+- **A layout checked at one size is checked at one size.** `mobilecheck` has
+  asserted that no two HUD panels overlap since the phone layout existed, and
+  nothing asserted it on a desktop — so `.hud-tl` (65 px tall) and `.damage`
+  (`top: 16px`) printed the surface readout through the word CONDITION on every
+  wide window, for as long as that went unmeasured. The same class of bug had
+  already been found and fixed *on the phone*, with a comment saying so, and the
+  fix was never carried across. `uicheck` checks the desktop layout now. The
+  general form: a check that only runs in one viewport is a claim about that
+  viewport, however general its name sounds.
+- **White text with a soft shadow is not a contrast strategy.** Every floating
+  readout — the clock, the pace line, the speed, the keyboard hints — sat on
+  bare text with a 10 px black glow, which is legible over tarmac and a grey
+  smudge over snow, where it reads as the *text being out of focus* rather than
+  as low contrast. Everything on this HUD that was already readable on the same
+  frame (the minimap, the condition panel, the surface chip) was on a `--panel`
+  plate. The glow is for softening a plate's edge, not for making a glyph out of
+  a background. `shoot --size=1280x720 --cells=north-pass@30` is the frame:
+  snow is the brightest thing the game draws.
 
 ### Things somebody else typed
 

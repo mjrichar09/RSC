@@ -411,6 +411,50 @@ console.log(`world record on the HUD: "${wr}"`);
 if (!wr?.includes('Solveig')) throw new Error(`the record has no name on it: "${wr}"`);
 if (!wr?.includes('41.62')) throw new Error(`the record has the wrong time on it: "${wr}"`);
 
+/*
+ * And nothing on the race HUD sits on top of anything else.
+ *
+ * `mobilecheck` has asserted this at phone size for a long time and nothing
+ * asserted it at desktop size, which is how the surface readout came to be
+ * printed through the word CONDITION on every wide window: `.hud-tl` is 65 px
+ * tall and `.damage` started at 16. Two absolutely positioned panels both
+ * claiming a corner, caught on the phone and never on the desktop, because
+ * only one of the two layouts was ever measured.
+ *
+ * Checked with both times showing, which is the tallest the left column gets.
+ */
+const clash = (await page.evaluate(`(() => {
+  const names = ['.hud-tl', '.race-times', '.damage', '.race-top', '.minimap',
+                 '.race-notes', '.race-status', '.hud-bl', '.hud-br'];
+  const found = [];
+  for (let i = 0; i < names.length; i++) {
+    for (let j = i + 1; j < names.length; j++) {
+      const x = document.querySelector(names[i]);
+      const y = document.querySelector(names[j]);
+      if (!x || !y) continue;
+      const a = x.getBoundingClientRect();
+      const b = y.getBoundingClientRect();
+      if (a.width === 0 || a.height === 0 || b.width === 0 || b.height === 0) continue;
+      if (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom) {
+        found.push(names[i] + ' over ' + names[j]);
+      }
+    }
+  }
+  return found;
+})()`)) as string[];
+if (clash.length > 0) throw new Error(`race HUD pieces on top of each other: ${clash.join(', ')}`);
+
+// And the status strip is along the bottom edge, which is the point of moving
+// it off the top: a third of the screen height below the clock, not under it.
+const statusBox = (await page.locator('.race-status').boundingBox())!;
+const tall = await page.evaluate(() => window.innerHeight);
+if (statusBox.y < tall * 0.75) {
+  throw new Error(`the status strip is at y ${statusBox.y}, not near the bottom`);
+}
+console.log(
+  `race HUD: nothing overlaps, status strip at the bottom (y ${Math.round(statusBox.y)} of ${tall})`,
+);
+
 // And a career run shows none of it, whatever the board says.
 await page.keyboard.press('Escape');
 await page.waitForSelector('.menu.is-open');
