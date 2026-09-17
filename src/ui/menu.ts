@@ -395,10 +395,10 @@ export class StartMenu {
             <em>direct connection, no server</em>
           </button>
         </div>
+        <button class="menu-aux" data-action="help">How to play</button>
         ${this.volumeRow()}
         <div class="menu-foot">
           <span><b>Esc</b> menu · <b>R</b> restart · <b>Q</b> rescue · <b>T</b> tuning · <b>V</b> visibility · <b>K</b> slow-mo</span>
-          <button class="menu-help-btn" data-action="help" aria-label="How to play">?</button>
         </div>
       </div>`;
   }

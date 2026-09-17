@@ -631,7 +631,13 @@ scannable as it grows; it is append-only.
   already been found and fixed *on the phone*, with a comment saying so, and the
   fix was never carried across. `uicheck` checks the desktop layout now. The
   general form: a check that only runs in one viewport is a claim about that
-  viewport, however general its name sounds.
+  viewport, however general its name sounds. It happened again within the
+  hour, the other way round: the help button was put in `.menu-foot`, which is
+  `display: none` on a touch device because key hints are noise without keys —
+  so the phone had no route to the help screen at all, and that screen is the
+  only place tilt steering is written down. `uicheck` clicked it happily the
+  whole time. **A control that only one viewport's check can reach needs the
+  other viewport's check too**, and both now have one.
 - **White text with a soft shadow is not a contrast strategy.** Every floating
   readout — the clock, the pace line, the speed, the keyboard hints — sat on
   bare text with a 10 px black glow, which is legible over tarmac and a grey

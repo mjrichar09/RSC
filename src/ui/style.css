@@ -1696,23 +1696,38 @@ html, body {
 .menu-foot b { color: var(--ink); }
 .menu-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 
-/* The one way into the help screen. Thumb-sized, because it is also the only
-   way into it on a phone, where none of the keys beside it exist. */
-.menu-help-btn {
-  flex: none;
+/*
+ * The one way into the help screen, so it has to be visible and pressable.
+ *
+ * It was a 34 px `?` in the footer beside the key hints, which was wrong twice
+ * over: at a 720-tall window it sat 15 px from the bottom edge of a menu that
+ * scrolls, so a shorter window put it below the fold — and the footer is
+ * `display: none` on a touch device, because key hints are noise without keys.
+ * That took the button with it, so on a phone there was no route to the help
+ * screen at all, which is the one place tilt steering is written down.
+ *
+ * Under the three modes and above the volume: in the flow, with a word on it,
+ * and quieter than a mode choice so it does not read as a fourth way to play.
+ */
+.menu-aux {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
   -webkit-appearance: none;
   appearance: none;
   border: 0;
-  border-radius: 999px;
-  width: 34px;
-  height: 34px;
-  font: 700 15px/1 var(--font-ui);
-  color: var(--ink);
-  background: rgb(238 242 247 / 0.1);
-  box-shadow: inset 0 0 0 1px rgb(238 242 247 / 0.24);
+  border-radius: 6px;
+  padding: 11px 16px;
+  font: 600 12px/1 var(--font-ui);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+  background: rgb(238 242 247 / 0.05);
+  box-shadow: inset 0 0 0 1px rgb(238 242 247 / 0.14);
   cursor: pointer;
+  transition: color 0.12s ease-out, background 0.12s ease-out;
 }
-.menu-help-btn:hover { background: rgb(238 242 247 / 0.18); }
+.menu-aux:hover { color: var(--ink); background: rgb(238 242 247 / 0.11); }
 
 /*
  * The help text itself.

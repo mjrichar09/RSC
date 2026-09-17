@@ -59,6 +59,29 @@ try {
   await page.waitForSelector('.menu.is-open');
   console.log('menu opens on a phone');
 
+  /*
+   * Help is reachable with a thumb.
+   *
+   * It was not: the button lived in the menu footer beside the keyboard hints,
+   * and that footer is `display: none` on a touch device because key hints are
+   * noise without keys — so the phone had no route to the help screen at all,
+   * and the help screen is the only place tilt steering is written down. The
+   * desktop check in `uicheck` passed throughout, which is the same
+   * one-viewport blind spot the HUD overlap had.
+   */
+  const helpBtn = (await page.locator('[data-action="help"]').boundingBox()) ??
+    fail('no way into the help screen on a phone');
+  if (Math.min(helpBtn.width, helpBtn.height) < 30) {
+    fail(`the help button is ${helpBtn.width}x${helpBtn.height}, too small for a thumb`);
+  }
+  await page.tap('[data-action="help"]');
+  await page.waitForSelector('.help-doc');
+  const tiltHelp = (await page.locator('.help-doc').textContent()) ?? '';
+  if (!tiltHelp.includes('TILT')) fail('the phone help screen does not explain tilt steering');
+  await page.tap('[data-action="back"]');
+  await page.waitForSelector('[data-action="career"]');
+  console.log('help screen reachable with a thumb, and it covers tilt');
+
   // Nothing may overflow the viewport: a menu you cannot scroll to the bottom
   // of is a menu with a button you cannot press.
   const overflow = await page.evaluate(() => ({
