@@ -25,26 +25,36 @@
  *
  * ## How wide the gate is
  *
- * As wide as the corridor: the road, its verges and its embankments. Not as
- * wide as the posts, which stand at the road edge, and the difference was
- * measured rather than chosen. Driving every stage and variant with the AI at
- * three levels of commitment (`.tmpcheck` aside, the same three
- * `validateStage` uses), the over-committed run is outside the posts by up to
- * five metres at three of Grand Traverse's six gates — it is on the verge,
- * which is part of the stage and is meant to be driveable at a price. A rule
- * that failed that run would be refereeing a wheel on the grass.
+ * The posts, and nothing beyond them. A gate is passed by crossing its plane
+ * with `|across| <= gate.width`, which is where the posts stand.
  *
- * What it does stop is the thing that was actually broken: arriving at a gate's
- * arc length from somewhere else entirely. On a stage that loops back within
- * forty metres of itself, the old rule handed you a checkpoint for being level
+ * It used to allow a further `vergeWidth + bankWidth` — 8.2 m past each post —
+ * on the reasoning that the verge is part of the stage and the rule should not
+ * referee a wheel on the grass. Two things were wrong with that. It is not a
+ * wheel: the test is the car's centre, so 8.2 m outside a post is the whole
+ * car clear of the gate with room to spare, and driving round the outside of a
+ * checkpoint scored the same as going through it. And the measurement behind
+ * it had gone stale. Re-measured across every stage at the three commitment
+ * levels `validateStage` uses, taking `across` at the instant the plane is
+ * crossed rather than at nearest approach: every authored stage crosses
+ * *inside* the posts with 2.7 to 6.4 m to spare, Grand Traverse worst at
+ * 2.72 m inside — where the old comment claimed five metres outside at three
+ * of its six gates.
+ *
+ * Because the test is the car's centre and the posts stand at the road edge,
+ * half a car's width outside a post still counts. That is the allowance, and
+ * it is the one a point test gives for free.
+ *
+ * The other thing this rule stops is unchanged: arriving at a gate's arc
+ * length from somewhere else entirely. On a stage that loops back within forty
+ * metres of itself, the original rule handed you a checkpoint for being level
  * with it on the wrong leg, and handed you the finish for cutting across the
- * middle. Both now require crossing the gate's own plane, inside the corridor,
- * in order.
+ * middle. Both require crossing the gate's own plane, between its posts, in
+ * order.
  */
 
 import type { Checkpoint, MedalTimes, Stage } from '../sim/stage.js';
 import type { Vec3 } from '../sim/math.js';
-import { CORRIDOR } from '../sim/corridor.js';
 import type { VehicleState } from '../sim/vehicle.js';
 
 export type Medal = 'author' | 'gold' | 'silver' | 'bronze' | 'finish';
@@ -82,14 +92,6 @@ const FINISH_BAND = 4;
  * generous for something the car passes at under one metre a step.
  */
 const GATE_RANGE = 30;
-
-/**
- * How far either side of a gate's posts still counts as through it.
- *
- * The verge and the embankment: the whole width the stage is cut to. See the
- * note at the top of this file for the measurement behind it.
- */
-const GATE_SHOULDER = CORRIDOR.vergeWidth + CORRIDOR.bankWidth;
 
 /** Where a point sits relative to a gate: through it, and across it. */
 function relativeTo(gate: Checkpoint, point: Vec3): { through: number; across: number } {
@@ -241,7 +243,7 @@ export class Race {
         before !== undefined &&
         at &&
         before < 0 !== now.through < 0 &&
-        Math.abs(now.across) <= gate.width + GATE_SHOULDER
+        Math.abs(now.across) <= gate.width
       ) {
         this.pass(i, checkpoints.length);
         continue;
@@ -264,7 +266,7 @@ export class Race {
       line.through >= -FINISH_BAND && Math.hypot(line.through, line.across) <= GATE_RANGE;
     if (
       atEnd &&
-      Math.abs(line.across) <= this.finish.width + GATE_SHOULDER &&
+      Math.abs(line.across) <= this.finish.width &&
       this.nextCheckpoint >= checkpoints.length
     ) {
       this.phase = 'finished';

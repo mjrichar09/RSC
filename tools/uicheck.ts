@@ -72,6 +72,44 @@ await page.waitForFunction(() => window.RSC?.ready === true);
 await page.waitForSelector('.menu.is-open');
 console.log('menu opens on boot');
 
+/*
+ * How to play, from the front screen.
+ *
+ * It is the only route into the help text, and on a phone it is the only route
+ * into the key list at all — the permanent on-screen one was cut to three
+ * bindings on the strength of this screen existing, so "the button opens it and
+ * Back comes out" is load-bearing rather than cosmetic.
+ */
+await page.click('[data-action="help"]');
+await page.waitForSelector('.help-doc');
+const helpText = (await page.locator('.help-doc').textContent())?.replace(/\s+/g, ' ') ?? '';
+for (const wanted of ['Career', 'Arcade', 'Multiplayer', 'Handbrake', 'TILT', 'checkpoint']) {
+  if (!helpText.includes(wanted)) throw new Error(`the help screen never mentions ${wanted}`);
+}
+/*
+ * It is long, so the end of it has to be reachable.
+ *
+ * Checked by scrolling to the bottom and looking for the last heading, not by
+ * asking whether some element overflows: `.menu` is the scroller and
+ * `.help-doc` is the content, so "does this element scroll" asks the wrong one
+ * and answers no for a screen that is perfectly scrollable.
+ */
+await page.evaluate(`(() => {
+  const menu = document.querySelector('.menu');
+  menu.scrollTop = menu.scrollHeight;
+})()`);
+const lastVisible = await page.evaluate(`(() => {
+  const heads = document.querySelectorAll('.help-doc h2');
+  const last = heads[heads.length - 1];
+  if (!last) return false;
+  const r = last.getBoundingClientRect();
+  return r.top >= 0 && r.bottom <= window.innerHeight;
+})()`);
+if (!lastVisible) throw new Error('the help screen cannot be scrolled to its last section');
+await page.click('[data-action="back"]');
+await page.waitForSelector('[data-action="career"]');
+console.log(`help screen opens and closes (${helpText.trim().length} characters)`);
+
 // Career -> garage
 await page.click('[data-action="career"]');
 await page.waitForSelector('.garage.is-open');

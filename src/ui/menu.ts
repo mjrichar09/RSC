@@ -27,7 +27,7 @@ export interface ArcadePick {
   variant: StageVariant;
 }
 
-type Screen = 'main' | 'arcade' | 'name';
+type Screen = 'main' | 'arcade' | 'name' | 'help';
 
 export class StartMenu {
   onCareer: (() => void) | null = null;
@@ -168,6 +168,9 @@ export class StartMenu {
         this.setOpen(false);
         this.onMultiplayer?.();
         return;
+      case 'help':
+        this.screen = 'help';
+        break;
       case 'back':
         this.screen = 'main';
         break;
@@ -225,12 +228,114 @@ export class StartMenu {
         ? this.mainScreen()
         : this.screen === 'name'
           ? this.nameScreen()
-          : this.arcadeScreen();
+          : this.screen === 'help'
+            ? this.helpScreen()
+            : this.arcadeScreen();
     if (this.screen === 'name') {
       const input = this.root.querySelector('[data-act="name"]') as HTMLInputElement | null;
       input?.focus();
       input?.select();
     }
+  }
+
+  /**
+   * How to play.
+   *
+   * Reachable from the front screen and nowhere else: it is read once, and a
+   * help button on every panel is the clutter it exists to remove. The
+   * keyboard bindings live here in full, which is what let the permanent
+   * on-screen list at the bottom-left shrink to three.
+   *
+   * Static markup on purpose — nothing here reads game state, so there is
+   * nothing to keep in step with the rest of the UI. The one thing that would
+   * rot is the numbers: full lock and the dead zone are stated because a
+   * player tilting a phone needs to know how far, and if `ui/tilt.ts` moves
+   * them this text is wrong.
+   */
+  private helpScreen(): string {
+    return `
+      <div class="menu-inner">
+        <div class="menu-head">
+          <h1 class="menu-title small">HOW TO PLAY</h1>
+          <button data-action="back">Back</button>
+        </div>
+        <div class="menu-scroll help-doc">
+          <p>
+            Timed single-car runs on point-to-point rally stages. One car on the
+            stage at a time: you are racing the clock, not another car. Tyres
+            have a grip limit, the body takes damage, and damage costs money.
+          </p>
+
+          <h2>Modes</h2>
+          <dl>
+            <dt>Career</dt>
+            <dd>
+              Your car and your money. Stages charge an entry fee and pay out by
+              medal. Damage persists between runs until you pay to repair it.
+              Medals unlock harder stages and conditions.
+            </dd>
+            <dt>Arcade</dt>
+            <dd>
+              Any unlocked stage and conditions, stock car, nothing saved. Every
+              arcade car is identical, so these are the only times that go on
+              the world leaderboard.
+            </dd>
+            <dt>Multiplayer</dt>
+            <dd>
+              Up to 4 cars, same stage, live. One player hosts; others join with
+              a 6-character room code or a pasted invite code. Stock cars.
+              Nothing carries back to a career.
+            </dd>
+          </dl>
+
+          <h2>Controls</h2>
+          <table class="help-keys">
+            <tr><th></th><th>Keyboard</th><th>Touch</th></tr>
+            <tr><td>Steer</td><td><b>A</b> <b>D</b> or <b>&larr;</b> <b>&rarr;</b></td><td>Drag in the left third</td></tr>
+            <tr><td>Throttle</td><td><b>W</b> or <b>&uarr;</b></td><td>GO</td></tr>
+            <tr><td>Brake</td><td><b>S</b> or <b>&darr;</b></td><td>BRAKE</td></tr>
+            <tr><td>Handbrake</td><td><b>Space</b></td><td>HAND</td></tr>
+            <tr><td>Restart</td><td><b>R</b></td><td>&mdash;</td></tr>
+            <tr><td>Rescue to road</td><td><b>Q</b></td><td>&mdash;</td></tr>
+            <tr><td>Menu</td><td><b>Esc</b></td><td>&#9776;</td></tr>
+            <tr><td>Tuning panel</td><td><b>T</b></td><td>&mdash;</td></tr>
+            <tr><td>Mute / visibility / slow-mo</td><td><b>M</b> <b>V</b> <b>K</b></td><td>&mdash;</td></tr>
+          </table>
+          <p>
+            Gamepads work if connected. Steering is analogue in both schemes &mdash;
+            key presses ramp, drag distance maps to lock angle. Restart and
+            rescue are disabled in career runs.
+          </p>
+          <p>The handbrake rotates the car; it does not stop it.</p>
+
+          <h2>Tilt steering (phone)</h2>
+          <p><b>TILT</b> at the top of the screen switches steering from drag to tilt.</p>
+          <ul>
+            <li>The pose you are holding when you enable it becomes centre. It calibrates to you, not to level.</li>
+            <li>Roll &plusmn;35&deg; for full lock. Dead zone is &plusmn;2.2&deg;.</li>
+            <li>The drag pad stays live and overrides tilt while a thumb is down.</li>
+            <li>Tap twice to re-centre after changing grip or turning the phone round.</li>
+            <li>iOS asks permission on first use; the grant lasts the session.</li>
+          </ul>
+
+          <h2>Display</h2>
+          <ul>
+            <li><b>Top left</b> &mdash; surface, world record, personal best, car condition (temp / brake / fuel).</li>
+            <li><b>Top centre</b> &mdash; clock, delta to your best, medal you are currently on pace for.</li>
+            <li><b>Bottom centre</b> &mdash; stage progress and checkpoint splits.</li>
+            <li><b>Bottom left</b> &mdash; next two corners. Severity <b>1</b> is a hairpin, <b>6</b> is flat.</li>
+            <li><b>Bottom right</b> &mdash; speed and gear.</li>
+          </ul>
+
+          <h2>Rules</h2>
+          <ul>
+            <li>Missing a checkpoint invalidates the run. The HUD says so immediately.</li>
+            <li>Weather and time of day change grip and visibility, not just appearance.</li>
+            <li>Medal times come from measured laps of each stage.</li>
+            <li>Career damage carries to the next start line.</li>
+          </ul>
+        </div>
+      </div>`;
   }
 
   /**
@@ -293,6 +398,7 @@ export class StartMenu {
         ${this.volumeRow()}
         <div class="menu-foot">
           <span><b>Esc</b> menu · <b>R</b> restart · <b>Q</b> rescue · <b>T</b> tuning · <b>V</b> visibility · <b>K</b> slow-mo</span>
+          <button class="menu-help-btn" data-action="help" aria-label="How to play">?</button>
         </div>
       </div>`;
   }

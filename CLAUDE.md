@@ -337,6 +337,24 @@ scannable as it grows; it is append-only.
   crossing it, and three of four stages in one screenshot were telling the
   driver they had missed a checkpoint still half a stage ahead. Check the
   distance to the gate, not to its plane.
+- **A gate as wide as the corridor is not a gate.** The crossing test allowed
+  `vergeWidth + bankWidth` — 8.2 m — beyond each post, so that a wheel on the
+  grass would not be refereed. But the test is the car's *centre*, so 8.2 m
+  outside a post is the whole car clear of the gate, and driving round the
+  outside of a checkpoint scored exactly the same as going through it. It was
+  reported as "passing just outside counts". The allowance a point test gives
+  for free — half a car's width past a post — is the right one, and the rule is
+  `|across| <= gate.width` now.
+
+  The measurement that justified the shoulder had also gone stale, which is the
+  general lesson: it said the AI's over-committed run was outside the posts by
+  up to five metres at three of Grand Traverse's six gates. Re-measured across
+  every stage at the three commitment levels `validateStage` uses, taking
+  `across` at the instant the plane is crossed rather than at nearest approach,
+  every authored stage crosses *inside* the posts with 2.7 to 6.4 m to spare —
+  Grand Traverse worst at 2.72 m **inside**. `npm run stages` finishes all 13
+  with the tighter rule. A tolerance justified by a number nobody has re-run is
+  a tolerance justified by nothing.
 - **A stage passing over itself.** `selfIntersections` skips pairs at different
   heights, so a section running 12 m above another and 1 m across from it was
   never reported — and the ground mesh, which took the *nearest* road's height,
