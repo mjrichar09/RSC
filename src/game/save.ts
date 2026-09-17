@@ -113,9 +113,26 @@ export interface Settings {
    * else already reads it.
    */
   practice: boolean;
+  /**
+   * Steer by tilting the phone rather than by dragging a thumb.
+   *
+   * Remembered, but a remembered yes is not the same as permission: iOS hands
+   * over the sensor only from inside a user gesture, so this being true means
+   * "turn it on at the first touch", not "it is on". `main.ts` does that, and
+   * a device that then says no simply plays with the pad.
+   */
+  tilt: boolean;
 }
 
-export const DEFAULT_SETTINGS: Settings = { vision: 0.6, drama: 1, practice: true, volume: 1 };
+export const DEFAULT_SETTINGS: Settings = {
+  vision: 0.6,
+  drama: 1,
+  practice: true,
+  volume: 1,
+  // Off. The thumb drag works lying on a sofa, in a car and in bed, and tilt
+  // does not — so it is a thing you choose, never a thing you find yourself in.
+  tilt: false,
+};
 
 /** Exposed for tests: bringing a stored profile up to date and making it safe. */
 export { migrate as migrateProfile };
@@ -189,6 +206,10 @@ function migrate(stored: unknown): Profile {
             typeof stored.settings.practice === 'boolean'
               ? stored.settings.practice
               : DEFAULT_SETTINGS.practice,
+          tilt:
+            typeof stored.settings.tilt === 'boolean'
+              ? stored.settings.tilt
+              : DEFAULT_SETTINGS.tilt,
         }
       : { ...DEFAULT_SETTINGS },
   };

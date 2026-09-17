@@ -6,14 +6,21 @@
  * held in landscape, so that is where the controls go, and nothing else may be
  * put there.
  *
- * Steering is a **relative drag**, not a wheel and not a pair of arrows. Put a
- * thumb down anywhere in the left third and slide: the offset from wherever
- * you first touched is the steering angle. That matters more than it sounds.
+ * Steering is a **relative drag** by default, not a wheel and not a pair of
+ * arrows. Put a thumb down anywhere in the left third and slide: the offset
+ * from wherever you first touched is the steering angle. That matters more
+ * than it sounds.
  * A fixed on-screen wheel demands you look at it to find it; arrows are
  * digital, and this car's whole tyre model is about the region between
  * "straight" and "full lock", which a digital input cannot reach. A relative
  * drag is analogue, needs no aiming, and re-centres itself under your thumb
  * every time you lift.
+ *
+ * Tilt is the other way of steering and sits beside it rather than replacing
+ * it — `tilt.ts` for what it measures and why it is off until asked for. The
+ * two coexist under one rule: **a thumb on the pad always wins.** Somebody who
+ * puts a thumb down on the steering pad is telling you which input they meant,
+ * and a tilt reading arguing with it is the control fighting its player.
  *
  * Everything here is pointer events with explicit `pointerId` tracking, which
  * is the only way to get two thumbs working at once — `touchstart` bookkeeping
@@ -22,6 +29,7 @@
 
 import type { DriverInput } from '../sim/input.js';
 import { clamp } from '../sim/math.js';
+import { TiltSteering, tiltAvailable } from './tilt.js';
 
 /**
  * Thumb travel for full lock, as a fraction of the short screen edge.
@@ -70,7 +78,21 @@ export class TouchControls {
       return false;
     }
   })();
+  /**
+   * Tilt, which is a mode rather than a control.
+   *
+   * Public because `main.ts` owns two things this cannot: the saved
+   * preference, and the first touch anywhere in the page — which is the
+   * gesture iOS insists on before it will hand over the sensor, and which
+   * happens on a menu tap long before a race.
+   */
+  readonly tilt = new TiltSteering();
+  /** Raised when the player turns tilt on or off, so the choice can be saved. */
+  onTilt: ((on: boolean) => void) | null = null;
+
   private readonly wheel: HTMLElement;
+  private readonly tiltBtn: HTMLButtonElement;
+  private readonly steerLabel: HTMLElement;
   private readonly rotate: HTMLElement;
   /** The "add it to your home screen" note, on the one platform that needs it. */
   private readonly ios: HTMLElement;
@@ -88,9 +110,17 @@ export class TouchControls {
         <button class="touch-btn touch-brake" data-touch="brake">BRAKE</button>
         <button class="touch-btn touch-gas" data-touch="throttle">GO</button>
       </div>
+      <button class="touch-tilt" data-touch="tilt" aria-pressed="false">TILT</button>
       <button class="touch-menu" data-touch="menu">☰</button>`;
     parent.appendChild(this.root);
     this.wheel = this.root.querySelector('.touch-wheel i')!;
+    this.tiltBtn = this.root.querySelector('.touch-tilt')!;
+    this.steerLabel = this.root.querySelector('.touch-steer span')!;
+    // No such event, no such button. A laptop with a touchscreen reaches this
+    // code and has no accelerometer, and a button that can only ever say no is
+    // worse than no button at all.
+    if (!tiltAvailable()) this.tiltBtn.hidden = true;
+    this.tilt.onChange = () => this.showTilt();
 
     /*
      * Turn the phone.
@@ -248,7 +278,13 @@ export class TouchControls {
       const rate = (target > this[pedal] ? PEDAL_RATE : PEDAL_RELEASE) * dt;
       this[pedal] = clamp(this[pedal] + clamp(target - this[pedal], -rate, rate), 0, 1);
     }
-    if (this.stick === null) {
+    // A thumb on the pad outranks the phone's own idea of level, always: the
+    // player has just said which input they meant. Tilt takes over the moment
+    // it is let go, with no re-centring ramp in between — the tilt reading is
+    // absolute, so there is nothing to return *to*.
+    const tilted = this.stick === null ? this.tilt.steer : null;
+    if (tilted !== null) this.steer = tilted;
+    else if (this.stick === null) {
       this.steer += clamp(-this.steer, -STEER_RETURN * dt, STEER_RETURN * dt);
     }
     this.wheel.style.transform = `translateX(${(this.steer * 34).toFixed(1)}px)`;
@@ -284,6 +320,10 @@ export class TouchControls {
       this.onMenu?.();
       return;
     }
+    if (what === 'tilt') {
+      void this.toggleTilt();
+      return;
+    }
     if (what === 'steer') {
       this.stick = { pointer: event.pointerId, originX: event.clientX };
       // A backstop, not the main path: `main.ts` asks on the first touch
@@ -304,6 +344,51 @@ export class TouchControls {
     this.wanted[pedal] = 1;
     this.pedals.set(event.pointerId, pedal);
     target!.classList.add('is-held');
+  }
+
+  /**
+   * The tilt button: on, off, or a permission the player refuses.
+   *
+   * Driven from `pointerdown` like everything else here rather than from a
+   * click, and that is not tidiness — iOS grants the sensor only from inside a
+   * user gesture, and this is one. A `click` synthesised later is not.
+   */
+  private async toggleTilt(): Promise<void> {
+    if (this.tilt.enabled) {
+      this.tilt.disable();
+      this.onTilt?.(false);
+      return;
+    }
+    const on = await this.tilt.enable();
+    this.showTilt(on ? null : 'no');
+    // Only a yes is remembered. A refusal is this device saying no today, not
+    // a preference — asking again next time costs one tap and assuming the
+    // answer costs the feature.
+    if (on) this.onTilt?.(true);
+  }
+
+  /**
+   * Turn tilt on because a saved preference asked for it.
+   *
+   * Separate from the button so a restore never writes the setting back, and
+   * so a refusal here is silent: the player did not ask for anything this
+   * session, and a red button about a permission nobody requested is noise.
+   */
+  async restoreTilt(): Promise<void> {
+    await this.tilt.enable();
+    this.showTilt();
+  }
+
+  /** Paint the button to match the state, including a refusal. */
+  private showTilt(refused: 'no' | null = null): void {
+    const on = this.tilt.enabled;
+    this.tiltBtn.classList.toggle('is-on', on);
+    this.tiltBtn.setAttribute('aria-pressed', String(on));
+    this.tiltBtn.textContent = refused === 'no' ? 'NO' : 'TILT';
+    // The pad is still live under a tilting phone — a thumb on it outranks the
+    // sensor — so the label says which one is driving rather than pretending
+    // the other has gone.
+    this.steerLabel.textContent = on ? 'or steer' : 'steer';
   }
 
   private move(event: PointerEvent): void {

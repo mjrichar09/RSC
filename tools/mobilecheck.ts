@@ -149,7 +149,7 @@ try {
   // function inside an evaluated block, and that helper does not exist in the
   // page — so this is written without local function bindings on purpose.
   const clashes = (await page.evaluate(`(() => {
-    const names = ['.damage', '.hud-tl', '.minimap', '[data-touch="menu"]', '.cluster', '.touch-pedals'];
+    const names = ['.damage', '.hud-tl', '.minimap', '[data-touch="menu"]', '.cluster', '.touch-pedals', '.touch-tilt'];
     const rects = names.map((s) => {
       const el = document.querySelector(s);
       return el ? el.getBoundingClientRect() : null;
@@ -186,6 +186,79 @@ try {
   })()`)) as string[];
   if (blocking.length > 0) fail(`swallowing steering touches: ${[...new Set(blocking)].join(', ')}`);
   console.log('nothing on the HUD overlaps anything else, or blocks the steering pad');
+
+  /*
+   * Tilt steering, both ways round.
+   *
+   * The sign is the whole risk here and it is invisible on one device: a phone
+   * turned into landscape one way and a phone turned the other way are
+   * opposite `beta` for the same physical movement, so a reading that picked
+   * an Euler angle is right for half the players and backwards for the rest.
+   * `tests/tilt.test.ts` proves that about the arithmetic; this proves it
+   * about the car, which is the check this project trusts for handedness.
+   *
+   * Poses are stated as a hold and a movement out of it, and the two passes
+   * are the two ways a phone gets held rather than two settings of anything —
+   * the reading never asks the browser which way up it is, and the header of
+   * `src/ui/tilt.ts` says why that would not have helped if it did.
+   */
+  const orient = async (beta: number, gamma: number) => {
+    await page.evaluate(
+      ([b, g]) =>
+        window.dispatchEvent(
+          new DeviceOrientationEvent('deviceorientation', { alpha: 0, beta: b, gamma: g }),
+        ),
+      [beta, gamma],
+    );
+  };
+  /** Let the frame loop fold the reading in, then read what the car was given. */
+  const steerNow = async (): Promise<number> => {
+    await page.waitForTimeout(250);
+    return page.evaluate(() => (window.RSC!.status() as { steer: number }).steer);
+  };
+
+  await page.tap('[data-touch="tilt"]');
+  const lit = await page.evaluate(
+    () => document.querySelector('.touch-tilt')!.classList.contains('is-on'),
+  );
+  if (!lit) fail('the tilt button did not turn tilt steering on');
+
+  for (const [held, gamma, hold, drop] of [
+    // Turned one way: the phone's bottom edge is the screen's right-hand side,
+    // so dropping that side is a larger beta.
+    ['one way', -90, 20, 42],
+    // Turned the other: the same physical movement is a smaller one.
+    ['the other way', 90, -20, -42],
+  ] as const) {
+    // The first reading after a re-centre is the pose that means straight
+    // ahead, so this is the hold and the one after it is the measurement.
+    await orient(hold, gamma);
+    const straight = await steerNow();
+    if (Math.abs(straight) > 0.05) {
+      fail(`held level ${held} and the car steered ${straight.toFixed(2)}`);
+    }
+
+    await orient(drop, gamma);
+    const right = await steerNow();
+    await orient(hold - (drop - hold), gamma);
+    const left = await steerNow();
+    console.log(
+      `held ${held}: right side down gives ${right.toFixed(2)}, left side down ${left.toFixed(2)}`,
+    );
+    if (right < 0.4) fail(`tilting right held ${held} did not steer right (${right.toFixed(2)})`);
+    if (left > -0.4) fail(`tilting left held ${held} did not steer left (${left.toFixed(2)})`);
+
+    // Put it back on the hold, so the next pass re-centres from level.
+    await page.tap('[data-touch="tilt"]');
+    await page.tap('[data-touch="tilt"]');
+  }
+
+  // And the pad is still the pad: turning tilt off hands the wheel back.
+  await orient(-42, 90);
+  await page.tap('[data-touch="tilt"]');
+  const afterOff = await steerNow();
+  if (Math.abs(afterOff) > 0.05) fail(`tilt kept steering after it was switched off (${afterOff})`);
+  console.log('tilt steering reads the same movement the same way, turned either way round');
 
   // The menus. A panel taller than a landscape phone with no way to scroll is
   // a stage list whose bottom half does not exist.

@@ -862,6 +862,37 @@ Three things there are easy to get wrong:
   stage load cost a permanently softer picture. `?quality=low|medium|high`
   overrides the guess.
 
+**Tilt steering is a second way to steer, not a replacement.** `ui/tilt.ts`;
+the thumb drag stays the default because it works lying down and tilt does not,
+so tilt is a button on the HUD and a remembered setting. A thumb on the pad
+always outranks the sensor — somebody who grabs the pad has just said which
+input they meant. Three things about it are not obvious:
+
+- **Nothing reads `beta` or `gamma` directly, and nothing reads
+  `screen.orientation.angle` either.** The reading is where *gravity* is across
+  the face of the phone, and the steering is how far that has moved since the
+  player last said they were going straight. Picking an Euler angle is the
+  handedness bug this file already lists twice, in a form that is invisible on
+  the device you are holding: it is right for the players who turned their
+  phone one way and backwards for the ones who turned it the other.
+- **The orientation angle cancels, which is why it is not there.** The first
+  version rotated gravity into screen axes by it; measured at all four angles,
+  the same movement gave the same 22.0° every time, because rotating the frame
+  shifts the live reading and the calibration reference by the same amount. The
+  calibration is what makes it orientation-agnostic, and it covers the player
+  lying on their side, whom no reported orientation describes.
+- **An angle, never a sideways component.** They come apart as the phone is
+  pitched back toward flat: two poses that are the same 12.96° tilt across the
+  screen have 1.00 g and 0.774 g in that plane, so their components are 0.224
+  and 0.174 — a 29% difference in lock for an identical movement.
+
+The sign is checked twice, and the second one is the check this project trusts
+for handedness: `tests/tilt.test.ts` for the arithmetic, and `mobilecheck`
+drives the *car* with synthetic orientation events from both of the ways a
+phone gets held. Flip the `atan2` and it goes red with "tilting right held one
+way did not steer right (-0.83)", which is how that assertion was confirmed to
+be load-bearing rather than decorative.
+
 ## Tuning and calibration
 
 **The AI reads the car now, and only partly.** `sim/driver.ts` scales its grip

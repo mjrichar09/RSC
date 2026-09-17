@@ -198,11 +198,27 @@ async function main(): Promise<void> {
    * and a key press decides back.
    */
   const touch = new TouchControls(hudRoot);
+  /**
+   * Turn tilt steering back on for a player who had it on last time.
+   *
+   * Declared here, beside the handler that calls it, because that handler is
+   * built during boot and the profile it depends on is loaded asynchronously
+   * further down — a `let` further down is in the temporal dead zone for this
+   * closure, which is a trap this file has fallen into before. Null until the
+   * profile says otherwise, and it clears itself once it has had its answer.
+   *
+   * It has to run from a *touch* and not from the load, because iOS hands over
+   * the orientation sensor only from inside a user gesture. Every touch tries
+   * until one of them works, which covers a first tap that landed before the
+   * save had finished loading.
+   */
+  let armTilt: (() => void) | null = null;
   window.addEventListener(
     'pointerdown',
     (event) => {
       if (event.pointerType !== 'touch') return;
       touch.setVisible(true);
+      armTilt?.();
       // And ask for fullscreen from *this* gesture, whatever it was for.
       //
       // It used to be asked for on the first thumb on the steering pad, which
@@ -953,6 +969,31 @@ const params = new URLSearchParams(location.search);
     damagePanel.notice(next === 0 ? 'Crash slow-motion off' : `Crash slow-motion ${Math.round(next * 100)}%`);
     void save.update((profile) => {
       profile.settings.drama = next;
+    });
+  };
+
+  /*
+   * Tilt steering: the button remembers, and the save is the only state.
+   *
+   * Set up here rather than beside the other touch wiring because this is
+   * where the profile exists. `armTilt` fires from the next touch — a gesture,
+   * which is what iOS wants before it will hand over the sensor — and stands
+   * itself down once it has an answer either way, so a player who is refused
+   * is not asked again on every tap.
+   */
+  if (career.profile.settings.tilt) {
+    armTilt = () => {
+      armTilt = null;
+      void touch.restoreTilt();
+    };
+  }
+  touch.onTilt = (on) => {
+    // A choice made with the button outranks anything still armed from the
+    // save: turning it off by hand must not be undone by the next tap.
+    armTilt = null;
+    damagePanel.notice(on ? 'Tilt steering on — hold the phone as you like' : 'Tilt steering off');
+    void save.update((profile) => {
+      profile.settings.tilt = on;
     });
   };
 

@@ -2091,6 +2091,42 @@ html, body {
 }
 .touch-btn.is-held { transform: scale(0.93); background: rgb(238 242 247 / 0.26); }
 
+/*
+ * The tilt switch, beside the menu button along the top edge.
+ *
+ * Up there rather than near the steering pad on purpose: it is pressed once a
+ * session and never during a corner, and anything within reach of a driving
+ * thumb will eventually be hit by one. Its width is held to the menu button's
+ * height so the two read as a pair, and it is offset by exactly that button's
+ * width plus a gap — `mobilecheck` checks they do not touch.
+ */
+.touch-tilt {
+  position: absolute;
+  top: max(2vmin, 8px);
+  right: calc(max(2vmin, 8px) + max(11vmin, 44px) + 6px);
+  pointer-events: auto;
+  -webkit-appearance: none;
+  appearance: none;
+  border: 0;
+  border-radius: 10px;
+  height: max(11vmin, 44px);
+  min-width: max(13vmin, 52px);
+  padding: 0 8px;
+  font: 700 var(--step-0)/1 var(--font-ui);
+  letter-spacing: var(--track-ui);
+  color: rgb(238 242 247 / 0.55);
+  background: rgb(12 15 20 / 0.5);
+  box-shadow: inset 0 0 0 1px rgb(238 242 247 / 0.18);
+  transition: color 0.12s ease-out, background 0.12s ease-out;
+}
+.touch-tilt.is-on {
+  color: var(--ink);
+  background: rgb(242 193 78 / 0.22);
+  box-shadow: inset 0 0 0 1px rgb(242 193 78 / 0.6);
+}
+/* Paired with the rule above, because an author `display` outranks `[hidden]`. */
+.touch-tilt[hidden] { display: none; }
+
 .touch-menu {
   position: absolute;
   top: max(2vmin, 8px);
@@ -2156,6 +2192,19 @@ html, body {
   /* Clear of the on-screen menu button, which owns the top-right corner. */
   .touch.is-on ~ .minimap,
   .touch.is-on + * .minimap { right: 62px; }
+  /*
+   * And clear of the tilt switch beside it, on a device that has one.
+   *
+   * Written as the same arithmetic the two buttons are placed with rather than
+   * as a measured number, so a button that changes size takes the map with it.
+   * Conditional on the button actually being there: a phone with no
+   * accelerometer hides it, and reserving the room anyway would cost the map a
+   * third of its width for nothing.
+   */
+  .touch.is-on:has(.touch-tilt:not([hidden])) ~ .minimap,
+  .touch.is-on:has(.touch-tilt:not([hidden])) + * .minimap {
+    right: calc(max(2vmin, 8px) + max(11vmin, 44px) + 6px + max(13vmin, 52px) + 6px);
+  }
 
   /*
    * The speed cluster and the pedals both want the bottom-right corner, and
@@ -2172,6 +2221,9 @@ html, body {
 @media (max-height: 500px) {
   #hud:has(.touch.is-on) .hud-br { padding-right: max(23vmin, 92px); }
   #hud:has(.touch.is-on) .minimap { right: max(13vmin, 56px); }
+  #hud:has(.touch.is-on .touch-tilt:not([hidden])) .minimap {
+    right: calc(max(2vmin, 8px) + max(11vmin, 44px) + 6px + max(13vmin, 52px) + 6px);
+  }
 }
 
 /*
