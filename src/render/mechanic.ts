@@ -76,8 +76,155 @@ const MAX_STOPS = 6;
 /** Where he stands when there is nothing to do: off the car's front-left. */
 const HOME = new THREE.Vector3(1.45, 0, 1.75);
 
+/**
+ * How far his feet stay off the bodywork, metres.
+ *
+ * He used to walk to the part in a straight line, which is through the car for
+ * anything on the far side of it — across the bonnet to reach a rear quarter,
+ * and out through the roof. A car is the one thing in this scene that is
+ * definitely solid, and walking through it undoes the whole point of sending
+ * somebody to the part rather than swapping a number.
+ *
+ * Small on purpose. This is the footprint a *path* has to clear, not personal
+ * space: every standing position is already outside it by construction, and a
+ * larger one would send him on a wide lap of a car he is meant to be working
+ * on.
+ */
+const BODY_CLEARANCE = 0.45;
+
+/** The footprint he walks around, as half-extents on the floor. */
+const KEEP_OUT = {
+  x: CAR.halfExtents.x + BODY_CLEARANCE,
+  z: CAR.halfExtents.z + BODY_CLEARANCE,
+};
+
+/** Its corners, counter-clockwise from the front-right of the car. */
+const CORNERS = [
+  { x: KEEP_OUT.x, z: KEEP_OUT.z },
+  { x: -KEEP_OUT.x, z: KEEP_OUT.z },
+  { x: -KEEP_OUT.x, z: -KEEP_OUT.z },
+  { x: KEEP_OUT.x, z: -KEEP_OUT.z },
+];
+
+const TWO_PI = Math.PI * 2;
+
+/** An angle in [0, 2pi). */
+const turn = (a: number): number => ((a % TWO_PI) + TWO_PI) % TWO_PI;
+
+/**
+ * Where a point sits around the car, as an angle.
+ *
+ * Measured in the footprint's *own* units — x over its half-width, z over its
+ * half-length — so the four corners land exactly a quarter turn apart however
+ * long the car is. Measured in metres they would bunch up at the ends and the
+ * routing would pick the wrong way round a car this much longer than it is
+ * wide.
+ */
+const aroundCar = (p: { x: number; z: number }): number =>
+  turn(Math.atan2(p.z / KEEP_OUT.z, p.x / KEEP_OUT.x));
+
+const CORNER_ANGLES = CORNERS.map(aroundCar);
+
+/**
+ * Does the straight line from `a` to `b` cross the car's footprint?
+ *
+ * The usual slab clip against an axis-aligned box at the origin. Both ends are
+ * always outside it — every standing position is pushed past one face and
+ * `HOME` is off the front-right — so this only ever answers "is the car in the
+ * way", never "is somebody standing in it".
+ */
+export function crossesBody(a: { x: number; z: number }, b: { x: number; z: number }): boolean {
+  const d = { x: b.x - a.x, z: b.z - a.z };
+  let enter = 0;
+  let leave = 1;
+  for (const axis of ['x', 'z'] as const) {
+    const half = KEEP_OUT[axis];
+    if (Math.abs(d[axis]) < 1e-6) {
+      // Parallel to this pair of faces: either the whole line is between them
+      // or it can never be.
+      if (Math.abs(a[axis]) > half) return false;
+      continue;
+    }
+    const first = (-half - a[axis]) / d[axis];
+    const second = (half - a[axis]) / d[axis];
+    enter = Math.max(enter, Math.min(first, second));
+    leave = Math.min(leave, Math.max(first, second));
+    if (enter > leave) return false;
+  }
+  return true;
+}
+
+/**
+ * The corners passed going from `a` round to `b`, in travel order.
+ *
+ * `way` is +1 for counter-clockwise and -1 for clockwise. A corner counts when
+ * it lies inside the sweep, and sorting by how far into the sweep it is puts
+ * them in the order they are walked.
+ */
+function cornersBetween(a: number, b: number, way: 1 | -1): { x: number; z: number }[] {
+  const sweep = way > 0 ? turn(b - a) : turn(a - b);
+  return CORNERS.map((corner, i) => ({
+    corner,
+    into: way > 0 ? turn(CORNER_ANGLES[i]! - a) : turn(a - CORNER_ANGLES[i]!),
+  }))
+    .filter((step) => step.into < sweep)
+    .sort((one, two) => one.into - two.into)
+    .map((step) => step.corner);
+}
+
+/**
+ * A way of getting from `from` to `to` that does not go through the car.
+ *
+ * Straight when the car is not in the way, which is most short hops along one
+ * flank. Otherwise round the outside, by whichever of the two ways round is
+ * shorter — measured rather than guessed, because for a car four metres long
+ * and under two wide the answer is not the one the angle suggests.
+ */
+export function routeAround(from: THREE.Vector3, to: THREE.Vector3): THREE.Vector3[] {
+  if (!crossesBody(from, to)) return [to.clone()];
+
+  const start = aroundCar(from);
+  const end = aroundCar(to);
+  const ways = [cornersBetween(start, end, 1), cornersBetween(start, end, -1)];
+  const lengthOf = (corners: { x: number; z: number }[]): number => {
+    let total = 0;
+    let at: { x: number; z: number } = from;
+    for (const corner of [...corners, to]) {
+      total += Math.hypot(corner.x - at.x, corner.z - at.z);
+      at = corner;
+    }
+    return total;
+  };
+  const best = lengthOf(ways[0]!) <= lengthOf(ways[1]!) ? ways[0]! : ways[1]!;
+  return [...best.map((corner) => new THREE.Vector3(corner.x, 0, corner.z)), to.clone()];
+}
+
 /** Resting height of the hips above the feet. */
 const HIP_HEIGHT = 0.58 * S;
+
+/**
+ * Where to stand to work on a part.
+ *
+ * The component's own point is on or under the bodywork — that is what it is
+ * for — so standing on it puts a mechanic's head through a bonnet. He is
+ * pushed outward along whichever of the car's axes the part is nearest the
+ * edge of, which puts him at the wing for a wing and at the nose for the
+ * radiator without a second table saying so.
+ *
+ * Exported because the check that he never walks through the car has to start
+ * from the same places he does, and a second copy of this in a test would be
+ * a test of the copy.
+ */
+export function standingSpot(at: { x: number; y: number; z: number }): THREE.Vector3 {
+  const outX = Math.abs(at.x) / CAR.halfExtents.x;
+  const outZ = Math.abs(at.z) / CAR.halfExtents.z;
+  return outX >= outZ
+    ? new THREE.Vector3(Math.sign(at.x || 1) * (CAR.halfExtents.x + 0.55), 0, at.z)
+    : new THREE.Vector3(at.x, 0, Math.sign(at.z || 1) * (CAR.halfExtents.z + 0.6));
+}
+
+/** Where he waits between jobs. */
+export const IDLE_SPOT = HOME;
 
 /** A job: which component, and what to run when the spanner lands. */
 interface Job {
@@ -125,7 +272,14 @@ export class Mechanic {
 
   private readonly queue: Job[] = [];
   private job: Job | null = null;
-  /** Where he is heading, on the floor. */
+  /**
+   * The rest of the walk, corner by corner, with the destination last.
+   *
+   * A list rather than a point because the car is in the way of most of these
+   * journeys: see `routeAround`.
+   */
+  private path: THREE.Vector3[] = [];
+  /** The leg he is on, on the floor. */
   private readonly target = new THREE.Vector3().copy(HOME);
   /** Which way he is facing, radians. Eased, so he turns rather than snapping. */
   private facing = Math.PI;
@@ -285,6 +439,7 @@ export class Mechanic {
   reset(): void {
     this.queue.length = 0;
     this.job = null;
+    this.path = [];
     this.phase = 'idle';
     this.phaseFor = 0;
     this.facing = Math.PI;
@@ -329,41 +484,47 @@ export class Mechanic {
     this.phase = 'walking';
     this.phaseFor = 0;
     if (!job) {
-      this.target.copy(HOME);
+      this.setRoute(HOME);
       return;
     }
-    const at = COMPONENT_BY_ID.get(job.id)!.at;
-    /*
-     * Stand beside the part, not inside the car.
-     *
-     * The component's own point is on or under the bodywork — that is what it
-     * is for — so standing on it puts a mechanic's head through a bonnet. He
-     * is pushed outward along whichever of the car's axes the part is nearest
-     * the edge of, which puts him at the wing for a wing and at the nose for
-     * the radiator without a second table saying so.
-     */
-    const outX = Math.abs(at.x) / CAR.halfExtents.x;
-    const outZ = Math.abs(at.z) / CAR.halfExtents.z;
-    if (outX >= outZ) {
-      this.target.set(Math.sign(at.x || 1) * (CAR.halfExtents.x + 0.55), 0, at.z);
-    } else {
-      this.target.set(at.x, 0, Math.sign(at.z || 1) * (CAR.halfExtents.z + 0.6));
-    }
+    this.setRoute(standingSpot(COMPONENT_BY_ID.get(job.id)!.at));
+  }
+
+  /** Work out how to get there without walking through the car, and set off. */
+  private setRoute(to: THREE.Vector3): void {
+    this.path = routeAround(this.group.position, to);
+    this.target.copy(this.path[0]!);
   }
 
   private walk(dt: number): void {
     const here = this.group.position;
-    const dx = this.target.x - here.x;
-    const dz = this.target.z - here.z;
-    const left = Math.hypot(dx, dz);
-    const step = WALK_SPEED * dt;
+    let step = WALK_SPEED * dt;
 
-    if (left <= step) {
-      here.set(this.target.x, FLOOR, this.target.z);
+    // Corners are consumed inside the one frame that reaches them. Stopping at
+    // each for a frame would be a stutter at every corner of the car, and at a
+    // low frame rate two corners can genuinely fall inside one step.
+    while (step > 0 && this.path.length > 0) {
+      const leg = this.path[0]!;
+      const dx = leg.x - here.x;
+      const dz = leg.z - here.z;
+      const left = Math.hypot(dx, dz);
+      if (left > step) {
+        here.x += (dx / left) * step;
+        here.z += (dz / left) * step;
+        break;
+      }
+      here.set(leg.x, FLOOR, leg.z);
+      step -= left;
+      this.path.shift();
+    }
+
+    if (this.path.length === 0) {
       this.settle();
       if (this.job) {
-        // Face the car, which is where the work is.
-        this.facing = Math.atan2(-this.target.x, -this.target.z);
+        // Face the part itself, which is where the work is — not the car's
+        // middle, which for a mirror is over his shoulder.
+        const at = COMPONENT_BY_ID.get(this.job.id)!.at;
+        this.facing = Math.atan2(at.x - here.x, at.z - here.z);
         this.phase = 'working';
       } else {
         this.facing = Math.PI;
@@ -372,9 +533,7 @@ export class Mechanic {
       this.phaseFor = 0;
       return;
     }
-
-    here.x += (dx / left) * step;
-    here.z += (dz / left) * step;
+    this.target.copy(this.path[0]!);
 
     // Legs swing, arms counter-swing, and the body rises on each step.
     const cycle = this.clock * 9;

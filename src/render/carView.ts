@@ -1018,6 +1018,17 @@ export class CarView {
     return mesh.getWorldPosition(new THREE.Vector3());
   }
 
+  /**
+   * Whether this car is drawn.
+   *
+   * The getter is not decoration: without it `view.visible` reads `undefined`,
+   * which is a silent `false` everywhere it is tested and told the harness
+   * that neither ghost was on the road when both were.
+   */
+  get visible(): boolean {
+    return this.group.visible;
+  }
+
   set visible(value: boolean) {
     this.group.visible = value;
   }

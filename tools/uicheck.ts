@@ -238,6 +238,31 @@ if (pb === 'no time set') throw new Error('an arcade record was set and the next
 if (!remembered.ghost) throw new Error('an arcade record was set and left no ghost to chase');
 console.log(`arcade remembers the run: ${pb}, ghost on the road`);
 
+/*
+ * And the gold one beside it.
+ *
+ * Two ghosts on the road at once is the thing worth checking — your own best
+ * in blue and the world record in gold are separate players, separate views
+ * and separate fetches, and either one quietly not being drawn looks exactly
+ * like the other one working. The real gold lap comes off the board, which a
+ * check cannot arrange, so the harness plays the stored lap as the record: the
+ * question is whether two can be on the road together, not whose lap it is.
+ */
+const both = (await page.evaluate(() => window.RSC!.showRecordGhost())) as {
+  ghost?: boolean;
+  wrGhost?: boolean;
+};
+if (!both.ghost || !both.wrGhost) throw new Error('only one ghost attached');
+await page.waitForFunction(
+  () => {
+    const drawn = (window.RSC!.status() as { ghostsDrawn: boolean[] }).ghostsDrawn;
+    return drawn[0] === true && drawn[1] === true;
+  },
+  undefined,
+  { timeout: 20_000 },
+);
+console.log('personal best and world record ghosts are both on the road');
+
 // Escape from an arcade race goes back to the front door.
 await page.keyboard.press('Escape');
 await page.waitForSelector('.menu.is-open');

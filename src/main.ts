@@ -103,6 +103,16 @@ interface HarnessHooks {
   seedGhostAndSeek: (stageId: string, seconds: number) => Promise<void>;
   /** Run a proving-ground input trace to `seconds`, then draw. */
   seekTrace: (traceName: string, seconds: number) => void;
+  /**
+   * Put the stored arcade lap on the road as the gold record ghost.
+   *
+   * The real one comes off the board, so showing both ghosts at once otherwise
+   * needs a leaderboard with a ghost on it — which is a network, a record
+   * somebody holds, and nothing a check can arrange. The question it exists to
+   * answer is whether two ghosts can be on the road together at all, and for
+   * that the lap it plays does not matter.
+   */
+  showRecordGhost: () => Promise<Record<string, unknown>>;
   draw: () => void;
   /** Text snapshot for the harness: cheaper to check than a screenshot. */
   status: () => Record<string, unknown>;
@@ -2153,6 +2163,13 @@ const params = new URLSearchParams(location.search);
       await attachGhost(currentKey());
       this.seekStage(stageId, seconds);
     },
+    async showRecordGhost() {
+      const stored = await save.loadArcadeGhost(currentKey());
+      if (!stored) return { error: 'no stored arcade lap' };
+      wrGhost = new GhostPlayer(stored);
+      wrView.visible = true;
+      return this.status();
+    },
     seekTrace(traceName, seconds) {
       lights.skip();
       const trace = TRACES[traceName];
@@ -2249,11 +2266,17 @@ const params = new URLSearchParams(location.search);
         dents: (world.damage?.dents.length ?? 0) + '/' + (career.profile.carDents?.length ?? 0),
         markersDown: world.markers?.flattened ?? 0,
         recorded: recorder.frameCount,
-        // The two ghosts on the road: your own best, and the world record.
+        // The two ghosts: your own best in blue, the world record in gold.
         // Booleans rather than a look at the scene, because "there was no
         // ghost" is otherwise only answerable by staring at a screenshot.
+        //
+        // Attached and drawn are different questions and both get asked. A
+        // ghost can be loaded and still not on the road — the view is hidden
+        // once its lap has ended rather than freezing a car mid-stage — and
+        // "is it showing" is the one that was actually asked.
         ghost: ghost !== null,
         wrGhost: wrGhost !== null,
+        ghostsDrawn: [ghostView.visible, wrView.visible],
         cars: world.cars.length,
         // Simulated seconds and fixed steps: the first thing to check when a
         // car is not moving is whether the world is running at all.
