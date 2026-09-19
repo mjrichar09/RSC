@@ -182,6 +182,14 @@ try {
   );
   console.log(`restart button put ${driven.toFixed(2)}s back on the line`);
 
+  // And let the new countdown finish before anything downstream reads the
+  // steering. While the lights hold the car, `lastInput.steer` is forced to
+  // zero whatever the player is doing — so a tilt reading taken here is a
+  // reading of the start gantry, not of the sensor.
+  await page.waitForFunction(() => (window.RSC!.status() as { held: boolean }).held === false, {
+    timeout: 60_000,
+  });
+
   // Nothing on the HUD may sit on top of anything else, and nothing may sit
   // under a thumb. Checked as geometry rather than by eye, because "the panels
   // overlap on a phone" is exactly the kind of thing a desktop screenshot
