@@ -13,7 +13,7 @@
  * steering. Every other case here is arithmetic around that one.
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   TiltSteering,
   gravityInDevice,
@@ -207,5 +207,117 @@ describe('the input as the game reads it', () => {
     expect(tilt.steer).toBeNull();
     tilt.feed(HOLD_B.level, HOLD_B.gamma);
     expect(tilt.steer).toBe(0);
+  });
+});
+
+/**
+ * Turning it on, where the browser has opinions.
+ *
+ * Reported as "the tilt button just says NO" on a OnePlus 13 — an Android
+ * phone with a working gyroscope, which by the old reading of the code could
+ * not happen at all. It can: `DeviceOrientationEvent.requestPermission` is not
+ * an iOS-only method, and a browser that defines it and then refuses is not
+ * evidence that the sensor is missing. The permission answer is a suspicion
+ * now and the readings are the verdict.
+ *
+ * Driven against a stub window rather than a real one. These run in Node, and
+ * what is being checked is the decision, not the DOM.
+ */
+describe('turning tilt on', () => {
+  interface Stub {
+    fire: (beta: number | null, gamma: number | null) => void;
+    listeners: number;
+  }
+
+  /** Stand up just enough `window` for `enable` to run, and hand back a tap. */
+  const stubWindow = (permission?: 'granted' | 'denied' | 'throw'): Stub => {
+    const handlers = new Map<string, Set<(event: unknown) => void>>();
+    const stub = {
+      addEventListener: (type: string, fn: (event: unknown) => void) => {
+        if (!handlers.has(type)) handlers.set(type, new Set());
+        handlers.get(type)!.add(fn);
+      },
+      removeEventListener: (type: string, fn: (event: unknown) => void) => {
+        handlers.get(type)?.delete(fn);
+      },
+    };
+    const orientation = class {};
+    if (permission) {
+      (orientation as unknown as { requestPermission: () => Promise<string> }).requestPermission =
+        () =>
+          permission === 'throw'
+            ? Promise.reject(new Error('not a user gesture'))
+            : Promise.resolve(permission);
+    }
+    const g = globalThis as unknown as Record<string, unknown>;
+    // On the stub as well as on the global: `tiltAvailable` asks
+    // `'DeviceOrientationEvent' in window`, and in a browser `window` *is*
+    // the global. Here it is a plain object, so it has to carry it too.
+    (stub as unknown as Record<string, unknown>).DeviceOrientationEvent = orientation;
+    g.window = stub;
+    g.DeviceOrientationEvent = orientation;
+    g.screen = {};
+    return {
+      fire: (beta, gamma) => {
+        for (const fn of handlers.get('deviceorientation') ?? []) fn({ beta, gamma });
+      },
+      get listeners() {
+        return [...handlers.values()].reduce((n, set) => n + set.size, 0);
+      },
+    };
+  };
+
+  afterEach(() => {
+    const g = globalThis as unknown as Record<string, unknown>;
+    delete g.window;
+    delete g.DeviceOrientationEvent;
+    delete g.screen;
+  });
+
+  it('starts when the sensor answers, whatever the permission said', async () => {
+    // The OnePlus case. A refusal from a method that should not have been the
+    // last word, over a gyroscope that works.
+    for (const answer of ['denied', 'throw'] as const) {
+      const stub = stubWindow(answer);
+      const tilt = new TiltSteering();
+      const starting = tilt.enable();
+      // A frame later, the way a real sensor does.
+      await Promise.resolve();
+      stub.fire(HOLD_A.level, HOLD_A.gamma);
+      expect(await starting).toBe('on');
+      expect(tilt.enabled).toBe(true);
+    }
+  });
+
+  it('calls a refusal a refusal only when nothing arrives', async () => {
+    stubWindow('denied');
+    const tilt = new TiltSteering();
+    expect(await tilt.enable()).toBe('denied');
+    expect(tilt.enabled).toBe(false);
+  });
+
+  it('separates a phone with no readings from a phone that said no', async () => {
+    // No permission gate at all — the ordinary Android case — and still
+    // nothing from the sensor. That is not the player refusing anything, and
+    // telling them to go and allow something would send them hunting for a
+    // setting that is already on.
+    stubWindow();
+    const tilt = new TiltSteering();
+    expect(await tilt.enable()).toBe('silent');
+  });
+
+  it('leaves no listener behind when it gives up', async () => {
+    // A player who taps a refusing button four times should not end up with
+    // four handlers on the window.
+    const stub = stubWindow('denied');
+    const tilt = new TiltSteering();
+    for (let i = 0; i < 3; i++) await tilt.enable();
+    expect(stub.listeners).toBe(0);
+  });
+
+  it('says so rather than throwing where there is no such event', async () => {
+    const g = globalThis as unknown as Record<string, unknown>;
+    g.window = { addEventListener: () => {}, removeEventListener: () => {} };
+    expect(await new TiltSteering().enable()).toBe('unsupported');
   });
 });

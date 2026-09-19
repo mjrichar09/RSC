@@ -291,11 +291,34 @@ try {
     }
   };
 
-  await page.tap('[data-touch="tilt"]');
-  const lit = await page.evaluate(
-    () => document.querySelector('.touch-tilt')!.classList.contains('is-on'),
-  );
-  if (!lit) fail('the tilt button did not turn tilt steering on');
+  /*
+   * Press TILT and keep the sensor talking while it decides.
+   *
+   * `enable` waits for an actual reading before it will claim tilt works — a
+   * `requestPermission` that refuses is no longer allowed to veto a gyroscope
+   * that does not, which is what made the button say NO on a OnePlus 13. A
+   * real accelerometer is already firing long before anybody presses the
+   * button; a headless browser emits nothing at all unless it is told to. So
+   * the harness has to behave like the phone and feed it while it waits,
+   * otherwise it reads as a device with no sensor and the button is right to
+   * refuse.
+   */
+  const pressTilt = async (beta: number, gamma: number): Promise<boolean> => {
+    await page.tap('[data-touch="tilt"]');
+    return page
+      .waitForFunction(
+        ([b, g]) => {
+          window.dispatchEvent(
+            new DeviceOrientationEvent('deviceorientation', { alpha: 0, beta: b, gamma: g }),
+          );
+          return document.querySelector('.touch-tilt')!.classList.contains('is-on');
+        },
+        [beta, gamma],
+        { timeout: 8000 },
+      )
+      .then(() => true)
+      .catch(() => false);
+  };
 
   for (const [held, gamma, hold, drop] of [
     // Turned one way: the phone's bottom edge is the screen's right-hand side,
@@ -304,6 +327,25 @@ try {
     // Turned the other: the same physical movement is a smaller one.
     ['the other way', 90, -20, -42],
   ] as const) {
+    /*
+     * A fresh hold for each pass.
+     *
+     * The pose tilt is switched on in *is* its straight-ahead, so the two
+     * orientations cannot share one — and the pose fed while the button is
+     * deciding is that pose, which is why `pressTilt` takes it. Priming with
+     * something else put the reference 20° out and the level assertion below
+     * read 0.54 on a phone that was being held perfectly straight.
+     *
+     * Turned off first and checked rather than assumed: a pass that ran with
+     * tilt switched off would read 0.00 throughout and sail past the level
+     * assertion, which is exactly how that was found.
+     */
+    if (await page.locator('.touch-tilt.is-on').count()) {
+      await page.tap('[data-touch="tilt"]');
+      await page.waitForSelector('.touch-tilt:not(.is-on)');
+    }
+    if (!(await pressTilt(hold, gamma))) fail(`tilt would not turn on held ${held}`);
+
     // The first reading after a re-centre is the pose that means straight
     // ahead, so this hold is what the two movements below are measured from.
     const straight = await orient(hold, gamma);
@@ -318,16 +360,6 @@ try {
     );
     if (right < 0.4) fail(`tilting right held ${held} did not steer right (${right.toFixed(2)})`);
     if (left > -0.4) fail(`tilting left held ${held} did not steer left (${left.toFixed(2)})`);
-
-    // Off and on again, which is how a hold is re-taken: the pose tilt is
-    // switched on in *is* its straight-ahead, so the next pass needs a fresh
-    // one. Checked rather than assumed — a pass that ran with tilt switched
-    // off would read 0.00 throughout and sail past the level assertion, which
-    // is exactly how this was found.
-    await page.tap('[data-touch="tilt"]');
-    await page.waitForSelector('.touch-tilt:not(.is-on)');
-    await page.tap('[data-touch="tilt"]');
-    await page.waitForSelector('.touch-tilt.is-on');
   }
 
   // And the pad is still the pad: turning tilt off hands the wheel back.

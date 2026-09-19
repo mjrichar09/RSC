@@ -1133,6 +1133,23 @@ const params = new URLSearchParams(location.search);
       void touch.restoreTilt();
     };
   }
+  /**
+   * Why tilt would not start, in a sentence the player can act on.
+   *
+   * Two of the three are fixable by whoever is holding the phone, and the
+   * button alone cannot say which — it has one word. The third is worth saying
+   * too, because "this device has nothing to give" is the difference between a
+   * broken game and a device limit.
+   */
+  touch.onTiltRefused = (why) => {
+    damagePanel.notice(
+      why === 'denied'
+        ? 'Tilt needs motion access — allow it for this site, then tap TILT'
+        : why === 'silent'
+          ? 'No motion readings from this phone — drag the left third to steer'
+          : 'No motion sensor here — drag the left third to steer',
+    );
+  };
   touch.onTilt = (on) => {
     // A choice made with the button outranks anything still armed from the
     // save: turning it off by hand must not be undone by the next tap.

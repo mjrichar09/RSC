@@ -153,16 +153,45 @@ export function steerFromRoll(roll: number, reference: number): number {
   return clamp((Math.sign(offset) * past) / (FULL_LOCK - DEAD_ZONE), -1, 1);
 }
 
+/**
+ * How long to wait for the sensor to say anything, ms.
+ *
+ * `deviceorientation` fires at about 60 Hz wherever it fires at all, so a
+ * working sensor answers within a frame or two and this is never waited out in
+ * the case that matters. It is long enough to cover a first event that has to
+ * spin a sensor up, and short enough that a device with nothing to say hands
+ * the button back before the player has decided it is broken.
+ */
+const SENSOR_WAIT = 700;
+
+/**
+ * How turning tilt on went.
+ *
+ * Four outcomes rather than a boolean, because they are four different
+ * situations for the player and only one of them is their fault. `denied` is
+ * fixable from a settings screen, `silent` is a device with no readings to
+ * give, and `unsupported` is a browser with no such event — a button that can
+ * only say "no" to all three is a dead end, which is exactly what it was.
+ */
+export type TiltStart = 'on' | 'denied' | 'silent' | 'unsupported';
+
 /** Whether this browser has the event at all. Desktops mostly do not. */
 export const tiltAvailable = (): boolean =>
   typeof window !== 'undefined' && 'DeviceOrientationEvent' in window;
 
 /**
- * Whether the player has to be asked first.
+ * Whether this browser wants to be asked first.
  *
  * iOS 13 put device orientation behind a permission prompt that can only be
  * raised from inside a user gesture. Feature-detected, because that is exactly
  * what it is — a static method that either exists or does not.
+ *
+ * **A "no" from it is not the last word**, which is the thing this got wrong.
+ * It is not only iOS that defines this method, and elsewhere it can be a stub
+ * that refuses — or throws — on a device whose sensor works perfectly. Taking
+ * it as authoritative is what made the tilt button say NO on a OnePlus 13 with
+ * a working gyroscope and no way to find out why. `enable` asks the sensor
+ * afterwards regardless, and the readings decide.
  */
 export const tiltNeedsPermission = (): boolean =>
   tiltAvailable() &&
@@ -185,8 +214,14 @@ export class TiltSteering {
   private reference: number | null = null;
   private listening = false;
 
+  /** Resolves the wait in `enable` on the first reading worth having. */
+  private heard: (() => void) | null = null;
+
   private readonly listener = (event: DeviceOrientationEvent) => {
     if (event.beta === null || event.gamma === null) return;
+    // After the null guard: an event carrying nothing proves nothing about
+    // whether there is a sensor behind it.
+    this.heard?.();
     this.feed(event.beta, event.gamma);
   };
   /**
@@ -217,39 +252,53 @@ export class TiltSteering {
   }
 
   /**
-   * Turn it on, asking first where that is required.
+   * Turn it on: ask where asking is required, then ask the sensor.
    *
-   * Resolves false when the player says no, when the browser has no such
-   * event, or when this was called outside a gesture on a platform that
-   * insists on one — all three are the same thing to a caller, which is that
-   * tilt is not available and the thumb is still there.
+   * The permission call used to be the whole decision, and that is the bug
+   * this shape exists to prevent. A browser that defines `requestPermission`
+   * and answers anything other than `granted` — including throwing — may still
+   * deliver readings, and on a device whose gyroscope works the honest test is
+   * whether any arrive. So a refusal demotes to a *suspicion* and the listener
+   * goes on either way; readings settle it.
+   *
+   * Which means the only thing that turns tilt on is the sensor actually
+   * speaking, and `silent` becomes a real answer instead of a button that
+   * lights up over an input that never moves.
    */
-  async enable(): Promise<boolean> {
-    if (this.on) return true;
-    if (!tiltAvailable()) return false;
+  async enable(): Promise<TiltStart> {
+    if (this.on) return 'on';
+    if (!tiltAvailable()) return 'unsupported';
 
+    let refused = false;
     if (tiltNeedsPermission()) {
       const ask = (DeviceOrientationEvent as unknown as {
         requestPermission: () => Promise<PermissionState | 'granted' | 'denied'>;
       }).requestPermission;
       try {
-        if ((await ask()) !== 'granted') return false;
+        refused = (await ask()) !== 'granted';
       } catch {
-        // Thrown rather than refused when this did not come from a gesture.
-        return false;
+        // Thrown rather than refused when this did not come from a gesture, or
+        // on an insecure origin. Still only a suspicion.
+        refused = true;
       }
     }
 
-    this.on = true;
-    this.recentre();
-    if (!this.listening) {
-      this.listening = true;
-      window.addEventListener('deviceorientation', this.listener);
-      window.addEventListener('orientationchange', this.rotated);
-      screen.orientation?.addEventListener?.('change', this.rotated);
+    const wasListening = this.listening;
+    this.listen();
+    if (!(await this.waitForReading())) {
+      // Nothing came. Leave the listener exactly as it was found, or a refused
+      // attempt quietly accumulates handlers on the window.
+      if (!wasListening) this.unlisten();
+      return refused ? 'denied' : 'silent';
     }
+
+    this.on = true;
+    // The pose being held at the moment it comes on is straight ahead, so the
+    // reading that proved the sensor works is deliberately thrown away — the
+    // next one, a frame later, is the one the player meant.
+    this.recentre();
     this.onChange?.();
-    return true;
+    return 'on';
   }
 
   disable(): void {
@@ -257,13 +306,38 @@ export class TiltSteering {
     this.on = false;
     this.roll = null;
     this.reference = null;
-    if (this.listening) {
-      this.listening = false;
-      window.removeEventListener('deviceorientation', this.listener);
-      window.removeEventListener('orientationchange', this.rotated);
-      screen.orientation?.removeEventListener?.('change', this.rotated);
-    }
+    this.unlisten();
     this.onChange?.();
+  }
+
+  private listen(): void {
+    if (this.listening) return;
+    this.listening = true;
+    window.addEventListener('deviceorientation', this.listener);
+    window.addEventListener('orientationchange', this.rotated);
+    screen.orientation?.addEventListener?.('change', this.rotated);
+  }
+
+  private unlisten(): void {
+    if (!this.listening) return;
+    this.listening = false;
+    window.removeEventListener('deviceorientation', this.listener);
+    window.removeEventListener('orientationchange', this.rotated);
+    screen.orientation?.removeEventListener?.('change', this.rotated);
+  }
+
+  /** True if the sensor said anything usable inside `SENSOR_WAIT`. */
+  private waitForReading(): Promise<boolean> {
+    return new Promise((resolve) => {
+      let timer = 0;
+      const settle = (heard: boolean) => {
+        this.heard = null;
+        clearTimeout(timer);
+        resolve(heard);
+      };
+      timer = setTimeout(() => settle(false), SENSOR_WAIT) as unknown as number;
+      this.heard = () => settle(true);
+    });
   }
 
   /** However the phone is being held now is straight ahead. */

@@ -29,7 +29,7 @@
 
 import type { DriverInput } from '../sim/input.js';
 import { clamp } from '../sim/math.js';
-import { TiltSteering, tiltAvailable } from './tilt.js';
+import { TiltSteering, tiltAvailable, type TiltStart } from './tilt.js';
 
 /**
  * Thumb travel for full lock, as a fraction of the short screen edge.
@@ -97,6 +97,15 @@ export class TouchControls {
   readonly tilt = new TiltSteering();
   /** Raised when the player turns tilt on or off, so the choice can be saved. */
   onTilt: ((on: boolean) => void) | null = null;
+  /**
+   * Raised when tilt would not start, with which of the three reasons it was.
+   *
+   * The button on its own can only say NO, which tells the player nothing they
+   * can act on — and two of the three reasons are things they can fix from a
+   * settings screen. Routed out rather than shown here because the game
+   * already has one place for a line of text like this.
+   */
+  onTiltRefused: ((why: TiltStart) => void) | null = null;
 
   private readonly wheel: HTMLElement;
   private readonly tiltBtn: HTMLButtonElement;
@@ -399,12 +408,13 @@ export class TouchControls {
       this.onTilt?.(false);
       return;
     }
-    const on = await this.tilt.enable();
-    this.showTilt(on ? null : 'no');
+    const started = await this.tilt.enable();
+    this.showTilt(started === 'on' ? null : 'no');
     // Only a yes is remembered. A refusal is this device saying no today, not
     // a preference — asking again next time costs one tap and assuming the
     // answer costs the feature.
-    if (on) this.onTilt?.(true);
+    if (started === 'on') this.onTilt?.(true);
+    else this.onTiltRefused?.(started);
   }
 
   /**
@@ -415,7 +425,15 @@ export class TouchControls {
    * session, and a red button about a permission nobody requested is noise.
    */
   async restoreTilt(): Promise<void> {
-    await this.tilt.enable();
+    const started = await this.tilt.enable();
+    // Said out loud even though nobody pressed anything: the setting is on,
+    // the car is about to steer from the pad instead, and a player who is not
+    // told that reads it as tilt being broken rather than as tilt being off.
+    if (started !== 'on') {
+      this.showTilt('no');
+      this.onTiltRefused?.(started);
+      return;
+    }
     this.showTilt();
   }
 

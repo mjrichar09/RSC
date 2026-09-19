@@ -921,6 +921,15 @@ The things there that are easy to get wrong:
   where it is refused. `mobilecheck` taps it and checks the clock went back to
   the line; a button that is present, the right size and inert is the failure
   worth testing for.
+- **A permission API is not the sensor.** `DeviceOrientationEvent.requestPermission`
+  is not iOS-only, and elsewhere it can be a stub that refuses or throws on a
+  device whose gyroscope works — which is how the tilt button came to say NO on
+  a OnePlus 13, with no way for the player or the code to find out why. A
+  refusal is a suspicion; `enable` attaches the listener either way and lets
+  the readings decide, so the only thing that turns tilt on is the sensor
+  actually speaking. It also means `mobilecheck` has to keep events coming
+  while the button decides — a real accelerometer is already firing before
+  anybody presses anything, and a headless browser emits nothing at all.
 - **The steering pad is deliberately huge and sits under the HUD.** It takes
   the whole left third so a thumb never has to aim, which is only safe while
   everything drawn over it is `pointer-events: none`. `mobilecheck` asserts
