@@ -159,6 +159,14 @@ describe('every variant is drivable', () => {
       expect(result.ok, result.reason ?? '').toBe(true);
       expect(result.time!).toBeLessThan(v.medals.bronze);
     },
-    90_000,
+    // Three laps of a whole stage each, and the two Grand Traverse variants
+    // are the slowest work in the suite: measured at 100.6 s and 101.2 s, over
+    // a budget of 90 s that had been set by eye. They were not hanging and
+    // nothing about the game had changed — the number was simply never true on
+    // a machine this size, and it only went red once the pair drifted the last
+    // second across the line. Same lesson as the `stages.test.ts` budgets, and
+    // set the same way: from the measurement, with room for a machine under
+    // load rather than room for a regression.
+    180_000,
   );
 });

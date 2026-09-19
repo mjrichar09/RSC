@@ -13,9 +13,14 @@ export default defineConfig({
       output: {
         // three.js and Rapier are large and change only on a dependency bump,
         // so they get their own chunks and stay cached across game updates.
-        manualChunks: {
-          three: ['three'],
-          rapier: ['@dimforge/rapier3d-compat'],
+        //
+        // A function rather than the map form: the bundler underneath Vite
+        // only takes a function now, and the map form fails the build with
+        // "manualChunks is not a function" rather than being ignored.
+        manualChunks: (id: string) => {
+          if (id.includes('node_modules/three')) return 'three';
+          if (id.includes('node_modules/@dimforge/rapier3d-compat')) return 'rapier';
+          return undefined;
         },
       },
     },

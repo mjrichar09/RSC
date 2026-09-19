@@ -61,6 +61,7 @@ export class RaceHud {
   private readonly delta: HTMLElement;
   private readonly pace: HTMLElement;
   private readonly best: HTMLElement;
+  private readonly worldRecord: HTMLElement;
   private readonly notes: HTMLElement;
   private readonly missedBanner: HTMLElement;
   /** The order of the field in a network race. Empty when racing alone. */
@@ -89,7 +90,12 @@ export class RaceHud {
         <div class="race-clock" id="race-clock">0:00.00</div>
         <div class="race-delta" id="race-delta"></div>
         <div class="race-pace" id="race-pace"></div>
+      </div>
+      <div class="race-times">
+        <div class="race-wr" id="race-wr" hidden></div>
         <div class="race-best" id="race-best"></div>
+      </div>
+      <div class="race-status">
         <div class="race-progress"><div id="race-progress-fill"></div></div>
         <div class="race-cps" id="race-cps"></div>
       </div>
@@ -110,6 +116,7 @@ export class RaceHud {
     this.delta = this.root.querySelector('#race-delta')!;
     this.pace = this.root.querySelector('#race-pace')!;
     this.best = this.root.querySelector('#race-best')!;
+    this.worldRecord = this.root.querySelector('#race-wr')!;
     this.notes = this.root.querySelector('#race-notes')!;
     this.missedBanner = this.root.querySelector('#race-missed')!;
   }
@@ -141,9 +148,11 @@ export class RaceHud {
       .map((row, i) => {
         const ahead = i === 0 ? null : (order[i - 1]!.progress - row.progress);
         const gap = ahead === null ? '' : `+${Math.round(yards(ahead))} yd`;
-        return `<div class="standing${row.you ? ' you' : ''}"><b>${i + 1}</b>${
-          row.name
-        }<span>${gap}</span></div>`;
+        // Escaped: in a network race these names came off the wire from
+        // whoever else is in the lobby, and this builds markup as a string.
+        return `<div class="standing${row.you ? ' you' : ''}"><b>${i + 1}</b>${escapeHtml(
+          row.name,
+        )}<span>${gap}</span></div>`;
       })
       .join('');
   }
@@ -207,6 +216,28 @@ export class RaceHud {
           </div>`;
       })
       .join('');
+  }
+
+  /**
+   * The fastest time anybody has set here, with the name against it.
+   *
+   * Under the personal best, because that is the order you care about them in:
+   * the PB is the thing you are beating today and the record is the thing the
+   * stage is worth. Null hides the row outright — a board that is empty, off,
+   * or unreachable says nothing rather than saying zero, and a career run
+   * never shows one at all because a career car is not the car these times
+   * were set in.
+   *
+   * The name is escaped: it was typed by a stranger and arrived over the wire.
+   */
+  setWorldRecord(record: { time: number; name: string } | null): void {
+    this.worldRecord.hidden = record === null;
+    if (!record) {
+      this.worldRecord.textContent = '';
+      return;
+    }
+    this.worldRecord.innerHTML =
+      `<b>WR</b> ${formatTime(record.time)} <span>${escapeHtml(record.name)}</span>`;
   }
 
   /** Personal best for this stage, shown under the clock. Null hides it. */

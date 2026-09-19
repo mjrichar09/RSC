@@ -59,6 +59,29 @@ try {
   await page.waitForSelector('.menu.is-open');
   console.log('menu opens on a phone');
 
+  /*
+   * Help is reachable with a thumb.
+   *
+   * It was not: the button lived in the menu footer beside the keyboard hints,
+   * and that footer is `display: none` on a touch device because key hints are
+   * noise without keys — so the phone had no route to the help screen at all,
+   * and the help screen is the only place tilt steering is written down. The
+   * desktop check in `uicheck` passed throughout, which is the same
+   * one-viewport blind spot the HUD overlap had.
+   */
+  const helpBtn = (await page.locator('[data-action="help"]').boundingBox()) ??
+    fail('no way into the help screen on a phone');
+  if (Math.min(helpBtn.width, helpBtn.height) < 30) {
+    fail(`the help button is ${helpBtn.width}x${helpBtn.height}, too small for a thumb`);
+  }
+  await page.tap('[data-action="help"]');
+  await page.waitForSelector('.help-doc');
+  const tiltHelp = (await page.locator('.help-doc').textContent()) ?? '';
+  if (!tiltHelp.includes('TILT')) fail('the phone help screen does not explain tilt steering');
+  await page.tap('[data-action="back"]');
+  await page.waitForSelector('[data-action="career"]');
+  console.log('help screen reachable with a thumb, and it covers tilt');
+
   // Nothing may overflow the viewport: a menu you cannot scroll to the bottom
   // of is a menu with a button you cannot press.
   const overflow = await page.evaluate(() => ({
@@ -167,7 +190,7 @@ try {
   // function inside an evaluated block, and that helper does not exist in the
   // page — so this is written without local function bindings on purpose.
   const clashes = (await page.evaluate(`(() => {
-    const names = ['.damage', '.hud-tl', '.minimap', '[data-touch="menu"]', '[data-touch="restart"]', '.cluster', '.touch-pedals'];
+    const names = ['.damage', '.hud-tl', '.minimap', '[data-touch="menu"]', '[data-touch="restart"]', '.cluster', '.touch-pedals', '.touch-tilt'];
     const rects = names.map((s) => {
       const el = document.querySelector(s);
       return el ? el.getBoundingClientRect() : null;
@@ -204,6 +227,107 @@ try {
   })()`)) as string[];
   if (blocking.length > 0) fail(`swallowing steering touches: ${[...new Set(blocking)].join(', ')}`);
   console.log('nothing on the HUD overlaps anything else, or blocks the steering pad');
+
+  /*
+   * Tilt steering, both ways round.
+   *
+   * The sign is the whole risk here and it is invisible on one device: a phone
+   * turned into landscape one way and a phone turned the other way are
+   * opposite `beta` for the same physical movement, so a reading that picked
+   * an Euler angle is right for half the players and backwards for the rest.
+   * `tests/tilt.test.ts` proves that about the arithmetic; this proves it
+   * about the car, which is the check this project trusts for handedness.
+   *
+   * Poses are stated as a hold and a movement out of it, and the two passes
+   * are the two ways a phone gets held rather than two settings of anything —
+   * the reading never asks the browser which way up it is, and the header of
+   * `src/ui/tilt.ts` says why that would not have helped if it did.
+   */
+  /*
+   * Hold the phone at a pose, the way a phone actually holds one.
+   *
+   * A real accelerometer fires continuously, and the tilt reading only reaches
+   * the car inside the frame loop — which on this page is five or six frames a
+   * second through software WebGL. One event and a fixed wait is a coin toss
+   * on whether a frame ran in between, and it lands the wrong way often enough
+   * to report the *previous* pose's steering: measured, it read a left tilt as
+   * +0.60, which is the number the right tilt had just produced. Same family
+   * as the `.lights-word.go` coin toss in `uicheck`.
+   *
+   * So the pose is held for a stretch and the reading is waited *for* rather
+   * than slept on: the value has to sit still across two polls before it
+   * counts, which is what "the frame loop has caught up" actually means.
+   */
+  const orient = async (beta: number, gamma: number): Promise<number> => {
+    const before = (await status()).steps as number;
+    const until = Date.now() + 8000;
+    let steer = 0;
+    for (;;) {
+      const now = await page.evaluate(
+        ([b, g]) => {
+          window.dispatchEvent(
+            new DeviceOrientationEvent('deviceorientation', { alpha: 0, beta: b, gamma: g }),
+          );
+          const s = window.RSC!.status() as { steer: number; steps: number };
+          return [s.steer, s.steps];
+        },
+        [beta, gamma],
+      );
+      steer = now[0]!;
+      // The world's own step count, not a stopwatch: it is the thing that says
+      // the frame loop has actually run since the pose was applied, and it is
+      // the only honest way to wait on a page managing five frames a second.
+      if (now[1]! - before > 60) return steer;
+      if (Date.now() > until) fail('the world stopped stepping while tilting the phone');
+      await page.waitForTimeout(60);
+    }
+  };
+
+  await page.tap('[data-touch="tilt"]');
+  const lit = await page.evaluate(
+    () => document.querySelector('.touch-tilt')!.classList.contains('is-on'),
+  );
+  if (!lit) fail('the tilt button did not turn tilt steering on');
+
+  for (const [held, gamma, hold, drop] of [
+    // Turned one way: the phone's bottom edge is the screen's right-hand side,
+    // so dropping that side is a larger beta.
+    ['one way', -90, 20, 42],
+    // Turned the other: the same physical movement is a smaller one.
+    ['the other way', 90, -20, -42],
+  ] as const) {
+    // The first reading after a re-centre is the pose that means straight
+    // ahead, so this hold is what the two movements below are measured from.
+    const straight = await orient(hold, gamma);
+    if (Math.abs(straight) > 0.05) {
+      fail(`held level ${held} and the car steered ${straight.toFixed(2)}`);
+    }
+
+    const right = await orient(drop, gamma);
+    const left = await orient(hold - (drop - hold), gamma);
+    console.log(
+      `held ${held}: right side down gives ${right.toFixed(2)}, left side down ${left.toFixed(2)}`,
+    );
+    if (right < 0.4) fail(`tilting right held ${held} did not steer right (${right.toFixed(2)})`);
+    if (left > -0.4) fail(`tilting left held ${held} did not steer left (${left.toFixed(2)})`);
+
+    // Off and on again, which is how a hold is re-taken: the pose tilt is
+    // switched on in *is* its straight-ahead, so the next pass needs a fresh
+    // one. Checked rather than assumed — a pass that ran with tilt switched
+    // off would read 0.00 throughout and sail past the level assertion, which
+    // is exactly how this was found.
+    await page.tap('[data-touch="tilt"]');
+    await page.waitForSelector('.touch-tilt:not(.is-on)');
+    await page.tap('[data-touch="tilt"]');
+    await page.waitForSelector('.touch-tilt.is-on');
+  }
+
+  // And the pad is still the pad: turning tilt off hands the wheel back.
+  await orient(-42, 90);
+  await page.tap('[data-touch="tilt"]');
+  const afterOff = await orient(-42, 90);
+  if (Math.abs(afterOff) > 0.05) fail(`tilt kept steering after it was switched off (${afterOff})`);
+  console.log('tilt steering reads the same movement the same way, turned either way round');
 
   // The menus. A panel taller than a landscape phone with no way to scroll is
   // a stage list whose bottom half does not exist.

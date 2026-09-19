@@ -158,6 +158,77 @@ export interface Link {
   readonly congested?: boolean;
 }
 
+/** The longest a driver's name may be, here and on the leaderboard. */
+export const MAX_NAME = 16;
+
+/**
+ * Bounds on what another player is allowed to call themselves.
+ *
+ * A `hello` is the first thing a stranger sends, and nothing above the link
+ * checks the shape of it: `message.name.slice(0, 16)` was a `TypeError` thrown
+ * inside the host's own message handler for anybody who sent a number instead
+ * of a string, which is a guest able to knock over the lobby it is joining.
+ * Control characters go because a name is drawn into one line of markup; the
+ * escaping at the point of render is the other half of this, and neither half
+ * is enough on its own.
+ */
+export function cleanName(raw: unknown, fallback: string): string {
+  if (typeof raw !== 'string') return fallback;
+  const stripped = raw
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .trim()
+    .slice(0, MAX_NAME)
+    .trim();
+  return stripped.length > 0 ? stripped : fallback;
+}
+
+/**
+ * A competition number, as the lobby offers it: 1 to 99, two digits on a roof.
+ *
+ * Bounded on arrival rather than where it is drawn, because it reaches the
+ * car's roof texture as well as the lobby list.
+ */
+export function cleanNumber(raw: unknown, fallback = 1): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return fallback;
+  return Math.min(Math.max(Math.round(raw), 1), 99);
+}
+
+/**
+ * A livery id, or something `liveryById` will answer for.
+ *
+ * It resolves an unknown id to the default paint already, so all this has to
+ * guarantee is that it is handed a string to resolve. Kept beside the other
+ * two so everything that arrives over the wire is bounded in one place.
+ */
+export function cleanLivery(raw: unknown): string {
+  return typeof raw === 'string' ? raw.slice(0, 40) : '';
+}
+
+/**
+ * A guest's controls, bounded before the host's world is driven with them.
+ *
+ * This is the one message from a stranger that reaches the physics, and the
+ * physics has no defence against it: `clamp` passes `NaN` straight through
+ * (it is neither below the floor nor above the ceiling), so a single input
+ * with a missing field puts a `NaN` into a rigid body and every car in the
+ * race leaves the world together. Bounded here, at the wire, rather than in
+ * `sim/` — the simulation's inputs come from a driver or from the AI and both
+ * of those are already numbers.
+ */
+export function cleanInput(raw: unknown): DriverInput {
+  const axis = (value: unknown, lo: number): number => {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+    return value < lo ? lo : value > 1 ? 1 : value;
+  };
+  const input = (raw ?? {}) as Partial<DriverInput>;
+  return {
+    throttle: axis(input.throttle, 0),
+    brake: axis(input.brake, 0),
+    steer: axis(input.steer, -1),
+    handbrake: axis(input.handbrake, 0),
+  };
+}
+
 /** Pack a snapshot's floats a little, since these go out twenty times a second. */
 export const round3 = (n: number): number => Math.round(n * 1000) / 1000;
 

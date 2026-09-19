@@ -10,9 +10,10 @@
  * across the middle of the loop rather than driving round it.
  *
  * So a gate is a plane with a width now, and it is crossed or it is not. The
- * width is the corridor rather than the posts — see `race.ts` for the
- * measurement behind that — so running wide onto the verge still counts, and
- * being somewhere else entirely does not.
+ * width is the posts — see `race.ts` for the measurement behind that — so
+ * going round the outside of one does not count, and neither does being
+ * somewhere else entirely. The car is tested as a point at its centre, so half
+ * a car outside a post still passes and that is the whole of the allowance.
  *
  * These tests drive the rules with positions rather than through the physics:
  * what is being checked is the rule, and a full sim run would only make it
@@ -29,6 +30,8 @@ import type { VehicleState } from '../src/sim/vehicle.js';
 const stage = new Stage(stageById('pine-loop'));
 /** Far enough across to be off the stage altogether, not merely off the road. */
 const OUTSIDE = CORRIDOR.vergeWidth + CORRIDOR.bankWidth + 3;
+/** Just outside a post: on the verge, past the gate, and not through it. */
+const PAST_POST = 1.5;
 
 /**
  * A car at `distance` along the stage, `lateral` metres to its left.
@@ -62,13 +65,32 @@ describe('gates', () => {
     expect(race.phase).toBe('finished');
   });
 
-  it('still counts one taken wide, out on the verge', () => {
-    // The verge is part of the stage and running onto it already costs grip.
-    // The rule is not there to referee a wheel on the grass.
+  it('counts one taken right up against a post', () => {
     const race = new Race(stage);
-    drive(race, stage.length, stage.checkpoints[0]!.width + 2);
+    drive(race, stage.length, stage.checkpoints[0]!.width - 0.3);
     expect(race.missed).toEqual([]);
     expect(race.phase).toBe('finished');
+  });
+
+  it('does not count one taken round the outside of a post', () => {
+    // The verge is part of the stage and driveable at a price, but it is not
+    // part of the gate: this is the whole car past the post, on the grass.
+    // It used to pass, because the rule allowed 8.2 m beyond each post.
+    const race = new Race(stage);
+    drive(race, stage.length, stage.checkpoints[0]!.width + PAST_POST);
+    expect(race.missed).toContain(0);
+    expect(race.phase).not.toBe('finished');
+  });
+
+  it('does not let the finish be taken round the outside either', () => {
+    const race = new Race(stage);
+    const last = stage.spline.samples[stage.spline.samples.length - 1]!;
+    // Every checkpoint properly, then just outside a post at the line.
+    for (let d = 0; d <= stage.length + 6; d += 1) {
+      race.update(at(d, d > stage.length - 14 ? last.width + PAST_POST : 0), 1 / 120);
+    }
+    expect(race.missed).toEqual([]);
+    expect(race.phase).not.toBe('finished');
   });
 
   it('does not count one taken off the stage altogether', () => {

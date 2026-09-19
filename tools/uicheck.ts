@@ -28,7 +28,35 @@ function findChromium(): string | undefined {
   return undefined;
 }
 
-const server = await createServer({ server: { port: 5181 }, logLevel: 'error' });
+/**
+ * A leaderboard with a known record in it, served by the page's own origin.
+ *
+ * The world record on the HUD is the one thing here that cannot be checked
+ * against no broker at all, because with no broker there is correctly nothing
+ * to show. A stub rather than the deployed worker: the assertion is that the
+ * name and the time reach the screen, and pointing it at a live service would
+ * make that a check on whether this machine has the internet.
+ *
+ * Loopback, which is also the only kind of `?rooms=` the game will follow.
+ */
+const WORLD_RECORD = { name: 'Solveig', time: 41.62, at: Date.now() };
+
+const server = await createServer({
+  server: { port: 5181 },
+  logLevel: 'error',
+  plugins: [
+    {
+      name: 'stub-board',
+      configureServer(dev) {
+        dev.middlewares.use((req, res, next) => {
+          if (!req.url?.startsWith('/b/') && !req.url?.startsWith('/bs')) return next();
+          res.setHeader('content-type', 'application/json');
+          res.end(JSON.stringify({ top: [WORLD_RECORD], boards: {} }));
+        });
+      },
+    },
+  ],
+});
 await server.listen();
 const executablePath = findChromium();
 const browser = await chromium.launch({
@@ -43,6 +71,44 @@ await page.goto('http://localhost:5181/?vision=0&drama=0');
 await page.waitForFunction(() => window.RSC?.ready === true);
 await page.waitForSelector('.menu.is-open');
 console.log('menu opens on boot');
+
+/*
+ * How to play, from the front screen.
+ *
+ * It is the only route into the help text, and on a phone it is the only route
+ * into the key list at all — the permanent on-screen one was cut to three
+ * bindings on the strength of this screen existing, so "the button opens it and
+ * Back comes out" is load-bearing rather than cosmetic.
+ */
+await page.click('[data-action="help"]');
+await page.waitForSelector('.help-doc');
+const helpText = (await page.locator('.help-doc').textContent())?.replace(/\s+/g, ' ') ?? '';
+for (const wanted of ['Career', 'Arcade', 'Multiplayer', 'Handbrake', 'TILT', 'checkpoint']) {
+  if (!helpText.includes(wanted)) throw new Error(`the help screen never mentions ${wanted}`);
+}
+/*
+ * It is long, so the end of it has to be reachable.
+ *
+ * Checked by scrolling to the bottom and looking for the last heading, not by
+ * asking whether some element overflows: `.menu` is the scroller and
+ * `.help-doc` is the content, so "does this element scroll" asks the wrong one
+ * and answers no for a screen that is perfectly scrollable.
+ */
+await page.evaluate(`(() => {
+  const menu = document.querySelector('.menu');
+  menu.scrollTop = menu.scrollHeight;
+})()`);
+const lastVisible = await page.evaluate(`(() => {
+  const heads = document.querySelectorAll('.help-doc h2');
+  const last = heads[heads.length - 1];
+  if (!last) return false;
+  const r = last.getBoundingClientRect();
+  return r.top >= 0 && r.bottom <= window.innerHeight;
+})()`);
+if (!lastVisible) throw new Error('the help screen cannot be scrolled to its last section');
+await page.click('[data-action="back"]');
+await page.waitForSelector('[data-action="career"]');
+console.log(`help screen opens and closes (${helpText.trim().length} characters)`);
 
 // Career -> garage
 await page.click('[data-action="career"]');
@@ -389,6 +455,88 @@ if (!(await page.isVisible('.update-bar'))) {
 }
 await page.$eval('.update-bar', (el) => ((el as HTMLElement).hidden = true));
 console.log('update bar: silent, and able to speak');
+
+/*
+ * The world record, on the HUD, during the race.
+ *
+ * Checked at the point the stage loads rather than after a lap: the row is
+ * filled by `loadStage`, so waiting for the green would only be waiting.
+ *
+ * Arcade and multiplayer only, and that half matters as much — a career time
+ * is set in whatever that player's garage has built, so a stock-car record
+ * beside it compares two different cars. Both halves are asserted below.
+ */
+await page.goto('http://localhost:5181/?vision=0&drama=0&rooms=http://localhost:5181');
+await page.waitForFunction(() => window.RSC?.ready === true);
+await page.waitForSelector('.menu.is-open');
+await page.click('[data-action="arcade"]');
+await page.waitForSelector('.menu-row');
+await page.locator('.menu-row[data-id="quarry-run:day-clear"]').click();
+await page.waitForFunction(() => (window.RSC!.status() as { stage: string }).stage === 'quarry-run');
+
+await page.waitForFunction(
+  () => (document.querySelector('.race-wr') as HTMLElement | null)?.hidden === false,
+  { timeout: 15_000 },
+);
+const wr = (await page.locator('.race-wr').textContent())?.replace(/\s+/g, ' ').trim();
+console.log(`world record on the HUD: "${wr}"`);
+if (!wr?.includes('Solveig')) throw new Error(`the record has no name on it: "${wr}"`);
+if (!wr?.includes('41.62')) throw new Error(`the record has the wrong time on it: "${wr}"`);
+
+/*
+ * And nothing on the race HUD sits on top of anything else.
+ *
+ * `mobilecheck` has asserted this at phone size for a long time and nothing
+ * asserted it at desktop size, which is how the surface readout came to be
+ * printed through the word CONDITION on every wide window: `.hud-tl` is 65 px
+ * tall and `.damage` started at 16. Two absolutely positioned panels both
+ * claiming a corner, caught on the phone and never on the desktop, because
+ * only one of the two layouts was ever measured.
+ *
+ * Checked with both times showing, which is the tallest the left column gets.
+ */
+const clash = (await page.evaluate(`(() => {
+  const names = ['.hud-tl', '.race-times', '.damage', '.race-top', '.minimap',
+                 '.race-notes', '.race-status', '.hud-bl', '.hud-br'];
+  const found = [];
+  for (let i = 0; i < names.length; i++) {
+    for (let j = i + 1; j < names.length; j++) {
+      const x = document.querySelector(names[i]);
+      const y = document.querySelector(names[j]);
+      if (!x || !y) continue;
+      const a = x.getBoundingClientRect();
+      const b = y.getBoundingClientRect();
+      if (a.width === 0 || a.height === 0 || b.width === 0 || b.height === 0) continue;
+      if (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom) {
+        found.push(names[i] + ' over ' + names[j]);
+      }
+    }
+  }
+  return found;
+})()`)) as string[];
+if (clash.length > 0) throw new Error(`race HUD pieces on top of each other: ${clash.join(', ')}`);
+
+// And the status strip is along the bottom edge, which is the point of moving
+// it off the top: a third of the screen height below the clock, not under it.
+const statusBox = (await page.locator('.race-status').boundingBox())!;
+const tall = await page.evaluate(() => window.innerHeight);
+if (statusBox.y < tall * 0.75) {
+  throw new Error(`the status strip is at y ${statusBox.y}, not near the bottom`);
+}
+console.log(
+  `race HUD: nothing overlaps, status strip at the bottom (y ${Math.round(statusBox.y)} of ${tall})`,
+);
+
+// And a career run shows none of it, whatever the board says.
+await page.keyboard.press('Escape');
+await page.waitForSelector('.menu.is-open');
+await page.click('[data-action="career"]');
+await page.waitForSelector('.garage.is-open');
+const careerWr = await page.evaluate(
+  () => (document.querySelector('.race-wr') as HTMLElement | null)?.hidden !== false,
+);
+if (!careerWr) throw new Error('a career run is showing a stock-car world record');
+console.log('career shows no world record, because a career car is not that car');
 
 console.log('OK — career, arcade and multiplayer all open from the front door.');
 await browser.close();

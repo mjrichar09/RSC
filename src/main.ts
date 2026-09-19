@@ -208,11 +208,27 @@ async function main(): Promise<void> {
    * and a key press decides back.
    */
   const touch = new TouchControls(hudRoot);
+  /**
+   * Turn tilt steering back on for a player who had it on last time.
+   *
+   * Declared here, beside the handler that calls it, because that handler is
+   * built during boot and the profile it depends on is loaded asynchronously
+   * further down — a `let` further down is in the temporal dead zone for this
+   * closure, which is a trap this file has fallen into before. Null until the
+   * profile says otherwise, and it clears itself once it has had its answer.
+   *
+   * It has to run from a *touch* and not from the load, because iOS hands over
+   * the orientation sensor only from inside a user gesture. Every touch tries
+   * until one of them works, which covers a first tap that landed before the
+   * save had finished loading.
+   */
+  let armTilt: (() => void) | null = null;
   window.addEventListener(
     'pointerdown',
     (event) => {
       if (event.pointerType !== 'touch') return;
       touch.setVisible(true);
+      armTilt?.();
       // And ask for fullscreen from *this* gesture, whatever it was for.
       //
       // It used to be asked for on the first thumb on the steering pad, which
@@ -278,6 +294,20 @@ const params = new URLSearchParams(location.search);
   // and the game has no server of its own to bounce off.
   useRelay(params.get('turn'));
   const freeRoam = params.has('free') || params.has('trace');
+
+  /*
+   * The global times board, sharing the room broker's worker and its `?rooms=`
+   * override so there is only ever one address to keep in step. Null when
+   * there is no broker configured, which the menu, the HUD and the finish path
+   * all handle by simply not showing times.
+   *
+   * Up here with the rest of what the query string decides, rather than down
+   * beside the first thing that used it. `loadStage` reads it now — through
+   * `showWorldRecord` — and `loadStage` is reachable during boot, which is
+   * where a `const` declared further down is still in its temporal dead zone.
+   * Nothing calls it that early today; this is so nothing can.
+   */
+  const board = boardFor(params);
 
   let world: SimWorld;
   let stage: Stage | null = null;
@@ -433,16 +463,31 @@ const params = new URLSearchParams(location.search);
   let sessionHealth: Partial<Record<ComponentId, number>> = {};
   let settled = false;
 
-  // The global times board, sharing the room broker's worker and its `?rooms=`
-  // override so there is only ever one address to keep in step. Null when there
-  // is no broker configured, which the menu and the finish path both handle by
-  // simply not showing times.
-  //
-  // Declared up here rather than beside the menu it feeds, because `loadStage`
-  // runs during boot and `attachGhost` below reads it: a `const` further down
-  // this function is in the temporal dead zone for every closure above it, and
-  // the whole game would simply never become ready.
-  const board = boardFor(params);
+
+  /**
+   * Put the stage's world record on the HUD, with the name against it.
+   *
+   * Arcade and multiplayer only. A career time is set in whatever that
+   * player's garage has built, so putting a stock-car record beside it would
+   * be comparing two different cars — the same reason only arcade publishes.
+   *
+   * Everything about it fails soft. `Leaderboard` already answers null for
+   * every way a call can go wrong, and null here means the row simply is not
+   * there: a board that is empty, off, unconfigured on a fork, or merely slow
+   * must never be the reason a race does not start.
+   */
+  const showWorldRecord = async (key: string) => {
+    raceHud.setWorldRecord(null);
+    if (mode !== 'arcade' || !board) return;
+    const top = await board.top(key, 1);
+    // The player can change stage, change variant, or leave while this is in
+    // flight — it is a network call inside a stage load. Same guard as the
+    // ghost below, and for the same reason: the answer is only for the stage
+    // that asked.
+    if (!stage || !variant || currentKey() !== key) return;
+    const best = top?.[0];
+    raceHud.setWorldRecord(best ? { time: best.time, name: best.name } : null);
+  };
 
   /**
    * Show the stored best for this pairing, and start chasing its ghost.
@@ -617,6 +662,7 @@ const params = new URLSearchParams(location.search);
     // somebody driving somewhere else.
     crashReel.reset();
     void attachGhost(currentKey());
+    void showWorldRecord(currentKey());
   };
 
   /** Seed the world's damage model with the condition the car is actually in. */
@@ -698,6 +744,10 @@ const params = new URLSearchParams(location.search);
        * cannot be remembered in one place and forgotten in the other.
        */
       void attachGhost(currentKey());
+      // Re-asked on a restart as well as on a load: somebody else may have
+      // taken it while this player was driving, and in a lobby that somebody
+      // is probably in the room.
+      void showWorldRecord(currentKey());
       raceHud.setSplitDeltas([]);
       raceHud.setDelta(null);
       recorder.reset();
@@ -763,6 +813,7 @@ const params = new URLSearchParams(location.search);
     world.rescue(race?.furthest);
     stuckFor = 0;
   };
+
   const multiplayer = new MultiplayerPanel(hudRoot);
   /*
    * The lobby needs the same first-touch signal the driving controls use: a
@@ -890,6 +941,12 @@ const params = new URLSearchParams(location.search);
   menu.onCareer = () => {
     rivalLiveries = [];
     mode = 'career';
+    // The world record goes with it, here and not at the next stage load:
+    // coming out of an arcade race into the garage reloads nothing, so the
+    // stock-car record sat on the HUD underneath a career run — which is the
+    // one thing it must never be shown beside, because it is not that car.
+    // Caught by `uicheck` rather than by reading this code.
+    raceHud.setWorldRecord(null);
     sessionHealth = { ...career.profile.carHealth };
     garage.setOpen(true);
   };
@@ -1058,6 +1115,31 @@ const params = new URLSearchParams(location.search);
     damagePanel.notice(next === 0 ? 'Crash slow-motion off' : `Crash slow-motion ${Math.round(next * 100)}%`);
     void save.update((profile) => {
       profile.settings.drama = next;
+    });
+  };
+
+  /*
+   * Tilt steering: the button remembers, and the save is the only state.
+   *
+   * Set up here rather than beside the other touch wiring because this is
+   * where the profile exists. `armTilt` fires from the next touch — a gesture,
+   * which is what iOS wants before it will hand over the sensor — and stands
+   * itself down once it has an answer either way, so a player who is refused
+   * is not asked again on every tap.
+   */
+  if (career.profile.settings.tilt) {
+    armTilt = () => {
+      armTilt = null;
+      void touch.restoreTilt();
+    };
+  }
+  touch.onTilt = (on) => {
+    // A choice made with the button outranks anything still armed from the
+    // save: turning it off by hand must not be undone by the next tap.
+    armTilt = null;
+    damagePanel.notice(on ? 'Tilt steering on — hold the phone as you like' : 'Tilt steering off');
+    void save.update((profile) => {
+      profile.settings.tilt = on;
     });
   };
 

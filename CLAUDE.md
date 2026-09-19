@@ -215,6 +215,19 @@ a physics engine per test. These are the habits that pay:
   code. A single measurement is not evidence.
 - **Put long runs in the background** and keep working; `npm test` is ~100 s and
   `npm run stages` several minutes.
+- **A timeout nothing enforces is not a budget, and a timeout set by eye is not
+  one either.** The two Grand Traverse validation tests in `stages.test.ts`
+  declared 60 s and measured 78 s each, and passed for as long as the runner of
+  the day did not apply a per-test timeout to a test that never yields;
+  upgrading vitest turned them red with nothing about the game changed. Its
+  twin in `conditions.test.ts` declared 90 s for the same shape of work and
+  measured 100.6 s and 101.2 s — enforced the whole time, simply never true on
+  a machine this size, and red only once the pair drifted the last second
+  across the line. Both numbers come from the measurement now. Grand Traverse
+  is always the one that goes: it is the longest stage and every one of these
+  drives it three times. When one goes red, check the *reason* before anything
+  else — a timeout and a failed assertion are completely different news, and
+  `git stash` plus one run says whether it was red before you arrived.
 - **Apply mechanical multi-hunk edits with one patch script** in the scratchpad,
   written with `assert old in s` for every hunk. It fails loudly on a stale
   assumption instead of silently matching nothing, which a fuzzy edit will do.
@@ -325,6 +338,24 @@ scannable as it grows; it is append-only.
   crossing it, and three of four stages in one screenshot were telling the
   driver they had missed a checkpoint still half a stage ahead. Check the
   distance to the gate, not to its plane.
+- **A gate as wide as the corridor is not a gate.** The crossing test allowed
+  `vergeWidth + bankWidth` — 8.2 m — beyond each post, so that a wheel on the
+  grass would not be refereed. But the test is the car's *centre*, so 8.2 m
+  outside a post is the whole car clear of the gate, and driving round the
+  outside of a checkpoint scored exactly the same as going through it. It was
+  reported as "passing just outside counts". The allowance a point test gives
+  for free — half a car's width past a post — is the right one, and the rule is
+  `|across| <= gate.width` now.
+
+  The measurement that justified the shoulder had also gone stale, which is the
+  general lesson: it said the AI's over-committed run was outside the posts by
+  up to five metres at three of Grand Traverse's six gates. Re-measured across
+  every stage at the three commitment levels `validateStage` uses, taking
+  `across` at the instant the plane is crossed rather than at nearest approach,
+  every authored stage crosses *inside* the posts with 2.7 to 6.4 m to spare —
+  Grand Traverse worst at 2.72 m **inside**. `npm run stages` finishes all 13
+  with the tighter rule. A tolerance justified by a number nobody has re-run is
+  a tolerance justified by nothing.
 - **A stage passing over itself.** `selfIntersections` skips pairs at different
   heights, so a section running 12 m above another and 1 m across from it was
   never reported — and the ground mesh, which took the *nearest* road's height,
@@ -539,6 +570,18 @@ scannable as it grows; it is append-only.
   same block also has to pose the car (`carView.update`) before reading a
   dragging part's world position, or sparks come off where the bumper sat
   before it started hanging.
+- **A ribbon that casts its whole silhouette onto the scenery behind it.** The
+  corridor is one closed sheet — road, verge, bank and wall — so its entire
+  footprint is an occluder, and `sim/terrain.ts` generates the open ground
+  separately and *below* it wherever the road is on an embankment. With the sun
+  anywhere but overhead the ribbon printed itself on that ground beside the
+  road: a dark band the width of the corridor, running parallel to it, which
+  reads as a second track in the field. It was reported as exactly that. The
+  fix is the terrain refusing the shadow rather than the road refusing to cast
+  one — the two cases where the corridor's shadow is real (an embankment
+  shading the road beside it, a bridge deck darkening the section it crosses)
+  both land on the corridor, which still receives. One `shoot` frame of
+  `grand-traverse@40` shows it and the same frame shows it gone.
 - **three.js needing an explicit call after you change a shadow camera's
   frustum** (`light.shadow.camera.updateProjectionMatrix()`), and needing the
   key light on the opposite azimuth from the camera or the car sits on its own
@@ -585,6 +628,82 @@ scannable as it grows; it is append-only.
   strip was rebuilt only when the split *count* changed, so a run stayed looking
   clean after driving round the outside of a checkpoint. If the markup depends
   on two things, the key has both.
+- **A HUD row cleared by the thing that fills it, and by nothing else.** The
+  world record on the race HUD is arcade and multiplayer only, because a career
+  car is not the stock car those times were set in — and it was filled by
+  `loadStage`, which leaving an arcade race for the garage does not call. So the
+  record sat there underneath a career run. Anything shown conditionally has to
+  be cleared where the condition changes, not only where it is next set.
+- **A layout checked at one size is checked at one size.** `mobilecheck` has
+  asserted that no two HUD panels overlap since the phone layout existed, and
+  nothing asserted it on a desktop — so `.hud-tl` (65 px tall) and `.damage`
+  (`top: 16px`) printed the surface readout through the word CONDITION on every
+  wide window, for as long as that went unmeasured. The same class of bug had
+  already been found and fixed *on the phone*, with a comment saying so, and the
+  fix was never carried across. `uicheck` checks the desktop layout now. The
+  general form: a check that only runs in one viewport is a claim about that
+  viewport, however general its name sounds. It happened again within the
+  hour, the other way round: the help button was put in `.menu-foot`, which is
+  `display: none` on a touch device because key hints are noise without keys —
+  so the phone had no route to the help screen at all, and that screen is the
+  only place tilt steering is written down. `uicheck` clicked it happily the
+  whole time. **A control that only one viewport's check can reach needs the
+  other viewport's check too**, and both now have one.
+- **White text with a soft shadow is not a contrast strategy.** Every floating
+  readout — the clock, the pace line, the speed, the keyboard hints — sat on
+  bare text with a 10 px black glow, which is legible over tarmac and a grey
+  smudge over snow, where it reads as the *text being out of focus* rather than
+  as low contrast. Everything on this HUD that was already readable on the same
+  frame (the minimap, the condition panel, the surface chip) was on a `--panel`
+  plate. The glow is for softening a plate's edge, not for making a glyph out of
+  a background. `shoot --size=1280x720 --cells=north-pass@30` is the frame:
+  snow is the brightest thing the game draws.
+
+### Things somebody else typed
+
+Every panel in `src/ui/` builds its markup as a string, and four of them draw a
+name that was typed on another machine — `menu`, `raceHud`, `multiplayer` and
+`celebrate`. `escapeHtml` exists, and it was reached in some of the places in
+three of those files and none of the places in the fourth.
+
+- **Escaping the leaderboard and forgetting the lobby.** The arcade board was
+  escaped; the multiplayer player list, the finished-race classification and the
+  HUD standings were not, and all three draw a name that arrived over the wire
+  from whoever else is in the race. So did the award overlay — *"you have taken
+  it from …"* carries a name off the global board, which is the one string on
+  that screen that never passed through this browser. A name reaching markup
+  unescaped is the default outcome; the rule is that `escapeHtml` is called at
+  every point one is drawn, and `grep -n 'name}' src/ui` is the check.
+- **Trusting the shape of a message, not just its content.** `message.name
+  .slice(0, 16)` on a `hello` is a `TypeError` thrown inside the host's own
+  handler for a guest that sent a number — a stranger able to knock over the
+  lobby they are joining by being wrong about the protocol. Nothing between the
+  data channel and that line looks at what arrived: the types describe what a
+  well-behaved client sends, and the wire is not one. `cleanName`, `cleanNumber`,
+  `cleanLivery` and `cleanInput` in `net/protocol.ts` are where that is bounded.
+- **A guest's input reaching the physics as it arrived.** `clamp` passes `NaN`
+  straight through — it is neither below the floor nor above the ceiling — so
+  one input with a missing field puts a `NaN` into a rigid body and takes every
+  car in the race out of the world together. Bounded at the wire, not in `sim/`:
+  the simulation's own inputs come from a driver or from the AI, and those are
+  already numbers.
+- **Building an SDP out of a string somebody sent you.** `putTogether` rebuilds
+  a description by joining lines with CRLF and interpolates three fields that
+  came out of an invite code. SDP has no escaping — the grammar is one value per
+  line — so a ufrag carrying a newline is however many extra lines the sender
+  wanted, in a description about to be handed to `setRemoteDescription`. And
+  `?join=<code>` means the code can arrive in a link rather than from somebody
+  you are talking to. Checked against ICE's own character set now, and refused
+  rather than escaped, because there is nothing to escape it *to*.
+- **Reading a compressed thing to the end.** `new Response(stream).arrayBuffer()`
+  on a `DecompressionStream` reads until the stream stops, and deflate is
+  asymmetric: a few kilobytes of invite code expand to gigabytes. Read in chunks
+  against a cap.
+- **A developer switch read straight out of the URL.** `?rooms=` points the game
+  at a local `wrangler dev`, and it took any address at all — so a link was a
+  redirect, sending every handshake and every leaderboard submission somewhere
+  else with a lobby that looks completely normal while it happens. It takes a
+  loopback address only, which is the whole of what it was ever for.
 
 ## Staying current
 
@@ -825,6 +944,54 @@ The things there that are easy to get wrong:
   slow seconds; measured as time-since-last-change instead, one stutter on a
   stage load cost a permanently softer picture. `?quality=low|medium|high`
   overrides the guess.
+
+**Tilt steering is a second way to steer, not a replacement.** `ui/tilt.ts`;
+the thumb drag stays the default because it works lying down and tilt does not,
+so tilt is a button on the HUD and a remembered setting. A thumb on the pad
+always outranks the sensor — somebody who grabs the pad has just said which
+input they meant. Three things about it are not obvious:
+
+- **Nothing reads `beta` or `gamma` directly, and nothing reads
+  `screen.orientation.angle` either.** The reading is where *gravity* is across
+  the face of the phone, and the steering is how far that has moved since the
+  player last said they were going straight. Picking an Euler angle is the
+  handedness bug this file already lists twice, in a form that is invisible on
+  the device you are holding: it is right for the players who turned their
+  phone one way and backwards for the ones who turned it the other.
+- **The orientation angle cancels, which is why it is not there.** The first
+  version rotated gravity into screen axes by it; measured at all four angles,
+  the same movement gave the same 22.0° every time, because rotating the frame
+  shifts the live reading and the calibration reference by the same amount. The
+  calibration is what makes it orientation-agnostic, and it covers the player
+  lying on their side, whom no reported orientation describes.
+- **An angle, never a sideways component.** They come apart as the phone is
+  pitched back toward flat: two poses that are the same 12.96° tilt across the
+  screen have 1.00 g and 0.774 g in that plane, so their components are 0.224
+  and 0.174 — a 29% difference in lock for an identical movement.
+
+The sign is checked twice, and the second one is the check this project trusts
+for handedness: `tests/tilt.test.ts` for the arithmetic, and `mobilecheck`
+drives the *car* with synthetic orientation events from both of the ways a
+phone gets held. Flip the `atan2` and it goes red with "tilting right held one
+way did not steer right", which is how that assertion was confirmed to be
+load-bearing rather than decorative.
+
+**A synthetic sensor event needs waiting on, not sleeping after.** The tilt
+reading only reaches the car inside the frame loop, and that loop runs five or
+six times a second on a page rendering through software WebGL — so one event
+and a fixed 250 ms wait reported the *previous* pose's steering often enough to
+be useless, and it reported it as a plausible number rather than as an error.
+`mobilecheck` holds the pose and waits on the world's own step count, which is
+the thing that actually says a frame has run. Same family as the
+`.lights-word.go` coin toss in `uicheck`. Its neighbour: a pass that ran with
+tilt accidentally switched *off* read 0.00 for every pose and sailed through
+the "held level" assertion, so the toggle is now checked rather than assumed —
+a check whose happy path and whose broken path agree is not a check.
+
+Full lock is `FULL_LOCK` in `ui/tilt.ts`, and it moved once already: 26° was
+reasoned from what wrists do comfortably and was too sharp to hold a line
+with, because every degree is 4.5% of lock at that figure. 35° is the whole
+range rather than the comfortable part of it.
 
 ## Tuning and calibration
 

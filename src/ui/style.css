@@ -82,6 +82,19 @@ html, body {
 .hud-tl { top: 0; left: 0; }
 .hud-bl { bottom: 0; left: 0; }
 .hud-br { bottom: 0; right: 0; text-align: right; }
+/*
+ * The one readout you take in without looking at it, so it has to survive the
+ * brightest thing the game draws. A 60 px white numeral over snow with a soft
+ * black glow behind it is a grey smudge around a white shape; on a plate it is
+ * a number. Padded well past the digits so the halo has somewhere to land.
+ */
+.hud-br .rpm,
+.hud-br .cluster {
+  background: var(--panel);
+  border-radius: 5px;
+  padding: 2px 12px;
+}
+.hud-br .rpm { padding: 0; }
 
 .readout {
   font-size: 13px;
@@ -95,14 +108,34 @@ html, body {
 }
 .readout.dim { color: var(--dim); }
 
+/*
+ * One line, and on a plate.
+ *
+ * It was two lines of ten bindings, 430 px wide, in white text with a soft
+ * shadow — which over snow is white on white, and which left 166 px of the
+ * bottom edge for anything else. Both halves of that are the complaint this
+ * came from. The three bindings anyone needs in the first minute stay; the
+ * full list belongs on a help screen rather than permanently over the road.
+ */
 .help {
-  font-size: 12px;
+  max-width: 300px;
+  /* One line means one line: wrapped, it orphans a word and grows the box the
+     status strip is measured against. */
+  white-space: nowrap;
+  background: var(--panel);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 11px;
   color: var(--dim);
   letter-spacing: 0.05em;
   /* The HUD sits over whatever biome you are on, and a snow stage is almost
      white — every readout needs to carry its own contrast rather than relying
-     on the scene behind it being dark. */
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95), 0 0 8px rgba(0, 0, 0, 0.7);
+     on the scene behind it being dark. A shadow alone was this comment's first
+     answer and it is not enough: a blurred black glow behind white text on a
+     white background is a smudge, and the brighter the scene the more it reads
+     as the text being out of focus. The plate above is the contrast; the
+     shadow is only there to soften its edge. */
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
 }
 .help b { color: var(--ink); font-weight: 600; }
 
@@ -286,12 +319,30 @@ html, body {
 
 .race { position: absolute; inset: 0; pointer-events: none; }
 
+/*
+ * The clock, and how the run is going. Nothing else.
+ *
+ * The progress bar and the checkpoint chips used to be in here, which put five
+ * separate things in one stack at the top of the screen and left the bottom
+ * middle empty. They are `.race-status` now, along the bottom edge.
+ *
+ * On a plate, like everything else the driver has to read. Bare white text with
+ * a soft shadow is legible over tarmac and *illegible* over snow: the glow is
+ * a 10 px blur of near-black behind a white glyph, which on a white background
+ * is grey mush around a shape you can no longer resolve. Every readout that
+ * already sat on `--panel` — the minimap, the condition panel, the surface
+ * chip — was readable on the same frame that made this unreadable, which is
+ * the whole argument for making the exceptions match.
+ */
 .race-top {
   position: absolute;
   top: 16px;
   left: 50%;
   transform: translateX(-50%);
-  width: 340px;
+  min-width: 250px;
+  padding: 8px 18px 10px;
+  background: var(--panel);
+  border-radius: 5px;
   text-align: center;
 }
 
@@ -313,10 +364,35 @@ html, body {
 }
 .race-clock.staged { color: var(--dim); }
 
+/*
+ * How far round, and which checkpoints are behind you: along the bottom edge.
+ *
+ * Down here because it is a glanceable state rather than a number you read —
+ * the clock is what your eye goes to and this belongs out of its way. It sits
+ * between the two bottom corners on a desktop and between the thumbs on a
+ * phone, which is the only horizontal room either layout has left.
+ */
+.race-status {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  /*
+   * As wide as it can be without touching the two bottom corners, which is not
+   * a constant: at 1280 there is room for all of it and at 900 the keyboard
+   * hints and the speed cluster leave 300 px between them. Measured rather
+   * than guessed — `uicheck` checks the three of them do not overlap, and a
+   * fixed 340 px failed that check the first time it ran.
+   */
+  width: min(340px, 100vw - 680px);
+  text-align: center;
+}
+
 .race-progress {
   height: 4px;
-  margin: 8px 0 6px;
-  background: rgba(255, 255, 255, 0.16);
+  margin: 0 0 6px;
+  background: rgba(0, 0, 0, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
   border-radius: 2px;
   overflow: hidden;
 }
@@ -458,6 +534,57 @@ html, body {
 }
 .race-best.none { opacity: 0.6; }
 
+/*
+ * The two times worth chasing, in the top-left corner under the readouts.
+ *
+ * The record first and the personal best under it, which is the order they
+ * matter in: the record is what the stage is worth, the PB is what you are
+ * beating today. Above the condition panel rather than below it — the panel
+ * grows downward as damage toasts arrive, so anything pinned under it is
+ * pinned under a moving edge.
+ *
+ * Empty of both in a career run with no time set, and then it is an empty
+ * plate, so the background only appears when there is something on it.
+ */
+.race-times {
+  position: absolute;
+  top: 72px;
+  left: 18px;
+  min-width: 132px;
+  padding: 6px 10px;
+  background: var(--panel);
+  border-radius: 4px;
+  text-align: left;
+}
+.race-times:not(:has(> :not([hidden]))) { display: none; }
+
+/*
+ * The world record, under the personal best.
+ *
+ * Quieter than the PB and in the board's own gold, because it is context
+ * rather than a number you are racing against second by second — the PB is the
+ * one the delta is measured from. Paired `[hidden]` rule because an author
+ * `display` outranks the property, which is a trap this stylesheet has already
+ * been caught by twice.
+ */
+.race-wr {
+  font-size: 11px;
+  line-height: 1.3;
+  letter-spacing: 0.14em;
+  color: rgb(242 193 78 / 0.78);
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
+  display: block;
+  /* A long name must not push the clock's column wider on a phone. */
+  max-width: min(40vw, 240px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.race-wr[hidden] { display: none; }
+.race-wr b { font-weight: 700; letter-spacing: var(--track-ui); opacity: 0.75; }
+.race-wr span { color: var(--dim); }
+
 .race-cps span.ahead { color: #4fd6a0; background: rgba(79, 214, 160, 0.16); }
 .race-cps span.behind { color: var(--hot); background: rgba(232, 85, 47, 0.16); }
 .race-cps span.missed {
@@ -501,9 +628,18 @@ html, body {
 
 /* ---- Damage panel (P4) -------------------------------------------------- */
 
+/*
+ * Below the surface readout and the times, not on top of them.
+ *
+ * At `top: 16px` this started 49 px inside `.hud-tl`, which is 65 px tall on a
+ * desktop — so the surface chip and the frame counter were printed through the
+ * word CONDITION. The phone layout had already been fixed for exactly this and
+ * the desktop one had not, which is what "two absolutely positioned panels both
+ * claiming the corner" looks like when only one of them gets measured.
+ */
 .damage {
   position: absolute;
-  top: 16px;
+  top: 132px;
   left: 18px;
   width: 168px;
   padding: 12px 14px;
@@ -1558,6 +1694,84 @@ html, body {
   color: var(--dim);
 }
 .menu-foot b { color: var(--ink); }
+.menu-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+/*
+ * The one way into the help screen, so it has to be visible and pressable.
+ *
+ * It was a 34 px `?` in the footer beside the key hints, which was wrong twice
+ * over: at a 720-tall window it sat 15 px from the bottom edge of a menu that
+ * scrolls, so a shorter window put it below the fold — and the footer is
+ * `display: none` on a touch device, because key hints are noise without keys.
+ * That took the button with it, so on a phone there was no route to the help
+ * screen at all, which is the one place tilt steering is written down.
+ *
+ * Under the three modes and above the volume: in the flow, with a word on it,
+ * and quieter than a mode choice so it does not read as a fourth way to play.
+ */
+.menu-aux {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  -webkit-appearance: none;
+  appearance: none;
+  border: 0;
+  border-radius: 6px;
+  padding: 11px 16px;
+  font: 600 12px/1 var(--font-ui);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+  background: rgb(238 242 247 / 0.05);
+  box-shadow: inset 0 0 0 1px rgb(238 242 247 / 0.14);
+  cursor: pointer;
+  transition: color 0.12s ease-out, background 0.12s ease-out;
+}
+.menu-aux:hover { color: var(--ink); background: rgb(238 242 247 / 0.11); }
+
+/*
+ * The help text itself.
+ *
+ * Reading matter rather than a control panel, so it gets a measure and a
+ * left-aligned flow — the rest of the menu is centred, which is right for
+ * three buttons and wrong for four hundred words.
+ */
+.help-doc {
+  text-align: left;
+  max-width: 560px;
+  margin: 0 auto;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--dim);
+}
+.help-doc h2 {
+  margin: 22px 0 8px;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.help-doc p { margin: 0 0 10px; }
+.help-doc b { color: var(--ink); }
+.help-doc ul { margin: 0 0 10px; padding-left: 18px; }
+.help-doc li { margin-bottom: 4px; }
+.help-doc dl { margin: 0; }
+.help-doc dt { color: var(--ink); font-weight: 700; margin-top: 10px; }
+.help-doc dd { margin: 2px 0 0; }
+
+.help-keys { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+.help-keys th {
+  text-align: left;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgb(139 149 165 / 0.7);
+  font-weight: 600;
+  padding-bottom: 4px;
+}
+.help-keys td { padding: 3px 10px 3px 0; vertical-align: top; }
+.help-keys td:first-child { color: var(--ink); white-space: nowrap; }
+.help-keys tr + tr td { border-top: 1px solid rgb(255 255 255 / 0.06); }
 
 /* The menu replaces everything else, HUD and garage alike. */
 #hud.in-menu .race,
@@ -2091,6 +2305,42 @@ html, body {
 }
 .touch-btn.is-held { transform: scale(0.93); background: rgb(238 242 247 / 0.26); }
 
+/*
+ * The tilt switch, beside the menu button along the top edge.
+ *
+ * Up there rather than near the steering pad on purpose: it is pressed once a
+ * session and never during a corner, and anything within reach of a driving
+ * thumb will eventually be hit by one. Its width is held to the menu button's
+ * height so the two read as a pair, and it is offset by exactly that button's
+ * width plus a gap — `mobilecheck` checks they do not touch.
+ */
+.touch-tilt {
+  position: absolute;
+  top: max(2vmin, 8px);
+  right: calc(max(2vmin, 8px) + max(11vmin, 44px) + 6px);
+  pointer-events: auto;
+  -webkit-appearance: none;
+  appearance: none;
+  border: 0;
+  border-radius: 10px;
+  height: max(11vmin, 44px);
+  min-width: max(13vmin, 52px);
+  padding: 0 8px;
+  font: 700 var(--step-0)/1 var(--font-ui);
+  letter-spacing: var(--track-ui);
+  color: rgb(238 242 247 / 0.55);
+  background: rgb(12 15 20 / 0.5);
+  box-shadow: inset 0 0 0 1px rgb(238 242 247 / 0.18);
+  transition: color 0.12s ease-out, background 0.12s ease-out;
+}
+.touch-tilt.is-on {
+  color: var(--ink);
+  background: rgb(242 193 78 / 0.22);
+  box-shadow: inset 0 0 0 1px rgb(242 193 78 / 0.6);
+}
+/* Paired with the rule above, because an author `display` outranks `[hidden]`. */
+.touch-tilt[hidden] { display: none; }
+
 .touch-menu {
   position: absolute;
   top: max(2vmin, 8px);
@@ -2176,16 +2426,40 @@ html, body {
 
   /* The clock and the splits move up and shrink; the stage name goes, because
      you already know which stage you chose. */
-  .race-top { top: 4px; }
+  .race-top { top: 4px; padding: 4px 12px 6px; min-width: 0; }
   .race-stage { display: none; }
   .race-clock { font-size: 30px; }
-  .race-progress { width: min(46vw, 340px); }
   .race-cps span { padding: 2px 8px; }
 
-  /* Below the surface readout rather than on top of it: two absolutely
-     positioned panels both claiming the top-left corner is how "CONDITION"
-     ended up printed through "DIRT". */
-  .damage { top: 26px; left: 8px; width: 108px; padding: 6px 8px; }
+  /*
+   * The status strip sits between the thumbs rather than under one of them.
+   *
+   * Centred on a desktop, but on a phone the bottom middle is not free: the
+   * steering pad owns the left 38% and the pedals the right, and a centred
+   * 340 px strip runs a third of its width under the wheel. Pinned to the two
+   * edges those controls actually occupy — the same expressions they are laid
+   * out with, so it follows them rather than repeating a measurement.
+   */
+  .race-status {
+    left: 38%;
+    right: max(23vmin, 92px);
+    bottom: max(2vmin, 8px);
+    width: auto;
+    transform: none;
+  }
+
+  /*
+   * The left column, in the order it is read: surface, times, condition.
+   *
+   * Below the surface readout rather than on top of it: two absolutely
+   * positioned panels both claiming the top-left corner is how "CONDITION"
+   * ended up printed through "DIRT". The times block went in between them, so
+   * every number below it moved down by exactly its height.
+   */
+  .race-times { top: 32px; left: 8px; min-width: 0; padding: 3px 7px; }
+  .race-wr,
+  .race-best { font-size: 10px; }
+  .damage { top: 78px; left: 8px; width: 108px; padding: 6px 8px; }
   /* Fixed height so the damage panel below it has something to sit under. */
   .hud-tl { padding: 3px 10px; font-size: var(--step-0); line-height: 1.2; height: 24px; }
   /* A debug readout. It is not worth a line on a phone. */
@@ -2198,6 +2472,19 @@ html, body {
   /* Clear of the on-screen menu button, which owns the top-right corner. */
   .touch.is-on ~ .minimap,
   .touch.is-on + * .minimap { right: 62px; }
+  /*
+   * And clear of the tilt switch beside it, on a device that has one.
+   *
+   * Written as the same arithmetic the two buttons are placed with rather than
+   * as a measured number, so a button that changes size takes the map with it.
+   * Conditional on the button actually being there: a phone with no
+   * accelerometer hides it, and reserving the room anyway would cost the map a
+   * third of its width for nothing.
+   */
+  .touch.is-on:has(.touch-tilt:not([hidden])) ~ .minimap,
+  .touch.is-on:has(.touch-tilt:not([hidden])) + * .minimap {
+    right: calc(max(2vmin, 8px) + max(11vmin, 44px) + 6px + max(13vmin, 52px) + 6px);
+  }
 
   /*
    * The speed cluster and the pedals both want the bottom-right corner, and
@@ -2214,6 +2501,9 @@ html, body {
 @media (max-height: 500px) {
   #hud:has(.touch.is-on) .hud-br { padding-right: max(23vmin, 92px); }
   #hud:has(.touch.is-on) .minimap { right: max(13vmin, 56px); }
+  #hud:has(.touch.is-on .touch-tilt:not([hidden])) .minimap {
+    right: calc(max(2vmin, 8px) + max(11vmin, 44px) + 6px + max(13vmin, 52px) + 6px);
+  }
 }
 
 /*
