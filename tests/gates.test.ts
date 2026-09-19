@@ -132,3 +132,50 @@ describe('gates', () => {
     expect(race.checkpointsPassed).toBe(0);
   });
 });
+
+/**
+ * The clock belongs to the light, not to the throttle.
+ *
+ * It used to start on the car's first movement, which made hesitating on the
+ * line free and made a bogged launch — the thing `startLights` exists to grade
+ * — cost nothing at all on the stopwatch.
+ */
+describe('the clock', () => {
+  /** A car sitting exactly on the line, as it is while the lamps are lit. */
+  const stationary = () => ({ ...at(0, 0), speed: 0 }) as VehicleState;
+
+  it('runs from the green while the car is still on the line', () => {
+    const race = new Race(stage);
+    race.start();
+    for (let i = 0; i < 120; i++) race.update(stationary(), 1 / 120);
+    expect(race.phase).toBe('running');
+    expect(race.time).toBeCloseTo(1, 6);
+  });
+
+  it('does not run before it', () => {
+    const race = new Race(stage);
+    for (let i = 0; i < 120; i++) race.update(stationary(), 1 / 120);
+    expect(race.phase).toBe('staging');
+    expect(race.time).toBe(0);
+  });
+
+  it('still starts on movement for everything that drives without a gantry', () => {
+    // `runStage`, the stage validator and the AI harnesses in `main.ts` all
+    // call `lights.skip()` and go from a standstill. Without this they would
+    // be timed from zero forever.
+    const race = new Race(stage);
+    race.update(at(0, 0), 1 / 120);
+    expect(race.phase).toBe('running');
+  });
+
+  it('is not restarted by a second green', () => {
+    // The gantry fires once per run, but a guest can be released by the host
+    // while its own countdown is still on screen. Whichever arrives first owns
+    // the clock; the other must not rewind it.
+    const race = new Race(stage);
+    race.start();
+    for (let i = 0; i < 60; i++) race.update(stationary(), 1 / 120);
+    race.start();
+    expect(race.time).toBeCloseTo(0.5, 6);
+  });
+});

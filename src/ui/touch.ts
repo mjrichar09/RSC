@@ -49,6 +49,14 @@ export class TouchControls {
   readonly root: HTMLElement;
   /** Raised by the on-screen menu button. */
   onMenu: (() => void) | null = null;
+  /**
+   * Raised by the on-screen restart button.
+   *
+   * There is no keyboard on a phone, so `R` — the way every other player
+   * restarts a run that went wrong in the first corner — simply did not exist
+   * here. The alternative was the menu, three taps and a stage reload.
+   */
+  onRestart: (() => void) | null = null;
   onHandbrakeTap: (() => void) | null = null;
   /** Raised when the thumb controls come or go, for anything else that cares. */
   onVisible: ((on: boolean) => void) | null = null;
@@ -71,6 +79,10 @@ export class TouchControls {
     }
   })();
   private readonly wheel: HTMLElement;
+  /** The restart button, which is not always offered. See `setRestart`. */
+  private readonly restartBtn: HTMLElement;
+  /** What `setRestart` last did, so the common case touches no DOM at all. */
+  private restartShown = false;
   private readonly rotate: HTMLElement;
   /** The "add it to your home screen" note, on the one platform that needs it. */
   private readonly ios: HTMLElement;
@@ -88,9 +100,11 @@ export class TouchControls {
         <button class="touch-btn touch-brake" data-touch="brake">BRAKE</button>
         <button class="touch-btn touch-gas" data-touch="throttle">GO</button>
       </div>
-      <button class="touch-menu" data-touch="menu">☰</button>`;
+      <button class="touch-menu" data-touch="menu">☰</button>
+      <button class="touch-restart" data-touch="restart" title="Restart" hidden>↺</button>`;
     parent.appendChild(this.root);
     this.wheel = this.root.querySelector('.touch-wheel i')!;
+    this.restartBtn = this.root.querySelector('.touch-restart')!;
 
     /*
      * Turn the phone.
@@ -262,6 +276,25 @@ export class TouchControls {
   }
 
   /** Drop every held control — leaving the race, opening a menu, losing focus. */
+  /**
+   * Offer the restart button, or take it away.
+   *
+   * Driven by the same rule the `R` key follows: arcade always, a career only
+   * while the practice setting is on. Hidden rather than disabled in the modes
+   * that refuse it, because a button whose only outcome is "no restarts in a
+   * career run" is a button that should not be under a thumb in the first
+   * place.
+   *
+   * Cheap enough to call every frame — it is a boolean compare unless the
+   * answer actually changed, which is what keeps a per-frame caller from
+   * writing to the DOM sixty times a second.
+   */
+  setRestart(on: boolean): void {
+    if (on === this.restartShown) return;
+    this.restartShown = on;
+    this.restartBtn.toggleAttribute('hidden', !on);
+  }
+
   release(): void {
     this.stick = null;
     this.pedals.clear();
@@ -282,6 +315,13 @@ export class TouchControls {
     if (what === 'menu') {
       this.release();
       this.onMenu?.();
+      return;
+    }
+    if (what === 'restart') {
+      // Released first, or the throttle a thumb happens to be holding is still
+      // held on the new run and the car leaves the line before the lights do.
+      this.release();
+      this.onRestart?.();
       return;
     }
     if (what === 'steer') {

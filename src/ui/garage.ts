@@ -10,6 +10,7 @@
 import { Career, type RaceTarget } from '../game/career.js';
 import { GarageCar } from '../render/garageCar.js';
 import { Stage, type StageDef } from '../sim/stage.js';
+import type { ComponentId } from '../sim/damage.js';
 import { elevationProfileSvg, stageElevation, stageMapSvg } from './stageMap.js';
 import { UPGRADES, levelOf, maxLevel, nextCost } from '../game/garage.js';
 import { LIVERIES } from '../data/liveries.js';
@@ -147,12 +148,34 @@ export class Garage {
         this.car.setLivery(this.career.livery, this.career.raceNumber);
         break;
       }
-      case 'repair-all':
-        await this.career.repairAll();
+      /*
+       * The three repair buttons all work the same way, and the order matters.
+       *
+       * What was broken has to be read *before* the money is spent — after it,
+       * the bill is empty and there is nothing left to name — and the turntable
+       * has to be told before `render()` at the foot of this method hands it the
+       * repaired car, because it captures the old condition off the model it is
+       * currently showing. Told afterwards, the mechanic walks over to a panel
+       * that straightened itself the moment the button was pressed.
+       *
+       * And only when something was actually paid for: a declined repair —
+       * unaffordable, or nothing wrong — must not send him on a round of a car
+       * that has not changed.
+       */
+      case 'repair-all': {
+        const fixing = this.career.repairBill().lines.map((line) => line.id);
+        if ((await this.career.repairAll()) > 0) this.car.repair(fixing);
         break;
-      case 'repair-essentials':
-        await this.career.repairEssentials();
+      }
+      case 'repair-essentials': {
+        const damage = this.career.buildDamage();
+        const fixing = this.career
+          .repairBill()
+          .lines.filter((line) => damage.get(line.id) <= 0)
+          .map((line) => line.id);
+        if ((await this.career.repairEssentials()) > 0) this.car.repair(fixing);
         break;
+      }
       case 'salvage':
         await this.career.salvage();
         break;
@@ -171,7 +194,9 @@ export class Garage {
         this.onReset?.();
         break;
       case 'repair':
-        await this.career.repairComponent(id as never);
+        if ((await this.career.repairComponent(id as never)) > 0) {
+          this.car.repair([id as never]);
+        }
         break;
       case 'buy':
         await this.career.buy(id as never);
@@ -448,6 +473,23 @@ export class Garage {
       <div class="swatch-name">${current.name}</div>
       <h3>NUMBER</h3>
       <div class="race-numbers">${numbers}</div>`;
+  }
+
+  /**
+   * Run a repair for the camera: no money, no profile write, just the walk.
+   *
+   * Harness only. `shoot` needs the mechanic at a chosen moment of a chosen
+   * job, and the honest route to that — earn money, wreck a car, press a
+   * button, wait — is not something a screenshot can do. The turntable is
+   * stepped by hand rather than left to its own animation frames, so the frame
+   * that is photographed is the frame that was asked for.
+   */
+  demoRepair(id: ComponentId, seconds: number): void {
+    this.setOpen(true);
+    this.car.setActive(false);
+    this.car.setActive(true, false);
+    this.car.repair([id]);
+    this.car.seek(seconds);
   }
 
   private repairsPanel(): string {

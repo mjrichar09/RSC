@@ -11,7 +11,7 @@ import { liveryById } from './data/liveries.js';
 import { TEST_PATCHES } from './data/testGround.js';
 import { Career, type RaceTarget } from './game/career.js';
 import { carFor } from './game/garage.js';
-import { boardFor } from './net/leaderboard.js';
+import { type BoardGhost, boardFor } from './net/leaderboard.js';
 import { Race } from './game/race.js';
 import { ImpactDrama } from './game/drama.js';
 import {
@@ -40,7 +40,7 @@ import { visibility } from './sim/conditions.js';
 import { TRACES, sampleTrace } from './sim/trace.js';
 import { SimWorld, initPhysics } from './sim/world.js';
 import { Mixer } from './audio/mixer.js';
-import { CarView } from './render/carView.js';
+import { CarView, GHOST_GOLD } from './render/carView.js';
 import { EasedDamage } from './render/foldEase.js';
 import {
   ParticleField,
@@ -142,6 +142,15 @@ async function main(): Promise<void> {
   const camera = new IsoCamera();
   const carView = new CarView(scene);
   const ghostView = new CarView(scene, { ghost: true });
+  /**
+   * The world record's lap, in gold.
+   *
+   * A second ghost, arcade only, drawn exactly like the first one and told
+   * apart from it by hue alone — it is the same car on the same road, so
+   * nothing else would read. Your own best stays blue and stays the one the
+   * HUD's delta is measured against; this is the one to aim at.
+   */
+  const wrView = new CarView(scene, { ghost: true, ghostColor: GHOST_GOLD });
   const debrisView = new DebrisView(scene);
   // The minimap. Fixed north-up, so the shape of a stage can be learned.
   const minimap = new LiveStageMap(hudRoot, 'minimap');
@@ -167,6 +176,7 @@ async function main(): Promise<void> {
   const SCRATCH = new THREE.Vector3();
   const wildlifeView = new WildlifeView(scene);
   ghostView.visible = false;
+  wrView.visible = false;
   const particles = new ParticleField(scene);
   particles.density = quality.particles;
   /**
@@ -352,6 +362,22 @@ const params = new URLSearchParams(location.search);
    */
   const replayUi = new ReplayUi(hudRoot);
   let ghost: GhostPlayer | null = null;
+  /** The board's record lap for this track, or null. Arcade only. */
+  let wrGhost: GhostPlayer | null = null;
+  /**
+   * The last record lap downloaded, and which track it was for.
+   *
+   * `attachGhost` runs on every restart, and a record ghost is up to 370 KB:
+   * without this, a player doing what arcade is for — retrying the same stage
+   * twenty times in a row — pulls a third of a megabyte off the board on each
+   * one. Keyed by track, and dropped the moment the track changes, so it is
+   * one lap held rather than a growing cache.
+   *
+   * It does go stale: somebody else taking the record mid-session is not seen
+   * until the track is left and come back to. That is the right trade for a
+   * decoration on the road, and the alternative is a re-download per retry.
+   */
+  let wrCache: { key: string; ghost: BoardGhost | null } | null = null;
   const recorder = new GhostRecorder();
   /**
    * Real seconds left before the armed cinematic cuts in, or 0 for none.
@@ -407,16 +433,77 @@ const params = new URLSearchParams(location.search);
   let sessionHealth: Partial<Record<ComponentId, number>> = {};
   let settled = false;
 
-  /** Show the stored best for this pairing, and start chasing its ghost. */
-  const attachGhost = async (key: string) => {
-    const record = save.recordFor(key);
-    raceHud.setBest(record?.time ?? null);
+  // The global times board, sharing the room broker's worker and its `?rooms=`
+  // override so there is only ever one address to keep in step. Null when there
+  // is no broker configured, which the menu and the finish path both handle by
+  // simply not showing times.
+  //
+  // Declared up here rather than beside the menu it feeds, because `loadStage`
+  // runs during boot and `attachGhost` below reads it: a `const` further down
+  // this function is in the temporal dead zone for every closure above it, and
+  // the whole game would simply never become ready.
+  const board = boardFor(params);
 
-    const stored = await save.loadGhost(key);
-    // Guard against the player switching stage or variant while this loaded.
-    if (!stage || !variant || currentKey() !== key) return;
+  /**
+   * Show the stored best for this pairing, and start chasing its ghost.
+   *
+   * Which best, and which ghost, depends on the mode — and getting that wrong
+   * is what made arcade say "no time set" on the run *after* one was set. The
+   * finish panel reported the arcade record correctly and this reported the
+   * career one, which in arcade is always empty, so the number appeared on the
+   * results screen and was gone by the next start line.
+   *
+   * They are genuinely separate records and not a lookup that could be shared:
+   * arcade is a stock car and a career car carries its upgrades, which is the
+   * same reason only arcade publishes to the board.
+   */
+  const attachGhost = async (key: string) => {
+    const arcade = mode === 'arcade';
+    const best = arcade ? save.arcadeRecordFor(key)?.time : save.recordFor(key)?.time;
+    raceHud.setBest(best ?? null);
+
+    const stored = arcade ? await save.loadArcadeGhost(key) : await save.loadGhost(key);
+    // Guard against the player switching stage or variant while this loaded —
+    // and the mode, which changes which of the two stores the answer came from.
+    if (!stage || !variant || currentKey() !== key || arcade !== (mode === 'arcade')) return;
     ghost = stored ? new GhostPlayer(stored) : null;
     ghostView.visible = ghost !== null;
+    void attachRecordGhost(key);
+  };
+
+  /**
+   * Put the world record on the road beside you, in arcade.
+   *
+   * Arcade only, for the reason arcade is the only mode that publishes: every
+   * arcade car is the same stock car, so the record was set in the car you are
+   * driving. A career lap is a lap set by somebody else's garage and racing it
+   * would be measuring upgrades.
+   *
+   * Its own function, and not awaited by anything: a ghost is up to 370 KB and
+   * a stage must never wait on a network to become driveable. The gold car
+   * appears a moment into the run or not at all, which is the same contract
+   * the times board has always had.
+   */
+  const attachRecordGhost = async (key: string) => {
+    wrGhost = null;
+    wrView.visible = false;
+    if (!board || mode !== 'arcade') return;
+
+    const found = wrCache?.key === key ? wrCache.ghost : await board.ghost(key);
+    wrCache = { key, ghost: found };
+    // The player can change stage, variant or mode while this is in flight,
+    // and all three have to be re-checked rather than just the key: leaving
+    // arcade mid-load would otherwise hang a gold car on a career stage.
+    if (!found || !stage || !variant || currentKey() !== key || mode !== 'arcade') return;
+    wrGhost = new GhostPlayer({
+      stageId: key,
+      time: found.time,
+      // Nothing reads this on a downloaded ghost — it exists so a recording
+      // can be aged locally — and the board does not carry it.
+      recordedAt: 0,
+      frames: found.frames,
+    });
+    wrView.visible = true;
   };
 
   /**
@@ -522,6 +609,8 @@ const params = new URLSearchParams(location.search);
 
     ghost = null;
     ghostView.visible = false;
+    wrGhost = null;
+    wrView.visible = false;
     recorder.reset();
     // With the ghost recorder: a restart must not leave the previous run's
     // last two seconds in the reel, or the first crash of the new run replays
@@ -595,7 +684,20 @@ const params = new URLSearchParams(location.search);
       race.reset();
       raceHud.setStage(stage, variant?.name, variant?.medals);
       refreshFinishActions();
-      raceHud.setBest(save.recordFor(currentKey())?.time ?? null);
+      /*
+       * Through `attachGhost`, not by reading a store directly.
+       *
+       * This had its own copy of "what is the best time here", it read the
+       * career table, and in arcade that table is always empty — so the run
+       * straight after an arcade record said "no time set". It also never
+       * re-attached the ghost, which is the run you have just beaten and the
+       * whole reason to press restart: the lap you set was on disk and the car
+       * driving it was never put on the road.
+       *
+       * One path for both, so a mode that keeps its records somewhere else
+       * cannot be remembered in one place and forgotten in the other.
+       */
+      void attachGhost(currentKey());
       raceHud.setSplitDeltas([]);
       raceHud.setDelta(null);
       recorder.reset();
@@ -637,13 +739,22 @@ const params = new URLSearchParams(location.search);
    */
   const practiceAllowed = () => mode !== 'career' || career.profile.settings.practice;
 
-  controls.onReset = () => {
+  /**
+   * Ask for a restart, from wherever the ask came from.
+   *
+   * The `R` key and the phone's restart button are the same request and have to
+   * stay the same request — the refusal, the notice and the practice rule all
+   * belong to the ask rather than to the keyboard.
+   */
+  const requestRestart = () => {
     if (!practiceAllowed()) {
       damagePanel.notice('No restarts in a career run — finish it or retire.');
       return;
     }
     restart();
   };
+  controls.onReset = requestRestart;
+  touch.onRestart = requestRestart;
   controls.onRescue = () => {
     if (!practiceAllowed()) {
       damagePanel.notice('No rescues in a career run — the car has to get itself out.');
@@ -652,12 +763,6 @@ const params = new URLSearchParams(location.search);
     world.rescue(race?.furthest);
     stuckFor = 0;
   };
-  // The global times board, sharing the room broker's worker and its `?rooms=`
-  // override so there is only ever one address to keep in step. Null when there
-  // is no broker configured, which the menu and the finish path both handle by
-  // simply not showing times.
-  const board = boardFor(params);
-
   const multiplayer = new MultiplayerPanel(hudRoot);
   /*
    * The lobby needs the same first-touch signal the driving controls use: a
@@ -1174,11 +1279,16 @@ const params = new URLSearchParams(location.search);
       const key = currentKey();
       const label = `${stage.def.name} · ${variant?.name ?? ''}`.replace(/ · $/, '');
 
+      // Taken before anything is awaited: `restart()` empties the recorder, and
+      // a player who presses retry while a save or an upload is in flight would
+      // otherwise store an empty lap against their own record.
+      const lap = recorder.finish(key, finished);
+
       // Personal best first, and locally: it is the one part of this that
       // cannot fail, does not need a network, and is true whether or not the
       // time went anywhere near the board. Arcade and multiplayer share the
       // table because they share the car.
-      const personal = await save.submitArcadeRun(key, finished);
+      const personal = await save.submitArcadeRun(key, finished, lap);
       raceHud.setBest(save.arcadeRecordFor(key)?.time ?? null);
 
       // Then the world. Deliberately not awaited by anything that draws — the
@@ -1189,6 +1299,20 @@ const params = new URLSearchParams(location.search);
           board && career.driverName
             ? await board.submit(key, career.driverName, finished)
             : null;
+
+        // A new world record carries its lap up behind it, so the next player
+        // on this track has a gold car to chase. Only on rank 0 — that is the
+        // only case the server accepts, and there is only one ghost per track.
+        // Deliberately after `markBoard` is prepared but not awaited before
+        // it: 370 KB of upload must not hold up the finish panel.
+        if (posted?.rank === 0 && board && career.driverName) {
+          const name = career.driverName;
+          // Into the cache as well as up to the board, so the gold car on the
+          // next attempt is the lap just driven rather than the one it beat —
+          // and so taking the record does not cost a re-download of it.
+          wrCache = { key, ghost: { name, time: finished, frames: lap.frames } };
+          void board.submitGhost(key, name, finished, lap.frames);
+        }
 
         raceHud.markBoard({
           top: posted?.top ?? null,
@@ -1365,6 +1489,11 @@ const params = new URLSearchParams(location.search);
       if (sample) ghostView.updateFromGhost(sample);
       // Hide it once its run has ended rather than freezing a car on the road.
       ghostView.visible = race.time <= ghost.duration + 0.5;
+    }
+    if (wrGhost && race) {
+      const sample = wrGhost.sampleAt(race.time);
+      if (sample) wrView.updateFromGhost(sample);
+      wrView.visible = race.time <= wrGhost.duration + 0.5;
     }
 
     camera.advanceShake(dt);
@@ -1724,6 +1853,7 @@ const params = new URLSearchParams(location.search);
       }
     }
     ghostView.visible = false;
+    wrView.visible = false;
 
     const sun = keyLightOffset(camera.yaw);
     key.position.set(
@@ -2020,6 +2150,11 @@ const params = new URLSearchParams(location.search);
         dents: (world.damage?.dents.length ?? 0) + '/' + (career.profile.carDents?.length ?? 0),
         markersDown: world.markers?.flattened ?? 0,
         recorded: recorder.frameCount,
+        // The two ghosts on the road: your own best, and the world record.
+        // Booleans rather than a look at the scene, because "there was no
+        // ghost" is otherwise only answerable by staring at a screenshot.
+        ghost: ghost !== null,
+        wrGhost: wrGhost !== null,
         cars: world.cars.length,
         // Simulated seconds and fixed steps: the first thing to check when a
         // car is not moving is whether the world is running at all.
@@ -2263,7 +2398,21 @@ const params = new URLSearchParams(location.search);
     if (joinCode) multiplayer.joinFromLink(joinCode);
     const roomCode = params.get('room');
     if (roomCode) multiplayer.joinRoomFromLink(roomCode);
-    else if (screen === 'garage') garage.setOpen(true);
+    else if (screen === 'garage') {
+      garage.setOpen(true);
+      /*
+       * `?fixing=<component>&fixAt=<seconds>` freezes the garage partway
+       * through a repair of that component.
+       *
+       * The mechanic lives entirely inside the turntable's own animation loop,
+       * which `shoot` never runs — the same shape as every effect that only
+       * existed inside `frame()` and therefore appeared in no screenshot ever
+       * taken. `demoRepair` steps the loop by hand instead, so the frame that
+       * is photographed is the frame that was asked for.
+       */
+      const fixing = params.get('fixing');
+      if (fixing) garage.demoRepair(fixing as ComponentId, Number(params.get('fixAt') ?? 2));
+    }
     else if (screen === 'arcade') menu.setOpen(true, 'arcade');
     else if (screen === 'lobby') {
       // Straight into a hosted lobby, so the harness can photograph the grid,
@@ -2334,6 +2483,24 @@ const params = new URLSearchParams(location.search);
     if (covered && !session && race?.phase !== 'running') {
       // Or the engine note hangs on the last frame before the panel opened.
       mixer.quiet();
+      /*
+       * Still a finished frame, as far as anything waiting on one is concerned.
+       *
+       * The visual harness waits for `rendered`, and the only place that set it
+       * was past this return — so from the moment the menus stopped simulating,
+       * *every* `shoot` cell that opens a screen rather than a stage waited
+       * ninety seconds for a frame that was never going to be reported and then
+       * threw a timeout with nothing in it. `garage`, `garage:<N·s>`, `menu`,
+       * `menu:arcade`, `lobby`, `results`: none of them had produced an image
+       * since, and the comment further down this function claimed they did.
+       *
+       * Honest, not a workaround: the screen genuinely is in its final state
+       * here. The panels are DOM, they are already laid out, and the garage's
+       * turntable is a second canvas with its own loop. What is deliberately
+       * not redrawn is the 3D world behind a 97%-opaque panel, which is the
+       * whole point of this early return.
+       */
+      window.RSC!.rendered = true;
       requestAnimationFrame(frame);
       return;
     }
@@ -2346,8 +2513,16 @@ const params = new URLSearchParams(location.search);
         : touch.merge(controls.sample(dt), wallDt);
     const lit = lights.update(wallDt, driving.throttle);
     if (lit) mixer.startLight(lit === 'go');
+    // The clock starts with the green, not with the throttle: the car is
+    // released at this instant, so hesitating on the line costs what it costs
+    // in the real thing.
+    if (lit === 'go') race?.start();
     stageView?.startLights.set(lights.lamps, lights.greenFor > 0);
     raceHud.setLights(lights.holding ? lights.lamps : 0, lights.greenFor > 0, lights.launch);
+    // The phone's restart button, offered exactly where `R` works. Read every
+    // frame because the practice setting can be changed in the garage without
+    // the stage ever reloading; `setRestart` compares before it touches the DOM.
+    touch.setRestart(practiceAllowed());
 
     const held = lights.holding && race !== null;
     const input = held
@@ -2541,7 +2716,9 @@ const params = new URLSearchParams(location.search);
     updateBanner.visible = updates.stale && race?.phase !== 'running';
     drawOnce(alpha, dt);
     // The visual harness waits on this, so the live loop has to set it too or
-    // a garage screenshot waits for a frame that only the seek path reports.
+    // a stage screenshot waits for a frame that only the seek path reports.
+    // The covered-screen return above sets it as well, for the cells that open
+    // a menu instead of a stage — see the note there.
     window.RSC!.rendered = true;
     hud.update(state, fps);
     tuningPanel!.update(state);

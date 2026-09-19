@@ -29,13 +29,17 @@ export default {
 
     const parts = new URL(request.url).pathname.split('/').filter(Boolean);
 
-    // /b/:track — the leaderboard. Read with GET, submit with POST. A separate
-    // object from the rooms because the two have nothing to do with each other
+    // /b/:track — the leaderboard. Read with GET, submit with POST. /g/:track
+    // is the record holder's lap, on the same object because it is the board
+    // that decides whether a ghost may be stored at all. The body is read as
+    // text here, which is why a ghost travels base64 — see `board.ts`.
+    //
+    // A separate object from the rooms because the two have nothing to do with each other
     // and opposite lifetimes: a room is sixty seconds of state nobody minds
     // losing, a board is the only thing here meant to be permanent. Sharing one
     // object would put every leaderboard read behind the handshake traffic of
     // whoever happened to be starting a race.
-    if (parts[0] === 'b' || parts[0] === 'bs') {
+    if (parts[0] === 'b' || parts[0] === 'bs' || parts[0] === 'g') {
       if (request.method !== 'GET' && request.method !== 'POST') return empty(405);
       const url = new URL(request.url);
       // Decoded before it is checked: the key carries a colon, which the
@@ -44,7 +48,10 @@ export default {
       // Checked at the edge so a malformed key never reaches the object and
       // can never allocate storage. The batch read carries its keys in the
       // query string instead, and `many` filters them the same way.
-      if (parts[0] === 'b' && (parts.length !== 2 || !track || !TRACK_KEY.test(track))) {
+      if (
+        (parts[0] === 'b' || parts[0] === 'g') &&
+        (parts.length !== 2 || !track || !TRACK_KEY.test(track))
+      ) {
         return json({ error: 'bad track' }, 400);
       }
       const boards = env.BOARDS.get(env.BOARDS.idFromName('boards'));

@@ -100,6 +100,7 @@ The sim clock and the wall clock are different things. `dt` is the world's;
 | Timing, checkpoints, medals | `game/race.ts` |
 | Money, upgrades, saved progress | `game/economy.ts`, `game/garage.ts`, `game/save.ts` |
 | What anything looks like | `render/stageMesh.ts`, `render/carView.ts`, `render/fx.ts` |
+| The mechanic who fixes the car | `render/mechanic.ts`, held back by `HeldDamage` in `render/garageCar.ts` |
 | Lighting and weather look | `render/scene.ts`, `render/grade.ts` |
 | HUD, garage, menus, lobby | `src/ui/` |
 | Maps and elevation | `ui/stageMap.ts` |
@@ -437,6 +438,16 @@ scannable as it grows; it is append-only.
   because a client that stops stepping desynchronises from the host; and a race
   genuinely in progress is never frozen, which is checked rather than assumed
   because `settleRun` is asynchronous.
+- **A frame that is finished but never reported.** `shoot` waits for
+  `RSC.rendered`, and the only place that set it was *past* the early return
+  that stopped the world being simulated behind a menu. So from the moment the
+  menus stopped simulating, every cell that opens a screen rather than a stage
+  — `garage`, `menu`, `lobby`, `results` — waited ninety seconds for a frame
+  that was never coming and then threw a timeout with nothing in it. Nothing
+  errored, no test covers it, and the comment beside the live loop's own
+  `rendered = true` claimed garage screenshots came through there. The screen
+  genuinely *is* finished at that return; it says so now. Anything a harness
+  waits on has to be set on every path that reaches the state it describes.
 - **Effects written only inside the frame loop.** `shoot` and the `?stage=&t=`
   harness step the world directly and never call `frame()`, so anything that
   only lives there produces nothing in any screenshot and looks broken when it
@@ -779,12 +790,18 @@ reaches its own.
 
 The game is played on a phone in landscape, and the checks for it live in
 `npm run mobilecheck`: an 844x390 viewport, real touch events, no keyboard.
-Three things there are easy to get wrong:
+The things there that are easy to get wrong:
 
 - **`touch-action: none` on the document is what makes steering work**, and it
   is also what stops every menu scrolling. The panels that scroll opt back in
   with `pan-y`; forgetting one means the bottom half of the stage list cannot
   be reached on a phone and nothing on a desktop ever notices.
+- **There is no `R` key on a phone.** Restart is a button below the on-screen
+  menu button, offered by exactly the rule `R` follows — arcade always, a
+  career only with the practice setting on — and hidden rather than disabled
+  where it is refused. `mobilecheck` taps it and checks the clock went back to
+  the line; a button that is present, the right size and inert is the failure
+  worth testing for.
 - **The steering pad is deliberately huge and sits under the HUD.** It takes
   the whole left third so a thumb never has to aim, which is only safe while
   everything drawn over it is `pointer-events: none`. `mobilecheck` asserts

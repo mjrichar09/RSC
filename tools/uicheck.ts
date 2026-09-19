@@ -138,6 +138,40 @@ await page.keyboard.press('p');
 await page.waitForSelector('.replay-keys', { state: 'detached' });
 console.log('photo mode pauses the world, hides the HUD, and gives it all back');
 
+/*
+ * Finish it, then line up again — and check the game remembers.
+ *
+ * After photo mode, not before: a restart empties the ghost recorder, and the
+ * replay is posed from exactly those frames.
+ *
+ * Arcade kept a personal best and no lap, and read the *career* record to fill
+ * the HUD's PB strip, which in arcade is always empty. So a player who set a
+ * record was told "no time set" on the very next run and had nothing on the
+ * road to chase. Both halves are checked here because both were broken and
+ * either one alone still reads as "my time did not save".
+ */
+// From the start line, not from wherever five seconds of held throttle left
+// the car: the AI plans against the road ahead and cannot recover a run that
+// began halfway up an embankment.
+await page.keyboard.press('r');
+await page.waitForFunction(() => (window.RSC!.status() as { phase: string }).phase === 'staging', {
+  timeout: 20_000,
+});
+const finished = (await page.evaluate(() => window.RSC!.finishWithAi())) as {
+  phase?: string;
+  time?: string;
+};
+if (finished.phase !== 'finished') throw new Error(`the AI did not finish: ${finished.phase}`);
+await page.keyboard.press('r');
+await page.waitForFunction(() => (window.RSC!.status() as { phase: string }).phase === 'staging', {
+  timeout: 20_000,
+});
+const remembered = (await status()) as { ghost?: boolean };
+const pb = (await page.textContent('#race-best'))?.trim() ?? '';
+if (pb === 'no time set') throw new Error('an arcade record was set and the next run forgot it');
+if (!remembered.ghost) throw new Error('an arcade record was set and left no ghost to chase');
+console.log(`arcade remembers the run: ${pb}, ghost on the road`);
+
 // Escape from an arcade race goes back to the front door.
 await page.keyboard.press('Escape');
 await page.waitForSelector('.menu.is-open');

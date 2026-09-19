@@ -111,6 +111,19 @@ const cells = cellSpec.split(',').map((spec) => {
     };
   }
 
+  // `fix:<component>@<seconds>` — the mechanic, partway through that repair.
+  // He only exists inside the turntable's own animation loop, so without a
+  // seek there is no frame of him to take; `demoRepair` steps it by hand.
+  // The `@<seconds>` has already been split off into `seconds`, like every
+  // other cell — here it is how far into the repair the frame is taken.
+  const fixMatch = /^fix:([A-Za-z]+)$/.exec(name!);
+  if (fixMatch) {
+    return {
+      url: `/?screen=garage&wreckCar=20000&fixing=${fixMatch[1]}&fixAt=${seconds}`,
+      label: `fixing ${fixMatch[1]} · ${seconds}s in`,
+    };
+  }
+
   const raw = isTrace || withGhost
     ? name!.slice(6)
     : (crashMatch?.[2] ?? hotMatch?.[2] ?? looseMatch?.[3] ?? wreckMatch?.[2] ?? glassMatch?.[2] ?? visMatch?.[2] ?? name!);

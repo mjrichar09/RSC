@@ -114,7 +114,7 @@ export class Race {
   readonly medals: MedalTimes;
 
   phase: RacePhase = 'staging';
-  /** Elapsed seconds. Starts when the car first moves. */
+  /** Elapsed seconds. Starts when the lights go green. */
   time = 0;
   /** Furthest arc length reached, metres. Never goes backwards. */
   furthest = 0;
@@ -206,6 +206,20 @@ export class Race {
     this.retirement = reason;
   }
 
+  /**
+   * Start the clock. Called when the light goes green.
+   *
+   * It used to start on the car's first movement, which meant a driver who
+   * hesitated on the line was timed from the moment they finally went and a
+   * bogged launch cost nothing — the whole of `startLights` grades a launch
+   * that the clock then refused to measure. The green is the moment the car is
+   * let go, so it is the moment the run begins, and reaction time is part of
+   * the time like it is in the real thing.
+   */
+  start(): void {
+    if (this.phase === 'staging') this.phase = 'running';
+  }
+
   update(state: VehicleState, dt: number): void {
     if (this.phase === 'finished' || this.phase === 'retired') return;
 
@@ -213,8 +227,11 @@ export class Race {
     this.hint = here.index;
 
     if (this.phase === 'staging') {
-      // The clock starts on the first real movement, so sitting on the line
-      // costs nothing and a restart is instant.
+      // `start()` is what begins a race, and in the game the gantry calls it.
+      // Movement is the fallback for everything that drives without one — the
+      // stage validator, `runStage`, the AI harnesses in `main.ts`, all of
+      // which go from a standstill with `lights.skip()` and would otherwise be
+      // timed from zero forever.
       if (Math.abs(state.speed) > 0.6) this.phase = 'running';
       else return;
     }

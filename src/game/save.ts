@@ -396,6 +396,19 @@ export class SaveStore {
     return true;
   }
 
+  /**
+   * Where an arcade ghost is filed.
+   *
+   * Namespaced away from the career's, because the two are laps by different
+   * cars: arcade is always stock and a career car carries whatever has been
+   * bought for it. Sharing the key meant an arcade lap overwriting the ghost
+   * belonging to a career record that is still on the board beside it — a time
+   * and a ghost that disagree about which race they came from.
+   */
+  private arcadeGhostKey(stageId: string): string {
+    return `arcade:${stageId}`;
+  }
+
   /** The best arcade time for a track, or null. */
   arcadeRecordFor(stageId: string): { time: number; at: number } | null {
     return this.profile.arcadeRecords[stageId] ?? null;
@@ -410,13 +423,31 @@ export class SaveStore {
    * panel wants both. `undefined` for a first time is not usable here — a
    * first time is a personal best and has to read as one.
    */
-  async submitArcadeRun(stageId: string, time: number): Promise<{ beat: number | null } | null> {
+  async submitArcadeRun(
+    stageId: string,
+    time: number,
+    ghost?: Ghost,
+  ): Promise<{ beat: number | null } | null> {
     const previous = this.profile.arcadeRecords[stageId];
     if (previous && previous.time <= time) return null;
 
     this.profile.arcadeRecords[stageId] = { time, at: Date.now() };
-    if (this.db) await put(this.db, 'profile', PROFILE_KEY, this.profile);
+    // The lap as well as the time. Arcade stored only the number, so it was
+    // the one mode with a personal best and no ghost to chase it with — the
+    // car you were racing was never there, on the mode whose whole point is
+    // beating your own time.
+    const key = this.arcadeGhostKey(stageId);
+    if (ghost) this.memoryGhosts.set(key, ghost);
+    if (this.db) {
+      await put(this.db, 'profile', PROFILE_KEY, this.profile);
+      if (ghost) await put(this.db, 'ghosts', key, ghost);
+    }
     return { beat: previous?.time ?? null };
+  }
+
+  /** The stored arcade lap for a track, or null. */
+  async loadArcadeGhost(stageId: string): Promise<Ghost | null> {
+    return this.loadGhost(this.arcadeGhostKey(stageId));
   }
 
   async loadGhost(stageId: string): Promise<Ghost | null> {

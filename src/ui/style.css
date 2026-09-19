@@ -2108,6 +2108,48 @@ html, body {
   box-shadow: inset 0 0 0 1px rgb(238 242 247 / 0.18);
 }
 
+/*
+ * Restart, under the menu button.
+ *
+ * The top-right corner is the one place on a landscape phone that neither
+ * thumb rests on, which is why the menu lives there and why this goes below it
+ * rather than beside it: stacking keeps the minimap's clearance to the right
+ * edge exactly what it was, and a second button along the top would have
+ * pushed it into the damage panel.
+ *
+ * Smaller than the menu button and quieter, because it is the more expensive
+ * mistake to make: it throws away a run in progress.
+ */
+.touch-restart {
+  position: absolute;
+  top: calc(max(2vmin, 8px) + max(11vmin, 44px) + max(1.4vmin, 6px));
+  right: max(2vmin, 8px);
+  pointer-events: auto;
+  -webkit-appearance: none;
+  appearance: none;
+  border: 0;
+  border-radius: 10px;
+  width: max(11vmin, 44px);
+  height: max(11vmin, 44px);
+  font-size: var(--step-1);
+  line-height: 1;
+  color: rgb(238 242 247 / 0.78);
+  background: rgb(12 15 20 / 0.5);
+  box-shadow: inset 0 0 0 1px rgb(238 242 247 / 0.18);
+  transition: transform 0.06s ease-out, background 0.06s ease-out;
+}
+/*
+ * Paired with the `display` above, and not optional.
+ *
+ * The browser hides a `[hidden]` element with its own `display: none` rule,
+ * and any author rule setting `display` outranks it. This one does not set
+ * `display`, so `hidden` would work — but the moment somebody adds a
+ * `display: flex` here to centre the glyph, the button becomes permanent and
+ * nothing errors. Same family as the update bar that sat on screen forever.
+ */
+.touch-restart[hidden] { display: none; }
+.touch-restart:active { transform: scale(0.93); background: rgb(238 242 247 / 0.26); }
+
 /* ---------------------------------------------------------------------------
  * A phone, held sideways.
  *

@@ -10,6 +10,20 @@
  * orthographic camera locked to a stage, and borrowing it would mean unwinding
  * and restoring half of that every time the garage opens. A second context
  * costs a few megabytes and is only alive while the garage is.
+ *
+ * ## The repair you can watch
+ *
+ * A paid repair used to land between two frames: press `fix`, and the panel is
+ * straight before the button has finished depressing. The money and the bill
+ * are still instant — they must be — but the *picture* now waits for somebody
+ * to walk over and do it. `Mechanic` is the figure; `HeldDamage` is how the
+ * wing stays bent until he gets there, by holding the pre-repair health for
+ * exactly the components he has been sent to and letting each one through as
+ * the spanner lands on it.
+ *
+ * Nothing outside this file sees any of that. `career.buildDamage()` is the
+ * truth, the repair list prices off it, and this is a renderer lagging behind
+ * it on purpose — the same shape as `foldEase.ts`, and for the same reason.
  */
 
 import * as THREE from 'three';
@@ -17,7 +31,9 @@ import { CAR } from '../data/tuning.js';
 import type { DamageModel } from '../sim/damage.js';
 import type { DebrisModel } from '../sim/debris.js';
 import type { VehicleState } from '../sim/vehicle.js';
-import { CarView } from './carView.js';
+import { CarView, type DamageLike } from './carView.js';
+import { Mechanic } from './mechanic.js';
+import type { ComponentId, Dent } from '../sim/damage.js';
 import type { Livery } from '../data/liveries.js';
 import { PALETTE } from './scene.js';
 
@@ -55,6 +71,99 @@ function parkedState(): VehicleState {
 /** Radians per second the car turns on its own when nobody is dragging it. */
 const IDLE_SPIN = 0.35;
 
+/**
+ * How fast the turntable swings to show the part being worked on, per second.
+ *
+ * A fraction of the remaining angle each second rather than a fixed rate, so a
+ * part already roughly in view barely moves and one round the back comes round
+ * briskly. Slow enough to read as the car being turned to show you something.
+ */
+const PRESENT_RATE = 3.2;
+
+/**
+ * The damage the car is *drawn* from while a repair is being carried out.
+ *
+ * It is the live model with a few components pinned to what they were before
+ * the money was spent. `release` un-pins one, which is what makes a panel
+ * straighten at the moment it is worked on rather than when the button was
+ * pressed.
+ *
+ * Dents are held as a whole rather than per component, because they are not
+ * per component: a dent is a position on the bodywork and `repairAll` clears
+ * the list outright. Holding the old list until the last job is done is the
+ * only way the folds do not all vanish on the first spanner.
+ */
+class HeldDamage implements DamageLike {
+  source: DamageLike | null = null;
+  private readonly held = new Map<ComponentId, number>();
+  private heldDents: readonly Dent[] | null = null;
+  private heldVersion = 0;
+  /** Bumped whenever the shown dent list changes, for whichever reason. */
+  private shownVersion = 0;
+
+  /** Point at a new car. Nothing is held across that. */
+  attach(source: DamageLike | null): void {
+    this.source = source;
+    this.held.clear();
+    this.heldDents = null;
+    this.shownVersion++;
+  }
+
+  /** Pin these components at whatever they read right now. */
+  hold(ids: readonly ComponentId[]): void {
+    if (!this.source) return;
+    for (const id of ids) {
+      if (!this.held.has(id)) this.held.set(id, this.source.get(id));
+    }
+    if (this.heldDents === null) {
+      this.heldDents = this.source.dents.map((dent) => ({ ...dent, at: { ...dent.at } }));
+      this.heldVersion = this.source.dentVersion;
+    }
+  }
+
+  /** Let one component through. The folds follow once the last one has. */
+  release(id: ComponentId): void {
+    this.held.delete(id);
+    if (this.held.size === 0 && this.heldDents !== null) {
+      this.heldDents = null;
+      this.shownVersion++;
+    }
+  }
+
+  /** Everything through at once: the garage closed, or the car was replaced. */
+  releaseAll(): void {
+    if (this.held.size === 0 && this.heldDents === null) return;
+    this.held.clear();
+    this.heldDents = null;
+    this.shownVersion++;
+  }
+
+  get(id: ComponentId): number {
+    const pinned = this.held.get(id);
+    return pinned !== undefined ? pinned : (this.source?.get(id) ?? 1);
+  }
+
+  brakeGlow(index: number): number {
+    return this.source?.brakeGlow(index) ?? 0;
+  }
+
+  brakeTint(index: number): number {
+    return this.source?.brakeTint(index) ?? 0;
+  }
+
+  get dents(): readonly Dent[] {
+    return this.heldDents ?? this.source?.dents ?? [];
+  }
+
+  get dentVersion(): number {
+    // Both terms, so the mesh is rebuilt when the held list is dropped *and*
+    // when the live one changes underneath it. Either alone leaves a car
+    // showing folds it no longer has until something else bumps the number.
+    const live = this.heldDents === null ? (this.source?.dentVersion ?? 0) : this.heldVersion;
+    return this.shownVersion + live;
+  }
+}
+
 export class GarageCar {
   readonly root: HTMLElement;
 
@@ -64,6 +173,9 @@ export class GarageCar {
   private readonly car: CarView;
   private readonly pivot = new THREE.Group();
   private readonly state = parkedState();
+  private readonly mechanic: Mechanic;
+  /** What the car is drawn from: the live model, minus what is being fixed. */
+  private readonly shown = new HeldDamage();
 
   private damage: DamageModel | null = null;
   private debris: DebrisModel | null = null;
@@ -118,6 +230,9 @@ export class GarageCar {
 
     this.scene.add(this.pivot);
     this.car = new CarView(this.pivot);
+    // On the turntable rather than in the scene, so he stays at the wing he is
+    // working on while the car turns instead of being left behind by it.
+    this.mechanic = new Mechanic(this.pivot);
 
     this.bindDragging();
   }
@@ -127,17 +242,57 @@ export class GarageCar {
     this.car.setLivery(livery, raceNumber);
   }
 
-  /** Show this condition. Called again after every repair, so it stays true. */
+  /**
+   * Show this condition. Called again after every repair, so it stays true.
+   *
+   * Held components survive it: the garage re-renders on every action and hands
+   * over a freshly built model each time, and a repair in progress must not be
+   * cancelled by the panel beside it being redrawn.
+   */
   setCondition(damage: DamageModel, debris: DebrisModel | null = null): void {
     this.damage = damage;
     this.debris = debris;
+    this.shown.source = damage;
   }
 
-  /** Start or stop the turntable. Nothing renders while the garage is closed. */
-  setActive(active: boolean): void {
+  /**
+   * Somebody has just paid to fix these. Send the mechanic to each one.
+   *
+   * Called *before* the garage re-renders with the repaired model, because the
+   * pre-repair health has to be captured off the model currently being shown —
+   * after the re-render it is gone and there is nothing left to hold.
+   *
+   * A component he does not get to — a full repair is trimmed to a handful of
+   * stops — is released immediately, so nothing is ever left pinned to a value
+   * the car no longer has.
+   */
+  repair(ids: readonly ComponentId[]): void {
+    if (ids.length === 0) return;
+    this.shown.hold(ids);
+    this.mechanic.fix(ids, (id) => this.shown.release(id));
+  }
+
+  /**
+   * Start or stop the turntable. Nothing renders while the garage is closed.
+   *
+   * `live` off leaves it awake but unpowered: no animation frames are asked
+   * for, and the caller drives it with `advance` instead. That is what lets a
+   * screenshot land on a chosen moment of the repair — the mechanic lives
+   * entirely inside this loop, and `shoot` never calls it, which is the exact
+   * shape of bug this codebase keeps rediscovering.
+   */
+  setActive(active: boolean, live = true): void {
     if (active === this.active) return;
     this.active = active;
-    if (!active) return;
+    if (!active) {
+      // Nothing animates while the garage is shut, so a repair half-finished
+      // when it closed would be frozen mid-swing and still hiding a straight
+      // panel the next time it opened.
+      this.mechanic.reset();
+      this.shown.releaseAll();
+      return;
+    }
+    if (!live) return;
     this.lastFrame = performance.now();
     const frame = () => {
       if (!this.active) return;
@@ -150,16 +305,64 @@ export class GarageCar {
     requestAnimationFrame(frame);
   }
 
+  /**
+   * Run the turntable forward to a moment, then draw it once.
+   *
+   * For a harness. Advancing and *drawing* every step is what a real second of
+   * this costs, and under the software WebGL `shoot` uses that is around a
+   * second per frame — seeking two seconds of repair that way took longer than
+   * the ninety-second timeout and reported nothing but the timeout. The
+   * animation is arithmetic and costs nothing; only the picture is expensive,
+   * and only the last one is wanted.
+   */
+  seek(seconds: number): void {
+    const step = 1 / 60;
+    for (let t = 0; t < seconds; t += step) this.step(step);
+    this.draw(0);
+  }
+
+  /**
+   * Everything that moves, and nothing that is drawn.
+   *
+   * Split out so a seek can run a hundred of these for the cost of one render.
+   */
+  private step(dt: number): void {
+    this.mechanic.update(dt);
+
+    // A player turning the car themselves is the one thing that must never be
+    // fought: while a pointer is down it owns the yaw and nothing else touches
+    // it.
+    if (this.dragging) return;
+
+    /*
+     * Turn to show the work.
+     *
+     * The turntable idles round at a constant rate, which means a repair
+     * started at the wrong moment happens out of sight behind the car. While
+     * there is a job on, the yaw eases to whichever angle brings that part to
+     * the front instead.
+     */
+    const at = this.mechanic.attention;
+    if (at) {
+      const wanted = -Math.atan2(at.x, at.z);
+      const delta = Math.atan2(Math.sin(wanted - this.yaw), Math.cos(wanted - this.yaw));
+      this.yaw += delta * Math.min(dt * PRESENT_RATE, 1);
+    } else {
+      this.yaw += IDLE_SPIN * dt;
+    }
+  }
+
   private draw(dt: number): void {
     const width = this.root.clientWidth;
     const height = this.root.clientHeight;
     if (width < 4 || height < 4) return;
 
+    this.step(dt);
+
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / Math.max(height, 1);
     this.camera.updateProjectionMatrix();
 
-    if (!this.dragging) this.yaw += IDLE_SPIN * dt;
     this.pivot.rotation.y = this.yaw;
 
     const distance = 6.4;
@@ -173,7 +376,7 @@ export class GarageCar {
     this.car.update(
       { position: this.state.position, rotation: this.state.rotation },
       this.state,
-      this.damage,
+      this.damage ? this.shown : null,
       this.debris,
     );
     this.renderer.render(this.scene, this.camera);

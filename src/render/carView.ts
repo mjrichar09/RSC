@@ -62,6 +62,14 @@ export interface CarViewOptions {
    */
   ghost?: boolean;
   /**
+   * What colour a ghost is, overriding the default blue.
+   *
+   * There can be two on the road at once — your own best and the world record
+   * — and they are the same car driving the same line, so the only thing that
+   * tells them apart is hue. Ignored unless `ghost` is set.
+   */
+  ghostColor?: number;
+  /**
    * Body colour. Rival cars in a network race are told apart by paint, which
    * is the only cue that survives all four of them being sideways in a cloud
    * of gravel at once.
@@ -73,14 +81,41 @@ export interface CarViewOptions {
   number?: number;
 }
 
-const flat = (color: number, roughness = 0.6, ghost = false) =>
+/**
+ * How a ghost is painted: one colour for the whole car, and a dim self-lit
+ * floor of it so the shape does not go black on its shadowed side.
+ *
+ * The emissive is the same hue a third as bright rather than a fixed navy,
+ * which is what let a second ghost exist at all — hard-coded, a gold car came
+ * out with blue in its shadows.
+ */
+export interface GhostTint {
+  color: number;
+  emissive: number;
+}
+
+/** The default ghost: pale blue, which is nothing else in the game. */
+export const GHOST_BLUE: GhostTint = { color: 0x5fd0ff, emissive: 0x143a4a };
+
+/**
+ * The world record's ghost: gold, and the reason it is not simply yellow.
+ *
+ * It has to read as gold against a dusty verge, a night stage and a snow
+ * stage, at 34% opacity, on a car about forty pixels tall. A saturated yellow
+ * washes out into the snow; this is warm enough to stay a metal. A number
+ * rather than a `GhostTint`, because it goes in as `ghostColor` and the
+ * emissive is derived from it like any other.
+ */
+export const GHOST_GOLD = 0xffc24a;
+
+const flat = (color: number, roughness = 0.6, ghost: GhostTint | null = null) =>
   new THREE.MeshStandardMaterial({
-    color: ghost ? 0x5fd0ff : color,
+    color: ghost ? ghost.color : color,
     roughness,
     metalness: 0.05,
     flatShading: true,
     ...(ghost
-      ? { transparent: true, opacity: 0.34, depthWrite: false, emissive: 0x143a4a }
+      ? { transparent: true, opacity: 0.34, depthWrite: false, emissive: ghost.emissive }
       : {}),
   });
 
@@ -91,6 +126,19 @@ const flat = (color: number, roughness = 0.6, ghost = false) =>
  * crumples identically on every machine rendering it — which matters the moment
  * two people are looking at the same car in a network race.
  */
+/**
+ * A colour at a third of its brightness, for a ghost's emissive floor.
+ *
+ * Per channel rather than by multiplying the packed integer, which would carry
+ * each channel's overflow into the next one down and turn a gold into a green.
+ */
+function dimmed(color: number): number {
+  const r = Math.round(((color >> 16) & 0xff) * 0.29);
+  const g = Math.round(((color >> 8) & 0xff) * 0.29);
+  const b = Math.round((color & 0xff) * 0.29);
+  return (r << 16) | (g << 8) | b;
+}
+
 function hash3(x: number, y: number, z: number): number {
   const n = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453;
   return n - Math.floor(n);
@@ -231,6 +279,12 @@ export class CarView {
   constructor(parent: THREE.Object3D, options: CarViewOptions = {}) {
     const h = CAR.halfExtents;
     const isGhost = options.ghost === true;
+    // Null for a solid car, so `flat` can tell "no tint" from "tinted black".
+    const tint: GhostTint | null = isGhost
+      ? options.ghostColor === undefined
+        ? GHOST_BLUE
+        : { color: options.ghostColor, emissive: dimmed(options.ghostColor) }
+      : null;
     const livery = options.livery ?? DEFAULT_LIVERY;
     const bodyColor = options.body ?? livery.body;
     const trimColor = options.body === undefined ? livery.trim : PALETTE.carCabin;
@@ -242,7 +296,7 @@ export class CarView {
     // vertices in the middle of it can only ever be scaled.
     const body = new THREE.Mesh(
       new THREE.BoxGeometry(h.x * 2, h.y * 1.3, h.z * 2, 8, 5, 11),
-      flat(bodyColor, 0.6, isGhost),
+      flat(bodyColor, 0.6, tint),
     );
     body.position.y = -0.05;
     body.castShadow = !isGhost;
@@ -252,7 +306,7 @@ export class CarView {
     // readable at a glance from a fixed isometric angle.
     const cabin = new THREE.Mesh(
       new THREE.BoxGeometry(h.x * 1.62, h.y * 1.0, h.z * 0.92, 6, 5, 6),
-      flat(trimColor, 0.4, isGhost),
+      flat(trimColor, 0.4, tint),
     );
     cabin.position.set(0, h.y * 1.05, -0.16);
     cabin.castShadow = !isGhost;
@@ -263,7 +317,7 @@ export class CarView {
     // fixed camera and you have to read its heading instantly.
     const nose = new THREE.Mesh(
       new THREE.BoxGeometry(h.x * 1.5, h.y * 0.42, h.z * 0.34, 7, 4, 4),
-      flat(accentColor, 0.5, isGhost),
+      flat(accentColor, 0.5, tint),
     );
     nose.position.set(0, h.y * 0.42, h.z * 0.86);
     nose.castShadow = !isGhost;
@@ -273,7 +327,7 @@ export class CarView {
     // bright ends would make the car's heading ambiguous at a glance.
     const wing = new THREE.Mesh(
       new THREE.BoxGeometry(h.x * 1.95, h.y * 0.16, h.z * 0.2, 7, 3, 3),
-      flat(trimColor, 0.5, isGhost),
+      flat(trimColor, 0.5, tint),
     );
     wing.position.set(0, h.y * 1.55, -h.z * 0.92);
     wing.castShadow = !isGhost;
@@ -286,8 +340,8 @@ export class CarView {
     // the car was hit. One body mesh can only say "damaged"; twelve say "the
     // front left is folded in and the mirror is gone", which is a thing you can
     // look at and price.
-    const panelMat = () => flat(bodyColor, 0.55, isGhost);
-    const trimMat = () => flat(trimColor, 0.55, isGhost);
+    const panelMat = () => flat(bodyColor, 0.55, tint);
+    const trimMat = () => flat(trimColor, 0.55, tint);
 
     const box = (x: number, y: number, z: number) =>
       // A 3x2x3 box has about four vertices under a dent, which cannot show a
@@ -348,7 +402,7 @@ export class CarView {
     // the one panel whose damage is read from inside the silhouette.
     const screen = new THREE.Mesh(
       box(h.x * 1.4, h.y * 0.5, h.z * 0.06),
-      flat(0x9fb6c4, 0.2, isGhost),
+      flat(0x9fb6c4, 0.2, tint),
     );
     screen.position.set(0, h.y * 1.0, h.z * 0.36);
     screen.castShadow = false;
@@ -364,9 +418,9 @@ export class CarView {
 
     const tireGeo = new THREE.CylinderGeometry(CAR.wheelRadius, CAR.wheelRadius, 0.26, 20);
     tireGeo.rotateZ(Math.PI / 2); // cylinder axis along local X, i.e. the axle
-    const tireMat = flat(PALETTE.tire, 0.9, isGhost);
+    const tireMat = flat(PALETTE.tire, 0.9, tint);
     const hubGeo = new THREE.BoxGeometry(0.28, CAR.wheelRadius * 0.9, CAR.wheelRadius * 0.9);
-    const hubMat = flat(0xb9c0c9, 0.4, isGhost);
+    const hubMat = flat(0xb9c0c9, 0.4, tint);
     // The disc is a ring on the *outboard* face, which is how you see one on a
     // real car: through the wheel, around the hub. A cylinder tucked inside the
     // tyre was invisible from an isometric camera — the tyre is in front of it.

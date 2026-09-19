@@ -314,6 +314,33 @@ describe('arcade personal bests', () => {
     expect(await save.submitArcadeRun('pine-loop:day-clear', 41.5)).toBeNull();
   });
 
+  it('keeps the lap as well as the time', async () => {
+    // Arcade stored only the number, so it was the one mode with a personal
+    // best and nothing to chase it with — on the mode whose whole point is
+    // beating your own time. The run after a record said "no time set" and had
+    // no ghost on the road.
+    await save.submitArcadeRun('pine-loop:day-clear', 44.0, ghostOf(44.0));
+    expect((await save.loadArcadeGhost('pine-loop:day-clear'))?.time).toBe(44.0);
+  });
+
+  it('files its lap away from the career one, under the same key', async () => {
+    // The same track key is used by both modes, and the two laps are by
+    // different cars — arcade is stock, a career car carries its upgrades. One
+    // store meant an arcade lap overwriting the ghost belonging to a career
+    // record still standing beside it.
+    await save.submitRun('pine-loop:day-clear', 60, 'silver', ghostOf(60));
+    await save.submitArcadeRun('pine-loop:day-clear', 44.0, ghostOf(44.0));
+
+    expect((await save.loadGhost('pine-loop:day-clear'))?.time).toBe(60);
+    expect((await save.loadArcadeGhost('pine-loop:day-clear'))?.time).toBe(44.0);
+  });
+
+  it('leaves the stored lap alone when the run did not beat anything', async () => {
+    await save.submitArcadeRun('pine-loop:day-clear', 41.5, ghostOf(41.5));
+    expect(await save.submitArcadeRun('pine-loop:day-clear', 43.0, ghostOf(43.0))).toBeNull();
+    expect((await save.loadArcadeGhost('pine-loop:day-clear'))?.time).toBe(41.5);
+  });
+
   it('drops a record that could never be beaten', () => {
     // A NaN wins every comparison it appears in and would stand as an
     // unbeatable personal best forever.

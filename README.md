@@ -489,9 +489,11 @@ undiscoverable.
   paid stage costs its fee.
 - **Arcade** is every stage under every condition, open from the start, free to
   enter, with a fixed car each time. Nothing is banked: no payout, no repair
-  bill, no record, no ghost. Wreck the car on a night stage you have not
-  unlocked and walk away as though it never happened. Your career's best time
-  is still shown, to chase.
+  bill, no repairs carried forward. Wreck the car on a night stage you have
+  not unlocked and walk away as though it never happened. It is the only mode
+  that publishes, though, for the same reason the car is fixed: every arcade
+  car is the same car, so the times are comparable. Two ghosts run with you —
+  your own best in blue, and the world record in gold.
 - **Multiplayer** is the lobby described above.
 
 `npm run uicheck` drives all three from a real browser, because a menu that
@@ -530,6 +532,13 @@ grain over the whole frame gets near it. Inside the arc: beads of water with
 clear glass between them and bright rims that catch the light, snow in packing
 clumps, mud in hard-edged blobs. Only real weather cakes the corners — fine dust
 off a dry gravel road dirties a screen without building a crust on it.
+
+A repair is carried out by somebody. Paying to straighten a wing sends a
+mechanic across the garage floor to that specific wing — `COMPONENTS` already
+carries a position for every part, and that is where he stands — and the metal
+changes when his spanner lands rather than when the button was pressed. The
+money and the bill are still instant; only the picture waits. A full repair is
+a brisk round of the car rather than thirty separate walks.
 
 **Photo mode** (`P`) plays back the run's own recording: scrub, slow it to an
 eighth, turn the camera an eighth of a turn at a time, zoom, hide the chrome,
@@ -616,6 +625,18 @@ kilobytes and survives everything.
 Each frame also records how far along the stage the car had got, which is what
 makes the live delta meaningful: it compares your clock against the ghost's clock
 *at the same point on the road*, not at the same moment in time.
+
+In arcade there are two on the road. Your own best is blue and is the one the
+delta is measured against; the world record is gold, downloaded from the times
+board, and is there to be aimed at. The board keeps exactly one ghost per
+track — the leader's, uploaded by whoever takes first place and replaced by
+whoever takes it next. Ten per track was never on: a ghost is 148 KB for a
+short stage and 277 KB for Grand Traverse, which is three orders of magnitude
+more data than a name and a number needs.
+
+The clock starts when the light goes green, not when the throttle goes down. A
+rally start is a countdown you can time, and a start you can fluff costs
+nothing on the stopwatch if the stopwatch waits for you.
 
 ### Stages
 

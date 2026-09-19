@@ -141,6 +141,24 @@ try {
 
   await page.screenshot({ path: 'shots/mobile.png' });
 
+  /*
+   * Restart, with a thumb.
+   *
+   * There is no `R` key on a phone, so a run that went wrong in the first
+   * corner used to mean the menu and a stage reload. Checked by driving it
+   * rather than by finding the element: a button that exists, is the right size
+   * and does nothing is the failure this is for, and the only proof it worked
+   * is the clock going back to the line.
+   */
+  const driven = Number((await status()).time);
+  if (!(driven > 0)) fail(`the clock was not running before the restart (${driven})`);
+  await page.locator('[data-touch="restart"]').tap();
+  await page.waitForFunction(
+    () => (window.RSC!.status() as { phase: string }).phase === 'staging',
+    { timeout: 10_000 },
+  );
+  console.log(`restart button put ${driven.toFixed(2)}s back on the line`);
+
   // Nothing on the HUD may sit on top of anything else, and nothing may sit
   // under a thumb. Checked as geometry rather than by eye, because "the panels
   // overlap on a phone" is exactly the kind of thing a desktop screenshot
@@ -149,7 +167,7 @@ try {
   // function inside an evaluated block, and that helper does not exist in the
   // page — so this is written without local function bindings on purpose.
   const clashes = (await page.evaluate(`(() => {
-    const names = ['.damage', '.hud-tl', '.minimap', '[data-touch="menu"]', '.cluster', '.touch-pedals'];
+    const names = ['.damage', '.hud-tl', '.minimap', '[data-touch="menu"]', '[data-touch="restart"]', '.cluster', '.touch-pedals'];
     const rects = names.map((s) => {
       const el = document.querySelector(s);
       return el ? el.getBoundingClientRect() : null;

@@ -2,8 +2,9 @@
  * The global times board.
  *
  * Ten times per track with a name against each, held by the same Cloudflare
- * Worker as the room broker (`server/src/board.ts`). No ghosts — see that file
- * for why — so this carries a name and a number and nothing else.
+ * Worker as the room broker (`server/src/board.ts`), plus the lap of whoever
+ * is top — one ghost per track and no more. See that file for why ten was
+ * never on, and why the one that is travels base64.
  *
  * ### Nothing here is allowed to matter
  *
@@ -28,23 +29,81 @@ const ROOM_BROKER = 'https://rsc-rooms.rsc-rooms.workers.dev';
 /** How long any call is allowed to take before it is abandoned, ms. */
 const TIMEOUT = 4000;
 
+/**
+ * How long a ghost transfer gets instead, ms.
+ *
+ * A board read is a few hundred bytes and four seconds is generous for it. A
+ * ghost is up to 370 KB encoded, which is several seconds of a phone's uplink
+ * on its own — abandoning that at the same deadline would mean the record lap
+ * never arrives on exactly the connections that most need a longer one. Still
+ * bounded, and still fails soft: a slow link gets no gold car rather than a
+ * menu that will not open.
+ */
+const GHOST_TIMEOUT = 15000;
+
 export interface BoardEntry {
   name: string;
   time: number;
   at: number;
 }
 
+/** The record holder's lap: who set it, what it took, and where the car went. */
+export interface BoardGhost {
+  name: string;
+  time: number;
+  frames: Float32Array;
+}
+
+/**
+ * Base64 in both directions, byte for byte.
+ *
+ * `btoa`/`atob` rather than anything cleverer, and one character at a time
+ * rather than `String.fromCharCode(...bytes)` — spreading a quarter of a
+ * megabyte into an argument list overflows the stack, which is a crash on
+ * exactly the longest stage and on nothing shorter. A chunked loop is the
+ * boring fix and the only one that holds at Grand Traverse's size.
+ */
+const CHUNK = 0x8000;
+
+function toBase64(frames: Float32Array): string {
+  const bytes = new Uint8Array(frames.buffer, frames.byteOffset, frames.byteLength);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+function fromBase64(encoded: string): Float32Array | null {
+  try {
+    const binary = atob(encoded);
+    // A Float32Array needs whole floats and an aligned buffer; a truncated or
+    // corrupted blob would otherwise throw inside the constructor, from a
+    // stack that says nothing about where it came from.
+    if (binary.length === 0 || binary.length % 4 !== 0) return null;
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new Float32Array(bytes.buffer);
+  } catch {
+    return null;
+  }
+}
+
 export class Leaderboard {
   constructor(private readonly base: string) {}
 
-  private async call(path: string, init?: RequestInit): Promise<unknown | null> {
+  private async call(
+    path: string,
+    init?: RequestInit,
+    timeout = TIMEOUT,
+  ): Promise<unknown | null> {
     // `AbortSignal.timeout` rather than a race against a timer: the point is to
     // stop *waiting*, and a promise race leaves the request itself running and
     // the connection held.
     try {
       const response = await fetch(`${this.base}${path}`, {
         ...init,
-        signal: AbortSignal.timeout(TIMEOUT),
+        signal: AbortSignal.timeout(timeout),
       });
       if (!response.ok) return null;
       return await response.json();
@@ -106,6 +165,53 @@ export class Leaderboard {
       top: body.top,
       was: typeof body.was === 'string' ? body.was : null,
     };
+  }
+
+  /**
+   * The lap of whoever is top of this track, or null.
+   *
+   * Null is the ordinary answer, not an error: most tracks have a board and no
+   * ghost behind it, because only a run posted from a build with this in it
+   * ever uploads one. Every caller treats it as "no gold car today".
+   */
+  async ghost(track: string): Promise<BoardGhost | null> {
+    const body = (await this.call(
+      `/g/${encodeURIComponent(track)}`,
+      undefined,
+      GHOST_TIMEOUT,
+    )) as { ghost?: { name?: unknown; time?: unknown; frames?: unknown } | null } | null;
+    const stored = body?.ghost;
+    if (!stored || typeof stored.name !== 'string' || typeof stored.time !== 'number') return null;
+    if (typeof stored.frames !== 'string') return null;
+    const frames = fromBase64(stored.frames);
+    return frames ? { name: stored.name, time: stored.time, frames } : null;
+  }
+
+  /**
+   * Attach a lap to a time that has just gone top of the board.
+   *
+   * Called only after `submit` came back with rank 0, because that is the only
+   * case the server accepts — it checks the name and the time against first
+   * place rather than taking the client's word for either. Fails soft like
+   * everything else here: a record with no ghost behind it is a board entry,
+   * which is what every record was until now.
+   */
+  async submitGhost(
+    track: string,
+    name: string,
+    time: number,
+    frames: Float32Array,
+  ): Promise<boolean> {
+    const body = (await this.call(
+      `/g/${encodeURIComponent(track)}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name, time, frames: toBase64(frames) }),
+      },
+      GHOST_TIMEOUT,
+    )) as { stored?: unknown } | null;
+    return body?.stored === true;
   }
 }
 
