@@ -50,12 +50,12 @@ export const UPGRADES: UpgradeDef[] = [
   {
     id: 'turbo',
     label: 'Turbo',
-    description: '+7% torque per level, and more heat. A holed radiator becomes a shorter fuse.',
+    description: '+7% torque per level, and more heat. A punctured radiator becomes a shorter fuse.',
     costs: [3200, 7600],
   },
   {
     id: 'gearbox',
-    label: 'Gearbox',
+    label: 'Transmission',
     description: 'Shorter shifts and a wider limited-slip bias. Sharper corner exits.',
     costs: [2800, 6400],
   },
@@ -73,7 +73,7 @@ export const UPGRADES: UpgradeDef[] = [
   },
   {
     id: 'tyres',
-    label: 'Tyres',
+    label: 'Tires',
     description: '+6% peak grip per level. Softer compounds: quicker, snappier at the limit, and they wear noticeably faster.',
     costs: [2600, 6200],
   },

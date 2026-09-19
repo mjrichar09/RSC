@@ -294,7 +294,7 @@ export class RaceHud {
     const l = this.ledger;
     if (!l) return '';
     const row = (label: string, value: number, tone = '') =>
-      `<div class="ledger-row ${tone}"><span>${label}</span><b>${value < 0 ? '−' : ''}${Math.abs(value).toLocaleString('en-GB')}</b></div>`;
+      `<div class="ledger-row ${tone}"><span>${label}</span><b>${value < 0 ? '−' : ''}${Math.abs(value).toLocaleString('en-US')}</b></div>`;
 
     return `
       <div class="finish-ledger">
@@ -302,7 +302,7 @@ export class RaceHud {
         ${row('Payout', l.payout, l.payout > 0 ? 'gain' : '')}
         ${l.floored ? '<div class="ledger-row"><span class="dim">recovery minimum applied</span></div>' : ''}
         ${row('Repairs outstanding', -l.repairs, l.repairs > 0 ? 'loss' : '')}
-        <div class="ledger-net"><span>NET</span><b style="color:${l.net >= 0 ? '#4fd6a0' : 'var(--hot)'}">${l.net >= 0 ? '+' : '−'}${Math.abs(l.net).toLocaleString('en-GB')}</b></div>
+        <div class="ledger-net"><span>NET</span><b style="color:${l.net >= 0 ? '#4fd6a0' : 'var(--hot)'}">${l.net >= 0 ? '+' : '−'}${Math.abs(l.net).toLocaleString('en-US')}</b></div>
       </div>`;
   }
 

@@ -75,7 +75,7 @@ export const LIVERIES: Livery[] = [
   },
   {
     id: 'gravel-grey',
-    name: 'Gravel Grey',
+    name: 'Gravel Gray',
     body: 0x5b6068,
     trim: 0x14181d,
     accent: 0xc9f24e,

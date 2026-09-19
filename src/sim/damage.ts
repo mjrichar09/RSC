@@ -120,7 +120,7 @@ export const COMPONENTS: ComponentDef[] = [
   // The radiator sits in front of everything and is made of foil.
   corner('cooling', 'Radiator', v3(0, -0.15, 1.92), 7500, 16000, 465, 1.1),
   corner('turbo', 'Turbo', v3(0.4, 0.05, 1.25), 16000, 28000, 1350, 0.9),
-  corner('transmission', 'Gearbox', v3(0, -0.2, 0.6), 19000, 34000, 1950, 1.1),
+  corner('transmission', 'Transmission', v3(0, -0.2, 0.6), 19000, 34000, 1950, 1.1),
   corner('driveshaft', 'Driveshaft', v3(0, -0.32, 0), 26000, 22000, 1050, 1.6),
   corner('differential', 'Differential', v3(0, -0.3, -1.25), 19000, 34000, 1425, 1.0),
   // The rack was tough enough to be theoretical: measured with `npm run crash`
@@ -153,7 +153,7 @@ export const COMPONENTS: ComponentDef[] = [
     // engine, which is a wheel nobody ever drives away without. Set so a hard
     // corner strike takes that corner and leaves the car running.
     corner(`hub${c}` as ComponentId, `Hub ${c}`, WHEEL_AT[c], 15000, 13000, 938, 1.05, true),
-    corner(`tyre${c}` as ComponentId, `Tyre ${c}`, WHEEL_AT[c], 7000, 16000, 232, 0.85, true),
+    corner(`tyre${c}` as ComponentId, `Tire ${c}`, WHEEL_AT[c], 7000, 16000, 232, 0.85, true),
     corner(`brake${c}` as ComponentId, `Brake ${c}`, WHEEL_AT[c], 13000, 26000, 405, 0.85, true),
   ]),
 
@@ -168,10 +168,10 @@ export const COMPONENTS: ComponentDef[] = [
   // Bolt-on panels: cheaper than the structure behind them, fragile, and each
   // one is somewhere you can point at on the car. A bonnet is a bigger target
   // than a mirror and takes more to shift; a mirror goes if you brush anything.
-  { id: 'bonnet', label: 'Bonnet', at: v3(0, 0.3, 1.25), reach: 1.15, threshold: 4000, scale: 15000, repairCost: 285, caged: false },
-  { id: 'boot', label: 'Boot lid', at: v3(0, 0.28, -1.35), reach: 1.1, threshold: 4000, scale: 15000, repairCost: 255, caged: false },
-  { id: 'wingFL', label: 'Front wing L', at: v3(0.82, 0.05, 1.3), reach: 1.0, threshold: 3600, scale: 14000, repairCost: 225, caged: false },
-  { id: 'wingFR', label: 'Front wing R', at: v3(-0.82, 0.05, 1.3), reach: 1.0, threshold: 3600, scale: 14000, repairCost: 225, caged: false },
+  { id: 'bonnet', label: 'Hood', at: v3(0, 0.3, 1.25), reach: 1.15, threshold: 4000, scale: 15000, repairCost: 285, caged: false },
+  { id: 'boot', label: 'Trunk lid', at: v3(0, 0.28, -1.35), reach: 1.1, threshold: 4000, scale: 15000, repairCost: 255, caged: false },
+  { id: 'wingFL', label: 'Front fender L', at: v3(0.82, 0.05, 1.3), reach: 1.0, threshold: 3600, scale: 14000, repairCost: 225, caged: false },
+  { id: 'wingFR', label: 'Front fender R', at: v3(-0.82, 0.05, 1.3), reach: 1.0, threshold: 3600, scale: 14000, repairCost: 225, caged: false },
   { id: 'quarterRL', label: 'Rear quarter L', at: v3(0.82, 0.05, -1.3), reach: 1.0, threshold: 3600, scale: 14000, repairCost: 225, caged: false },
   { id: 'quarterRR', label: 'Rear quarter R', at: v3(-0.82, 0.05, -1.3), reach: 1.0, threshold: 3600, scale: 14000, repairCost: 225, caged: false },
   { id: 'doorL', label: 'Left door', at: v3(0.86, 0.08, -0.05), reach: 1.0, threshold: 4400, scale: 16000, repairCost: 345, caged: false },
@@ -184,7 +184,7 @@ export const COMPONENTS: ComponentDef[] = [
   // until 130 km/h, so the shatter the renderer can draw was effectively
   // unreachable. Now a heavy frontal crazes it and a rollover, where the roof
   // is half a metre away, breaks it outright.
-  { id: 'windscreen', label: 'Windscreen', at: v3(0, 0.5, 0.55), reach: 1.7, threshold: 4200, scale: 16000, repairCost: 390, caged: false },
+  { id: 'windscreen', label: 'Windshield', at: v3(0, 0.5, 0.55), reach: 1.7, threshold: 4200, scale: 16000, repairCost: 390, caged: false },
   { id: 'exhaust', label: 'Exhaust', at: v3(0.35, -0.42, -1.7), reach: 0.9, threshold: 5000, scale: 15000, repairCost: 180, caged: false },
   // Cheap, fragile, and on a wet night the most important part on the car.
   { id: 'wipers', label: 'Wipers', at: v3(0, 0.34, 0.95), reach: 0.8, threshold: 2600, scale: 9000, repairCost: 90, caged: false },
@@ -202,7 +202,7 @@ export type FailureId =
 /** What each failure means, in words. The single source for every surface. */
 export const FAILURE_LABEL: Record<FailureId, string> = {
   'engine-seized': 'Engine seized',
-  overheated: 'Engine overheated — the radiator was holed',
+  overheated: 'Engine overheated — the radiator was punctured',
   'driveshaft-snapped': 'Driveshaft snapped',
   'out-of-fuel': 'Out of fuel',
   'wheel-lost-FL': 'Lost the front left wheel',
@@ -984,7 +984,7 @@ export class DamageModel {
     if (boil !== null) {
       out.push({
         severity: boil < 90 ? 'severe' : 'caution',
-        text: `Radiator holed — the engine will overheat after about ${Math.round(boil)}s of racing`,
+        text: `Radiator punctured — the engine will overheat after about ${Math.round(boil)}s of racing`,
       });
     }
 
@@ -1004,7 +1004,7 @@ export class DamageModel {
     for (const key of WHEEL_KEYS) {
       const tyre = this.get(`tyre${key}` as ComponentId);
       if (tyre > 0 && tyre < 0.3) {
-        out.push({ severity: 'caution', text: `Tyre ${key} at ${(tyre * 100).toFixed(0)}% — close to a puncture` });
+        out.push({ severity: 'caution', text: `Tire ${key} at ${(tyre * 100).toFixed(0)}% — close to a puncture` });
       }
       const steering = this.get('steering');
       if (key === 'FL' && steering > 0 && steering < 0.6) {

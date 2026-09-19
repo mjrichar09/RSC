@@ -74,7 +74,7 @@ function stageThumb(def: StageDef): StageThumb {
   return thumb;
 }
 
-const money = (n: number): string => `${n < 0 ? '−' : ''}${Math.abs(n).toLocaleString('en-GB')}`;
+const money = (n: number): string => `${n < 0 ? '−' : ''}${Math.abs(n).toLocaleString('en-US')}`;
 
 /** Which of the garage panels a narrow screen is showing. */
 type GarageTab = 'stages' | 'repairs' | 'car';

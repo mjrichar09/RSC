@@ -48,7 +48,7 @@ const GROUPS: Group[] = [
   },
   {
     title: 'Steering',
-    hint: 'Full lock much past the peak slip angle just ploughs. Falloff trades high-speed stability for low-speed agility.',
+    hint: 'Full lock much past the peak slip angle just plows. Falloff trades high-speed stability for low-speed agility.',
     sliders: [
       { key: 'maxSteerAngle', label: 'max lock', min: 0.2, max: 0.8, step: 0.01 },
       { key: 'steerSpeedFalloff', label: 'falloff at speed', min: 0.1, max: 1, step: 0.01 },

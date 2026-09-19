@@ -9,6 +9,18 @@ import type { VehicleState } from '../sim/vehicle.js';
 
 const GEAR_LABEL = (g: number): string => (g === 0 ? 'R' : String(g));
 
+/**
+ * What a surface is called on screen.
+ *
+ * One entry, because one is all that differs: gravel, dirt, mud, snow, ice,
+ * grass and water are the same word wherever you are, and a sealed road is
+ * asphalt here — tarmac is the bit of an airport you walk across to reach a
+ * plane. The simulation's id is untouched, because it is a key in stage data
+ * and in the surface table rather than anything a player reads, and this is
+ * the last step before it reaches a screen.
+ */
+const SURFACE_NAME: Record<string, string> = { tarmac: 'asphalt' };
+
 export class Hud {
   private readonly speed: HTMLElement;
   private readonly gear: HTMLElement;
@@ -26,7 +38,7 @@ export class Hud {
     parent.appendChild(root);
     root.innerHTML = `
       <div class="hud-corner hud-tl">
-        <div class="readout"><span id="hud-surface">tarmac</span></div>
+        <div class="readout"><span id="hud-surface">asphalt</span></div>
         <div class="readout dim"><span id="hud-fps">—</span> fps</div>
       </div>
       <div class="hud-corner hud-br">
@@ -64,7 +76,12 @@ export class Hud {
     this.drift.classList.toggle('big', deg > 35);
 
     const ground = state.wheels.find((w) => w.grounded);
-    this.surfaceEl.textContent = state.airborne ? 'airborne' : (ground?.surface.id ?? '—');
+    const surface = ground?.surface.id;
+    this.surfaceEl.textContent = state.airborne
+      ? 'airborne'
+      : surface
+        ? (SURFACE_NAME[surface] ?? surface)
+        : '—';
     this.fps.textContent = fps.toFixed(0);
   }
 }

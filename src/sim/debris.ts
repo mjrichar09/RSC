@@ -109,7 +109,7 @@ export const PARTS: PartDef[] = [
   },
   {
     id: 'bonnet',
-    label: 'Bonnet',
+    label: 'Hood',
     at: v3(0, 0.3, 1.3),
     reach: 1.3,
     threshold: 9000,
@@ -122,7 +122,7 @@ export const PARTS: PartDef[] = [
   },
   {
     id: 'boot',
-    label: 'Boot lid',
+    label: 'Trunk lid',
     at: v3(0, 0.28, -1.35),
     reach: 1.1,
     threshold: 8000,
@@ -135,8 +135,8 @@ export const PARTS: PartDef[] = [
   },
   ...(
     [
-      ['wingFL', 'Front wing L', 'wingFL', 0.82, 1.3],
-      ['wingFR', 'Front wing R', 'wingFR', -0.82, 1.3],
+      ['wingFL', 'Front fender L', 'wingFL', 0.82, 1.3],
+      ['wingFR', 'Front fender R', 'wingFR', -0.82, 1.3],
       ['quarterRL', 'Rear quarter L', 'quarterRL', 0.82, -1.3],
       ['quarterRR', 'Rear quarter R', 'quarterRR', -0.82, -1.3],
     ] as const

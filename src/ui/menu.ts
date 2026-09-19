@@ -262,7 +262,7 @@ export class StartMenu {
         <div class="menu-scroll help-doc">
           <p>
             Timed single-car runs on point-to-point rally stages. One car on the
-            stage at a time: you are racing the clock, not another car. Tyres
+            stage at a time: you are racing the clock, not another car. Tires
             have a grip limit, the body takes damage, and damage costs money.
           </p>
 
@@ -311,18 +311,18 @@ export class StartMenu {
           <h2>Tilt steering (phone)</h2>
           <p><b>TILT</b> at the top of the screen switches steering from drag to tilt.</p>
           <ul>
-            <li>The pose you are holding when you enable it becomes centre. It calibrates to you, not to level.</li>
+            <li>The pose you are holding when you enable it becomes center. It calibrates to you, not to level.</li>
             <li>Roll &plusmn;35&deg; for full lock. Dead zone is &plusmn;2.2&deg;.</li>
             <li>The drag pad stays live and overrides tilt while a thumb is down.</li>
-            <li>Tap twice to re-centre after changing grip or turning the phone round.</li>
+            <li>Tap twice to re-center after changing grip or turning the phone around.</li>
             <li>iOS asks permission on first use; the grant lasts the session.</li>
           </ul>
 
           <h2>Display</h2>
           <ul>
             <li><b>Top left</b> &mdash; surface, world record, personal best, car condition (temp / brake / fuel).</li>
-            <li><b>Top centre</b> &mdash; clock, delta to your best, medal you are currently on pace for.</li>
-            <li><b>Bottom centre</b> &mdash; stage progress and checkpoint splits.</li>
+            <li><b>Top center</b> &mdash; clock, delta to your best, medal you are currently on pace for.</li>
+            <li><b>Bottom center</b> &mdash; stage progress and checkpoint splits.</li>
             <li><b>Bottom left</b> &mdash; next two corners. Severity <b>1</b> is a hairpin, <b>6</b> is flat.</li>
             <li><b>Bottom right</b> &mdash; speed and gear.</li>
           </ul>
@@ -372,7 +372,7 @@ export class StartMenu {
 
   private mainScreen(): string {
     const medals = this.career.medalsHeld;
-    const money = this.career.money.toLocaleString('en-GB');
+    const money = this.career.money.toLocaleString('en-US');
     return `
       <div class="menu-inner">
         <div class="menu-mark">RSC</div>

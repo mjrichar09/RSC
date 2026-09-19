@@ -263,6 +263,12 @@ await page.waitForFunction(
 );
 console.log('personal best and world record ghosts are both on the road');
 
+// The surface readout, which is the one place a simulation id reaches the
+// screen as a word. A sealed road is asphalt; tarmac is an airport.
+const surfaceWord = (await page.textContent('#hud-surface'))?.trim() ?? '';
+if (surfaceWord === 'tarmac') throw new Error('the HUD is still calling the road tarmac');
+console.log(`surface readout: "${surfaceWord}"`);
+
 // Escape from an arcade race goes back to the front door.
 await page.keyboard.press('Escape');
 await page.waitForSelector('.menu.is-open');
