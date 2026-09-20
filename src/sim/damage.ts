@@ -192,6 +192,53 @@ export const COMPONENTS: ComponentDef[] = [
 
 export const COMPONENT_BY_ID = new Map(COMPONENTS.map((c) => [c.id, c]));
 
+/**
+ * Which panel a point on the body belongs to, or null if none does.
+ *
+ * The nearest piece of outer skin — the `caged` components are what it is
+ * protecting, so they are never the answer — and only within half again its
+ * own reach: a point under the floor belongs to no panel rather than to
+ * whichever one happens to be closest to it.
+ *
+ * One rule, used twice. It decides what absorbs an impact, and it decides
+ * which folds a repair straightens, so the panel that took the hit is the
+ * panel that pays to have it taken out. Two rules would drift, and the way
+ * that drift shows is a player paying to fix a wing that stays crumpled.
+ */
+export function skinAt(at: Vec3): ComponentDef | null {
+  let best: ComponentDef | null = null;
+  let nearest = Infinity;
+  for (const def of COMPONENTS) {
+    if (def.caged) continue;
+    const distance = length(sub(def.at, at));
+    if (distance < nearest) {
+      nearest = distance;
+      best = def;
+    }
+  }
+  // Beyond its own reach the panel is not in the way at all — an impact under
+  // the floor is not slowed down by the hood.
+  return best && nearest <= best.reach * 1.5 ? best : null;
+}
+
+/**
+ * The folds left once these components have been repaired.
+ *
+ * Straightening a panel takes the metal out of *that* panel. A dent belonging
+ * to somewhere else stays, and a dent belonging to no panel at all — under the
+ * floor, out past the skin — stays too, because nothing was bought that would
+ * have moved it. Mechanical parts never clear anything: paying to fix the
+ * radiator does not take the dents out of the wing, which is the rule this has
+ * always had and the reason `skinAt` ignores everything behind the cage.
+ */
+export function dentsAfterRepair(dents: readonly Dent[], repaired: readonly ComponentId[]): Dent[] {
+  const done = new Set(repaired);
+  return dents.filter((dent) => {
+    const panel = skinAt(dent.at);
+    return !panel || !done.has(panel.id);
+  }).map((dent) => ({ ...dent, at: { ...dent.at } }));
+}
+
 export type FailureId =
   | 'engine-seized'
   | 'overheated'
@@ -628,22 +675,8 @@ export class DamageModel {
    * hit on the nose should not be softened by an intact boot lid.
    */
   private bodyShield(at: Vec3): number {
-    let best: ComponentDef | null = null;
-    let nearest = Infinity;
-    for (const def of COMPONENTS) {
-      // Only the outer skin. The `caged` components are what it is protecting.
-      if (def.caged) continue;
-      const distance = length(sub(def.at, at));
-      if (distance < nearest) {
-        nearest = distance;
-        best = def;
-      }
-    }
-    if (!best) return 0;
-    // Beyond its own reach the panel is not in the way at all — an impact under
-    // the floor is not slowed down by the bonnet.
-    if (nearest > best.reach * 1.5) return 0;
-    return PANEL_ABSORB * this.get(best.id);
+    const panel = skinAt(at);
+    return panel ? PANEL_ABSORB * this.get(panel.id) : 0;
   }
 
   /**

@@ -24,7 +24,7 @@ import {
   type UpgradeLevels,
 } from '../src/game/garage.js';
 import { SaveStore, STARTING_MONEY } from '../src/game/save.js';
-import { impactPointFromForce } from '../src/sim/damage.js';
+import { COMPONENT_BY_ID, impactPointFromForce, skinAt } from '../src/sim/damage.js';
 import { v3 } from '../src/sim/math.js';
 import { stageVariants } from '../src/sim/stage.js';
 
@@ -329,6 +329,59 @@ describe('career', () => {
     expect(spent).toBe(worst.cost);
     expect(career.buildDamage().get(worst.id)).toBe(1);
     expect(career.repairBill().total).toBeGreaterThan(0);
+  });
+
+  it('takes the folds out of the panel it straightened, and only that one', async () => {
+    /*
+     * Reported as "after fixing the parts they still display as broken". The
+     * health came back and the metal did not: only a full repair cleared the
+     * dent list, so a paid-for panel stayed visibly crumpled and the repair
+     * read as having done nothing.
+     *
+     * Dents are positions on the body rather than properties of a component,
+     * so which panel owns one is `skinAt` — the same rule that decides what
+     * absorbs an impact, so the panel that took the hit is the panel that pays
+     * to have it taken out.
+     */
+    const damage = career.buildDamage();
+    // Two hits at opposite ends, so there is something to leave behind.
+    damage.applyImpact({ x: 0, y: 0.3, z: 1.9 }, 16_000);
+    damage.applyImpact({ x: 0, y: 0.28, z: -1.9 }, 16_000);
+    await career.settle(FREE_T, { medal: 'gold', time: 40, retired: false, damage });
+
+    const before = career.profile.carDents.length;
+    expect(before).toBeGreaterThan(1);
+    const owners = career.profile.carDents.map((d) => skinAt(d.at)?.id);
+    // The two ends landed on different panels, or this proves nothing.
+    expect(new Set(owners.filter(Boolean)).size).toBeGreaterThan(1);
+
+    const front = owners.find((id) => id === 'panelFront' || id === 'bonnet');
+    expect(front).toBeDefined();
+    await career.repairComponent(front!);
+
+    const after = career.profile.carDents;
+    expect(after.length).toBeLessThan(before);
+    // Nothing belonging to the repaired panel is left...
+    expect(after.some((d) => skinAt(d.at)?.id === front)).toBe(false);
+    // ...and the far end still carries its own.
+    expect(after.length).toBeGreaterThan(0);
+  });
+
+  it('leaves every fold alone when the repair was mechanical', async () => {
+    // Paying to fix the radiator does not take the dents out of the wing, and
+    // that is the rule `skinAt` keeps by ignoring everything behind the cage.
+    const damage = career.buildDamage();
+    damage.applyImpact(impactPointFromForce(HEAD_ON), 24_000);
+    await career.settle(FREE_T, { medal: 'gold', time: 40, retired: false, damage });
+
+    const before = career.profile.carDents.length;
+    expect(before).toBeGreaterThan(0);
+    const mechanical = career
+      .repairBill()
+      .lines.find((l) => COMPONENT_BY_ID.get(l.id)?.caged === true);
+    expect(mechanical).toBeDefined();
+    await career.repairComponent(mechanical!.id);
+    expect(career.profile.carDents.length).toBe(before);
   });
 
   it('can fix just enough to get the car to the start line', async () => {

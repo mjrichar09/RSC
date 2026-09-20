@@ -10,7 +10,7 @@ import { type EntryCheck, type RunLedger, canEnter, ledger, payout } from './eco
 import { type UpgradeId, type UpgradeLevels, levelOf, nextCost, rollcageMitigation, tuneFor } from './garage.js';
 import type { Medal } from './race.js';
 import type { Profile, SaveStore } from './save.js';
-import { COMPONENTS, type ComponentId, DamageModel } from '../sim/damage.js';
+import { COMPONENTS, type ComponentId, DamageModel, dentsAfterRepair } from '../sim/damage.js';
 import type { VehicleTuning } from '../data/tuning.js';
 import { type Livery, liveryById } from '../data/liveries.js';
 import { type StageDef, type StageVariant, stageVariants, variantKey } from '../sim/stage.js';
@@ -272,6 +272,13 @@ export class Career {
    *
    * Repairing piecemeal is the interesting move when money is tight: fix the
    * radiator so the car can finish, and live with the bent panels.
+   *
+   * Health is what the bill is for, and the metal comes with it: paying to
+   * straighten a panel takes the folds out of *that* panel. It used to take
+   * out none of them — only a full repair cleared the dent list — so you could
+   * watch a wing be repaired, pay for it, and look at the same crumpled wing
+   * afterwards. Somebody else's dents stay, which is the rule that was always
+   * meant and is now the only thing this leaves behind.
    */
   async repairComponent(id: ComponentId): Promise<number> {
     const line = this.repairBill().lines.find((l) => l.id === id);
@@ -279,6 +286,7 @@ export class Career {
     await this.save.update((p) => {
       p.money -= line.cost;
       p.carHealth[id] = 1;
+      p.carDents = dentsAfterRepair(p.carDents, [id]);
       p.totals.spentOnRepairs += line.cost;
     });
     return line.cost;
@@ -297,6 +305,7 @@ export class Career {
     await this.save.update((p) => {
       p.money -= total;
       for (const line of cost) p.carHealth[line.id] = 1;
+      p.carDents = dentsAfterRepair(p.carDents, cost.map((line) => line.id));
       p.totals.spentOnRepairs += total;
     });
     return total;
