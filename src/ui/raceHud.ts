@@ -39,6 +39,26 @@ const LAUNCH_WORD: Record<LaunchQuality, string> = {
   bogged: 'BOGGED DOWN',
 };
 
+/**
+ * How long the wreck stays on screen before the panel covers it, milliseconds.
+ *
+ * A run that ends in a crash or a stall ends with something worth looking at —
+ * a car on its roof, a wheel in the verge — and the panel used to land on the
+ * frame the race gave up, so the thing that just happened was hidden by the
+ * bill for it before anybody saw it. Long enough for the car to come to rest,
+ * short enough that nobody starts wondering whether the game has hung.
+ *
+ * Only a retirement waits. Crossing the line is its own ending and the time is
+ * what you came for, so the finish panel is still instant.
+ *
+ * **Wall time, and the one place in this file that is right to use.** The world
+ * is often in slow motion at exactly this moment — a hard enough impact slows
+ * it — so two seconds measured on the world's clock would be six of the
+ * player's. This is a wait a person sits through, so it runs on the clock they
+ * are sitting on.
+ */
+const RETIRE_HOLD = 2000;
+
 export class RaceHud {
   /** Pressed on the finish panel's retry button. */
   onRetry: (() => void) | null = null;
@@ -75,6 +95,13 @@ export class RaceHud {
   private stripKey = '';
   private missedKey = '';
   private lastPhase = '';
+  /**
+   * When the retirement panel is due, on the wall clock, or null.
+   *
+   * See `RETIRE_HOLD`. Null covers both "not retired" and "already shown", so
+   * nothing has to remember which.
+   */
+  private retireAt: number | null = null;
   private ghostTime: number | null = null;
   private ledger: SettleResult | null = null;
   /** Medals in force, which on a variant are not the stage's own. */
@@ -284,6 +311,7 @@ export class RaceHud {
       `${stage.def.name.toUpperCase()}${suffix} · ${miles(stage.length).toFixed(2)} mi`;
     this.stripKey = '';
     this.lastPhase = '';
+    this.retireAt = null;
     this.panel.className = 'race-panel';
     this.panel.innerHTML = '';
   }
@@ -375,9 +403,33 @@ export class RaceHud {
       if (race.phase === 'finished' && race.medal) {
         this.showFinish(race.medal, race.finishTime ?? 0, race.stage, damage);
       } else if (race.phase === 'retired') {
-        this.showRetired(race.retirement ?? 'RETIRED', race.time, damage);
+        this.retireAt = performance.now() + RETIRE_HOLD;
+      } else {
+        // Back to staging or running: a restart, and nothing is owed.
+        this.retireAt = null;
       }
     }
+
+    if (this.retireAt !== null && performance.now() >= this.retireAt) {
+      this.retireAt = null;
+      this.showRetired(race.retirement ?? 'RETIRED', race.time, damage);
+    }
+  }
+
+  /**
+   * Show a panel that is waiting out its hold, immediately.
+   *
+   * `RETIRE_HOLD` is a pause for somebody watching a crash. The harnesses
+   * drive the world directly and never run the frame loop — the `?stage=&t=`
+   * path returns before `requestAnimationFrame` is ever called — so there is
+   * nothing to tick the hold down and the panel would simply never arrive.
+   * Same reason `lights.skip()` exists: nothing headless should sit through a
+   * wait that was put there for a person.
+   */
+  showNow(race: Race, damage: DamageModel | null = null): void {
+    if (this.retireAt === null) return;
+    this.retireAt = null;
+    this.showRetired(race.retirement ?? 'RETIRED', race.time, damage);
   }
 
   /**

@@ -151,7 +151,7 @@ async function main(): Promise<void> {
   const { renderer, scene, key, applyConditions, resize } = createScene(canvas, quality);
   const camera = new IsoCamera();
   const carView = new CarView(scene);
-  const ghostView = new CarView(scene, { ghost: true });
+  const ghostView = new CarView(scene, { ghost: true, tag: 'PB' });
   /**
    * The world record's lap, in gold.
    *
@@ -160,7 +160,7 @@ async function main(): Promise<void> {
    * nothing else would read. Your own best stays blue and stays the one the
    * HUD's delta is measured against; this is the one to aim at.
    */
-  const wrView = new CarView(scene, { ghost: true, ghostColor: GHOST_GOLD });
+  const wrView = new CarView(scene, { ghost: true, ghostColor: GHOST_GOLD, tag: 'WR' });
   const debrisView = new DebrisView(scene);
   // The minimap. Fixed north-up, so the shape of a stage can be learned.
   const minimap = new LiveStageMap(hudRoot, 'minimap');
@@ -2130,6 +2130,7 @@ const params = new URLSearchParams(location.search);
       camera.applyZones(stage!.cameraZones, race!.furthest);
       camera.jumpTo(world.state().position);
       raceHud.update(race!, world.damage);
+      raceHud.showNow(race!, world.damage);
       updateStandings();
       raceHud.setNotes(cornersAhead(stage!.corners, race!.furthest, 2));
       // `?replay=1` opens the crash replay on whatever has just happened. It is
@@ -2220,6 +2221,8 @@ const params = new URLSearchParams(location.search);
 
       await settleRun(race.phase === 'retired');
       raceHud.update(race, world.damage);
+      // Headless: nothing here ticks the retirement hold down.
+      raceHud.showNow(race, world.damage);
       // The co-driver reads from the same corner list the boards are built
       // from, so a note can never disagree with a sign.
       raceHud.setNotes(cornersAhead(stage.corners, race.furthest, 2));
@@ -2762,7 +2765,18 @@ const params = new URLSearchParams(location.search);
         // leave button already says "Lobby"; going there is a press now.
       }
 
-      raceHud.update(race);
+      /*
+       * With the damage, which the live loop was not passing.
+       *
+       * `showFinish` and `showRetired` both take it and both put the repair
+       * bill in the panel — "no medal, no payout, full repair bill" is what
+       * the retirement panel says it is for — and the only call that reached
+       * them in a real game handed over nothing, so the bill was in the
+       * harness's panel and never in the player's. It matters more now the
+       * panel is built a couple of seconds after the phase changed: whichever
+       * call happens to open it has to carry the same thing.
+       */
+      raceHud.update(race, world.damage);
       // The order of the field. Progress along the stage rather than a lap
       // count: it is the same number the standings the host publishes use, and
       // it is meaningful on a point-to-point stage where nobody laps anybody.

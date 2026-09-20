@@ -70,6 +70,16 @@ export interface CarViewOptions {
    */
   ghostColor?: number;
   /**
+   * Two or three letters painted on a ghost, saying which one it is.
+   *
+   * Two ghosts share the road in arcade and hue alone was carrying the whole
+   * distinction — which asks the player to remember that gold is the record
+   * and blue is theirs, at 34% opacity, in a dust cloud. Letters do not need
+   * remembering. Ignored unless `ghost` is set: a real car has a competition
+   * number there, and it is not a label.
+   */
+  tag?: string;
+  /**
    * Body colour. Rival cars in a network race are told apart by paint, which
    * is the only cue that survives all four of them being sideways in a cloud
    * of gravel at once.
@@ -151,7 +161,7 @@ function hash3(x: number, y: number, z: number): number {
  * different one — which is a texture generated in four lines rather than an
  * atlas and a pipeline.
  */
-function numberTexture(value: number, ink: number, ground: number): THREE.CanvasTexture {
+function decalTexture(value: string, ink: number, ground: number): THREE.CanvasTexture {
   const size = 128;
   const canvas = document.createElement('canvas');
   canvas.width = size;
@@ -168,10 +178,13 @@ function numberTexture(value: number, ink: number, ground: number): THREE.Canvas
   draw.fill();
 
   draw.fillStyle = hex(ink);
-  draw.font = 'bold 78px ui-monospace, "SF Mono", Menlo, monospace';
+  // Sized to what is being written rather than fixed: a competition number is
+  // one or two digits and a ghost's tag is two letters, and 78px set for the
+  // first overflows the plate on the second.
+  draw.font = `bold ${value.length > 1 ? 62 : 78}px ui-monospace, "SF Mono", Menlo, monospace`;
   draw.textAlign = 'center';
   draw.textBaseline = 'middle';
-  draw.fillText(String(value), size / 2, size / 2 + 2);
+  draw.fillText(value, size / 2, size / 2 + 2);
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -481,6 +494,9 @@ export class CarView {
       this.buildHeadlights(h);
       this.buildDecals(h);
       this.setLivery(livery, options.number ?? 0);
+    } else if (options.tag) {
+      this.buildDecals(h);
+      this.setTag(options.tag, tint ?? GHOST_BLUE);
     }
 
   }
@@ -523,6 +539,36 @@ export class CarView {
   }
 
   /**
+   * Write a ghost's name on it.
+   *
+   * The same three surfaces a competition number uses — roof and both doors —
+   * because they are the ones that face the camera, and the roof is the one
+   * the isometric view looks straight down at.
+   *
+   * The ghost's own colour as the *ink*, on a near-black plate — not the other
+   * way round. A solid plate in the car's colour is the brightest thing on a
+   * translucent car and reads as a badge floating above it, and against pale
+   * gravel it washes out to a white smudge at the size this is actually seen.
+   * Dark ground keeps the letters legible over any surface the stage has and
+   * keeps the hue doing its job, because the letters are the hue.
+   *
+   * A little more opaque than the car it sits on: two letters at 34% are not
+   * letters, and the whole point of them is being read at a glance while
+   * driving.
+   */
+  private setTag(tag: string, tint: GhostTint): void {
+    const texture = decalTexture(tag.toUpperCase(), tint.color, 0x0c0f14);
+    for (const decal of this.decals) {
+      const material = decal.material as THREE.MeshBasicMaterial;
+      material.map?.dispose();
+      material.map = texture;
+      material.opacity = 0.7;
+      material.visible = true;
+      material.needsUpdate = true;
+    }
+  }
+
+  /**
    * Repaint the car, live.
    *
    * The garage turntable has to change the moment a livery is picked, and the
@@ -557,7 +603,7 @@ export class CarView {
     paint(this.trimMeshes, livery.trim);
     if (this.accentMesh) paint([this.accentMesh], livery.accent);
 
-    const texture = numberTexture(raceNumber, livery.number, livery.numberBack);
+    const texture = decalTexture(String(raceNumber), livery.number, livery.numberBack);
     for (const decal of this.decals) {
       const material = decal.material as THREE.MeshBasicMaterial;
       material.map?.dispose();
