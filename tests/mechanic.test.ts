@@ -18,19 +18,33 @@ import { COMPONENTS } from '../src/sim/damage.js';
 import { CAR } from '../src/data/tuning.js';
 import { IDLE_SPOT, crossesBody, routeAround, standingSpot } from '../src/render/mechanic.js';
 
-/** Every point along a polyline, a centimetre apart. */
-function samples(path: THREE.Vector3[], from: THREE.Vector3): THREE.Vector3[] {
-  const out: THREE.Vector3[] = [];
+/**
+ * How finely a route is sampled, metres.
+ *
+ * Four centimetres, against a path that keeps `BODY_CLEARANCE` — 45 cm — off
+ * the bodywork. A step has to be shorter than the margin it is looking for or
+ * it can pass straight through the thing it is checking, and this is an order
+ * of magnitude inside that.
+ *
+ * It was one centimetre, which is eleven times finer than the answer needs and
+ * cost the exhaustive case below most of five seconds.
+ */
+const STEP = 0.04;
+
+/** True if any point along the polyline is inside the car. */
+function crosses(path: THREE.Vector3[], from: THREE.Vector3): boolean {
+  const point = new THREE.Vector3();
   let at = from;
   for (const leg of path) {
     const span = Math.hypot(leg.x - at.x, leg.z - at.z);
-    const steps = Math.max(Math.ceil(span / 0.01), 1);
+    const steps = Math.max(Math.ceil(span / STEP), 1);
     for (let i = 1; i <= steps; i++) {
-      out.push(new THREE.Vector3().lerpVectors(at, leg, i / steps));
+      point.lerpVectors(at, leg, i / steps);
+      if (insideCar(point)) return true;
     }
     at = leg;
   }
-  return out;
+  return false;
 }
 
 /** Inside the car's actual body, which is what he must never be. */
@@ -87,27 +101,33 @@ describe('the walk to it', () => {
     for (const leg of legs.slice(0, -1)) expect(leg.z).toBeGreaterThan(0);
   });
 
+  /*
+   * Both of these collect the routes that failed and assert once.
+   *
+   * Asserting per sample is a quarter of a million `expect` calls for the pair
+   * sweep below, which is nearly all of the cost and took it to the edge of the
+   * default five-second timeout — it passed here at 4.85 s and timed out on
+   * CI's slower runner. The list keeps the diagnostic that mattered: which leg
+   * went through the car, by name, rather than a bare false.
+   */
   it('never crosses the body, from the idle spot to any component', () => {
-    for (const component of COMPONENTS) {
-      const to = standingSpot(component.at);
-      const path = routeAround(IDLE_SPOT, to);
-      for (const point of samples(path, IDLE_SPOT)) {
-        expect(insideCar(point), `${component.id}: walked through the car`).toBe(false);
-      }
-    }
+    const through = COMPONENTS.filter((c) =>
+      crosses(routeAround(IDLE_SPOT, standingSpot(c.at)), IDLE_SPOT),
+    ).map((c) => c.id);
+    expect(through).toEqual([]);
   });
 
   it('never crosses the body going from any component to any other', () => {
     // A repair round is one part after another, and the leg between two of
     // them is the one that goes furthest across the car.
     const spots = COMPONENTS.map((c) => ({ id: c.id, at: standingSpot(c.at) }));
+    const through: string[] = [];
     for (const from of spots) {
       for (const to of spots) {
         if (from.id === to.id) continue;
-        for (const point of samples(routeAround(from.at, to.at), from.at)) {
-          expect(insideCar(point), `${from.id} -> ${to.id}: walked through the car`).toBe(false);
-        }
+        if (crosses(routeAround(from.at, to.at), from.at)) through.push(`${from.id} -> ${to.id}`);
       }
     }
+    expect(through).toEqual([]);
   });
 });
