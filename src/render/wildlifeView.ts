@@ -1,5 +1,5 @@
 /**
- * Deer at the roadside.
+ * Animals at the roadside.
  *
  * The pose carries the whole gameplay message, so it is deliberately readable
  * from a fixed isometric camera at speed: head down and side-on while grazing,
@@ -12,11 +12,30 @@ import * as THREE from 'three';
 import type { Animal } from '../sim/wildlife.js';
 import type { Vec3 } from '../sim/math.js';
 
-/** Enough for any stage this game builds; a kilometre carries about three. */
-const POOL = 8;
+/**
+ * Enough for any stage this game builds.
+ *
+ * A kilometre of scattered animals carries about three, which is where 8 came
+ * from. A flock is a dozen standing together on one summit, and a view pool
+ * smaller than the animal list silently drops everything past the end of it —
+ * the sheep at the back of the flock would be solid, billable, and invisible.
+ */
+const POOL = 26;
 
 const HIDE = 0x6b5136;
 const HIDE_ALERT = 0x8f6a44;
+
+/**
+ * Wool, and a dark face.
+ *
+ * A sheep has to read as *not a deer* at a glance, because the two cost very
+ * different amounts to hit. Pale against a dark verge, and small: it is drawn
+ * from the same box assembly at two thirds scale, which is about the real
+ * ratio and saves a second set of geometry.
+ */
+const WOOL = 0xcfc8b6;
+const WOOL_ALERT = 0xeae3d2;
+const SHEEP_SCALE = 0.66;
 
 export class WildlifeView {
   readonly group = new THREE.Group();
@@ -110,6 +129,11 @@ export class WildlifeView {
       }
 
       view.root.visible = true;
+      // Species is fixed for the life of the stage, but it is applied every
+      // frame rather than once: the pool is reused across stage loads and a
+      // view that kept the last stage's shape would be a sheep-sized deer.
+      const sheep = animal.kind === 'sheep';
+      view.root.scale.setScalar(sheep ? SHEEP_SCALE : 1);
       view.root.position.set(animal.position.x, animal.position.y, animal.position.z);
       // Yaw then roll: a struck animal tumbles about its own long axis and ends
       // up lying on its side, which is most of what makes the aftermath read as
@@ -123,7 +147,7 @@ export class WildlifeView {
       const alert = animal.state !== 'grazing';
       view.head.rotation.x = alert ? -0.15 : 1.15;
       (view.body.material as THREE.MeshStandardMaterial).color.setHex(
-        alert ? HIDE_ALERT : HIDE,
+        sheep ? (alert ? WOOL_ALERT : WOOL) : alert ? HIDE_ALERT : HIDE,
       );
     }
   }

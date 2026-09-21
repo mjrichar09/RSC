@@ -817,18 +817,47 @@ export function emitSteam(
  * property of the surface, so gravel plumes and tarmac blackens without either
  * being special-cased at the call site.
  */
+/**
+ * How hot a disc has to be before water coming off it steams, °C.
+ *
+ * Well under the glow, because the two say different things. Glow is a disc in
+ * trouble; steam is the moment it stops being in trouble, and the player needs
+ * to see that it worked — a driver who has taken the long way round through
+ * standing water to save the brakes has bought something, and the steam is the
+ * receipt. Ordinary brakes at the end of a normal stage sit under this, so it
+ * only ever appears where it means something.
+ */
+const STEAM_FROM_C = 140;
+
 export function updateWheelEffects(
   particles: ParticleField,
   skids: SkidMarks,
   wheels: readonly WheelState[],
   carVelocity: Vec3,
   dt: number,
+  /** Disc temperatures, °C, when the damage model is running. */
+  brakeTemp?: readonly number[],
 ): void {
   for (let i = 0; i < wheels.length; i++) {
     const wheel = wheels[i]!;
     if (!wheel.grounded) {
       skids.lift(i);
       continue;
+    }
+
+    // A hot disc dropped into standing water. Emitted from the contact patch
+    // rather than the hub so it rises past the wheel, and scaled by how much
+    // heat there actually is, so a lightly warm brake gives a wisp and a
+    // cooked one boils.
+    const disc = brakeTemp?.[i] ?? 0;
+    if (wheel.surface.id === 'water' && disc > STEAM_FROM_C) {
+      emitSteam(
+        particles,
+        wheel.contact,
+        carVelocity,
+        Math.min((disc - STEAM_FROM_C) / 260, 1),
+        dt,
+      );
     }
 
     const slip = Math.max(0, wheel.saturation - 0.95);

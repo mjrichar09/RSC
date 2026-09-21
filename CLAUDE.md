@@ -95,6 +95,9 @@ The sim clock and the wall clock are different things. `dt` is the world's;
 | Trees, boulders, houses: where they stand and what is solid | `sim/scenery.ts` |
 | The height of the open ground away from the road | `sim/terrain.ts` — `groundHeight` |
 | Hazards on the verge, gates, corner signs, bridge piers | `sim/stage.ts` |
+| Things standing *on* the road: chicanes, rockslides | `StageDef.obstacles`, `StageDef.slide` in `sim/stage.ts` |
+| Water on part of the road, and what it cools | `StageDef.water`, `Stage.wetAt`, `WATER_COOLING` in `sim/damage.ts` |
+| Deer, sheep, and what a strike costs | `sim/wildlife.ts` — `ANIMAL_MASS`, `FlockSpec` |
 | Colliders, contacts, the fixed loop | `sim/world.ts` |
 | The AI's line and pace | `sim/driver.ts` |
 | Timing, checkpoints, medals | `game/race.ts` |
@@ -1068,6 +1071,55 @@ lower is a different stage. The condition for leaving a crest is `v² / R > g`,
 which is checkable from the control points without driving anything — every jump
 on it launches the car between 78 and 92 km/h, and the AI spends 3.0 s of a 49 s
 lap in the air. Re-measure that and re-derive the medals if any of it moves.
+
+Coldwater Pass is the hard one, and the only stage whose difficulty is in the
+car rather than in the corners. Two numbers were measured before it was drawn
+and both are worth keeping:
+
+- **Gradient barely slows this car.** Flat out up a gravel ramp it holds 160
+  km/h on the level, 146 at 10%, 131 at 20%, 121 at 30%, 99 at 50% and 84 at
+  60%. There is no gradient it cannot climb, so a climb can never be hard on
+  its own — only slow. What costs time going up is what is *on* the climb.
+- **A long descent is the only thing that reaches the brake fade model.** Fade
+  begins at 520 °C and a `--trace=stops` run peaks at 175, so until this stage
+  the model could not be reached by driving. Holding 70 km/h down a straight
+  ramp: 18% over 1800 m peaks a disc at 248 °C, 22% at 347, 26% at 434, 26%
+  over 2600 m at 472, and 30% over 2600 m at **553** — past fade. Holding a
+  *lower* speed is hotter, because it is more time on the brakes and less drag
+  doing the work for you.
+
+Both were measured by driving, and both took two wrong answers first. A ramp
+with a sharp break from flat into the slope launches the car and it spends the
+whole run airborne, reporting a 30% descent as cooler than a 10% one. Driving
+with `steer: 0` lets the road's own camber walk the car off a nine-metre road
+into the bank inside 270 m, where it sits at 1 km/h while the harness reports a
+descent. Ease the slope in and out, and let the AI steer while the harness
+overrides only the pedals.
+
+**A centreline is a path, not a list of coordinates.** Coldwater Pass was
+authored by walking a heading — `straight(length, grade)` and `arc(radius,
+sweep, grade)` — and the reason is that written as coordinates it had a bare 90°
+kink where the approach met the first hairpin leg. The car arrived at 109 km/h
+and stopped dead against it, and it read as `DNF: timeout at 20%` at four
+different gradients and radii, which looks exactly like hairpins being too
+tight. The descent had the same fault hidden inside an arc that swept 108° and
+came back on itself. Every segment has to start pointing where the last one
+ended, and a walker cannot express anything else.
+
+**A switchback has a direction, and the wrong one walks back over the road it
+started on.** The stack's hairpins march the climb away from the approach. With
+the sweep signs flipped it is still a valid switchback and it marches the whole
+climb back over the valley road, 206 m above it — where `findCrossings` sees
+overlapping road with a large height gap, does exactly what it is for, and
+carries a mountainside on piers. The tell is `closest to self`: 14.6 m and two
+crossings the wrong way round, 67 m and none the right way.
+
+**A hazard that moves between runs breaks three things at once.** The rockslide
+lands on a seeded side, never a random one: medal times come from a calibrated
+AI lap, a ghost is a recording of a specific road, and the board is a
+comparison of the same race. `Stage` takes an optional seed for this and
+`loadStage` passes `${id}:${variant}`, so the slide can be on the left in the
+dry and the right in the wet while staying fixed for everyone racing either.
 
 Grand Traverse is the fragile one, and its night-snow variant is the canary.
 `validateStage` drives each variant three times at rising commitment and wants

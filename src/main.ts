@@ -601,7 +601,12 @@ const params = new URLSearchParams(location.search);
 
     const def = stageById(stageId);
     variant = findVariant(def, variantId);
-    stage = new Stage(def);
+    // Seeded with the variant, so anything the stage decides for itself can
+    // differ between conditions and still be the same for everyone racing that
+    // pairing — which is what keeps a ghost a recording of the road it was set
+    // on and the board a comparison of the same race. Coldwater Pass uses it
+    // to decide which side its rockslide came down.
+    stage = new Stage(def, `${def.id}:${variant.id}`);
 
     // Conditions light the scene, set the fog, and decide how much the
     // headlights matter — which is what finally gives the `lights` component
@@ -2076,7 +2081,14 @@ const params = new URLSearchParams(location.search);
         race!.update(world.state(), world.dt);
         // Accumulate spray and marks so a harness frame shows the same effects
         // a player would see, rather than a suspiciously clean road.
-        updateWheelEffects(particles, skids, world.state().wheels, world.state().velocity, world.dt);
+        updateWheelEffects(
+          particles,
+          skids,
+          world.state().wheels,
+          world.state().velocity,
+          world.dt,
+          world.damage?.brakeTemp,
+        );
         reactToImpact(world.state(), world.dt);
         shownDamage.advance(world.dt);
         captureReel(world.dt, 1);
@@ -2098,7 +2110,14 @@ const params = new URLSearchParams(location.search);
         while (world.time < until) {
           world.step({ throttle: 1, brake: 0, steer: 1, handbrake: 0 });
           race!.update(world.state(), world.dt);
-          updateWheelEffects(particles, skids, world.state().wheels, world.state().velocity, world.dt);
+          updateWheelEffects(
+          particles,
+          skids,
+          world.state().wheels,
+          world.state().velocity,
+          world.dt,
+          world.damage?.brakeTemp,
+        );
           // The whole point of a `crash:` cell is the sparks, the dust and the
           // debris, so this loop above all others has to go through the shared
           // reaction rather than merely bending the car.
@@ -2370,7 +2389,14 @@ const params = new URLSearchParams(location.search);
       const state = () => world!.state();
       for (let i = 0; i < 120 * Number(params.get('after') ?? '2'); i++) {
         world!.step({ throttle: 0.35, brake: 0, steer: 0, handbrake: 0 });
-        updateWheelEffects(particles, skids, state().wheels, state().velocity, world!.dt);
+        updateWheelEffects(
+          particles,
+          skids,
+          state().wheels,
+          state().velocity,
+          world!.dt,
+          world!.damage?.brakeTemp,
+        );
         // Pose the car before reading where the dragging part touches: sparks
         // and the scrape both come off its world position, and an unposed view
         // reports where the bumper was before it started hanging.
@@ -2812,7 +2838,7 @@ const params = new URLSearchParams(location.search);
     // Spray, marks and sound all read straight off tyre saturation — the same
     // number the physics uses — so what you see and hear is what is happening.
     if (!garage.isOpen) {
-      updateWheelEffects(particles, skids, state.wheels, state.velocity, dt);
+      updateWheelEffects(particles, skids, state.wheels, state.velocity, dt, world.damage?.brakeTemp);
       // Steam from a boiling radiator, out of the bonnet vents.
       const boiling = world.damage?.boiling ?? 0;
       if (boiling > 0) {

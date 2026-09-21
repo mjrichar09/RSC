@@ -616,7 +616,11 @@ export class Vehicle {
     if (this.damage) {
       this.damage.updateBrakes(
         dt,
-        this.wheels.map((w, i) => ({ torque: this.brakeApplied[i]!, spin: w.spin })),
+        this.wheels.map((w, i) => ({
+          torque: this.brakeApplied[i]!,
+          spin: w.spin,
+          wet: w.grounded && w.surface.id === 'water',
+        })),
         planarSpeed,
       );
     }

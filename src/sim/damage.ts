@@ -441,6 +441,17 @@ const DISC_HEAT_CAPACITY = 950;
  * so a disc can still saturate the effect before it saturates the model.
  */
 const DISC_MAX_C = 900;
+/**
+ * How much faster a disc sheds heat with water on it than with air.
+ *
+ * Not a physical number — a real 500 C disc hitting cold water cracks, and the
+ * game has nothing to say about that. It is set by what it has to be worth:
+ * at 14x, a couple of seconds in the gutter takes a cooked disc back to
+ * something usable, which is long enough to be a real decision on the exit of
+ * a descent and short enough that nobody parks in it.
+ */
+const WATER_COOLING = 14;
+
 /** Fraction of the friction work that lands in the disc rather than the pad, air and tyre. */
 const DISC_ABSORPTION = 0.85;
 /** Convective loss, watts per kelvin: a standing term plus airflow with speed. */
@@ -852,14 +863,19 @@ export class DamageModel {
    */
   updateBrakes(
     dt: number,
-    corners: readonly { torque: number; spin: number }[],
+    corners: readonly { torque: number; spin: number; wet?: boolean }[],
     speed: number,
   ): void {
     const airflow = DISC_COOL_BASE + DISC_COOL_PER_MPS * Math.min(Math.abs(speed), 60);
     for (let i = 0; i < 4; i++) {
       const c = corners[i];
       const power = c ? Math.abs(c.torque * c.spin) * DISC_ABSORPTION : 0;
-      const loss = (this.brakeTemp[i]! - this.ambientC) * airflow;
+      // Water takes heat out of a disc far faster than air can, which is what
+      // makes driving through it worth the grip it costs. Per corner, because
+      // two wheels in the gutter and two on dry road is the interesting case
+      // and the one a player will actually try.
+      const cooling = c?.wet ? airflow * WATER_COOLING : airflow;
+      const loss = (this.brakeTemp[i]! - this.ambientC) * cooling;
       this.brakeTemp[i] = clamp(
         this.brakeTemp[i]! + ((power - loss) / DISC_HEAT_CAPACITY) * dt,
         this.ambientC,

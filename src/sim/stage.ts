@@ -29,6 +29,7 @@ import {
 } from './corridor.js';
 import { type SceneryItem, scatterScenery } from './scenery.js';
 import type { SurfaceId } from './surfaces.js';
+import type { FlockSpec } from './wildlife.js';
 
 export interface CameraZone {
   /** Arc length along the stage where this zone starts, metres. */
@@ -159,6 +160,71 @@ export interface VariantSpec {
   requiresMedals: number;
 }
 
+/**
+ * A prop standing on the road itself rather than scattered beside it.
+ *
+ * The hazard scatter only ever places things past the verge, which is right
+ * for trees and boulders on a hillside and useless for anything the road is
+ * supposed to be blocked by. These are authored: a chicane is a decision
+ * somebody made about where the car should be forced to go, not a seed.
+ */
+export interface RoadObstacle {
+  kind: PropKind;
+  /** Metres along the stage. */
+  distance: number;
+  /**
+   * Across the road, as a fraction of its half width. 0 is the centreline,
+   * ±1 the road edge, and beyond that the verge.
+   */
+  across: number;
+  /** Scale on the prop's usual size. */
+  size?: number;
+}
+
+/**
+ * A rockslide lying across one side of the road.
+ *
+ * Which side is not authored — it is drawn from the stage's own seeded stream,
+ * so the same track can have the slide on the left for one set of conditions
+ * and the right for another, and a player who has learned the stage still has
+ * to look. Seeded rather than random for the reason everything here is: a
+ * hazard that moved between runs would make the ghost a recording of a
+ * different road and the leaderboard a comparison of different races.
+ */
+export interface SlideSpec {
+  /** Where the debris starts, metres along the stage. */
+  from: number;
+  /** How far it runs, metres. */
+  length: number;
+  /**
+   * How far in from the road edge it reaches, as a fraction of the half width.
+   * At 1 it reaches the centreline; there is always a way through.
+   */
+  reach: number;
+  /** How many boulders are in it. */
+  count: number;
+}
+
+/**
+ * Standing water down one side of the road.
+ *
+ * Meltwater off the mountain, running along the low edge of the carriageway.
+ * It is a surface, so it is slow and it will pull the car toward the verge if
+ * only two wheels are in it — and it is the one place on the stage a set of
+ * brakes cooked on the descent can be put out. Both halves of that are the
+ * point: it costs time and grip to use, and refusing to use it means arriving
+ * at the bales with whatever the hill left you.
+ */
+export interface WetPatch {
+  /** Metres along the stage. */
+  from: number;
+  to: number;
+  /** Which side it runs down: -1 left, 1 right. */
+  side: -1 | 1;
+  /** How far in from the road edge, as a fraction of the half width. */
+  reach: number;
+}
+
 export interface StageDef {
   id: string;
   name: string;
@@ -184,6 +250,14 @@ export interface StageDef {
   cameraZones?: CameraZone[];
   /** Roadside hazards. Omit for a bare corridor. */
   hazards?: HazardProfile;
+  /** Props standing on the road, placed by hand rather than scattered. */
+  obstacles?: RoadObstacle[];
+  /** Standing water along one edge of the road. */
+  water?: WetPatch[];
+  /** Animals standing together somewhere on the stage. */
+  flocks?: FlockSpec[];
+  /** A rockslide across one side of the road. The side is seeded. */
+  slide?: SlideSpec;
   /**
    * Extra conditions this stage can be raced in, beyond clear daylight.
    * The baseline variant is always present and is generated, not authored.
@@ -355,6 +429,8 @@ export function findVariant(def: StageDef, variantId: string | undefined): Stage
 
 export class Stage {
   readonly def: StageDef;
+  /** What anything seeded on this stage draws from. See the constructor. */
+  private readonly seed: string;
   readonly spline: Spline;
   readonly geometry: StageGeometry;
   readonly checkpoints: Checkpoint[];
@@ -382,8 +458,23 @@ export class Stage {
   readonly start: { position: Vec3; heading: number };
   readonly length: number;
 
-  constructor(def: StageDef) {
+  /**
+   * Which side the rockslide came down, -1 left and 1 right, or 0 for none.
+   *
+   * Public because it is worth being able to ask: a co-driver call, a test, or
+   * anything else that wants to know what this run is driving into.
+   */
+  readonly slideSide: -1 | 0 | 1;
+
+  /**
+   * @param seed Overrides the stage id for anything seeded. `loadStage` passes
+   * the variant with it, so the slide can land on a different side in the wet
+   * than in the dry while staying fixed for everyone racing that pairing.
+   */
+  constructor(def: StageDef, seed: string = def.id) {
     this.def = def;
+    this.seed = seed;
+    this.slideSide = def.slide ? (seededRandom(hashString(`${seed}:slide`))() < 0.5 ? -1 : 1) : 0;
     // The authored centreline says where the road goes; the terrain says what
     // it is. Applied here, before the spline, so the collider, the AI, the
     // camera and the props all agree about where the ground is — terrain that
@@ -486,7 +577,13 @@ export class Stage {
         vertices[v * 3] = point.x;
         vertices[v * 3 + 1] = point.y;
         vertices[v * 3 + 2] = point.z;
-        vertexSurfaces.push(this.surfaceForOffset(Math.abs(p.offset), s.width, s.surface));
+        // The water has to be drawn as well as driven on, or it is a patch of
+        // grip nobody can see. `p.offset` is signed the same way `lateral` is.
+        vertexSurfaces.push(
+          this.wetAt(s.distance, p.offset, s.width)
+            ? 'water'
+            : this.surfaceForOffset(Math.abs(p.offset), s.width, s.surface),
+        );
         vertexShade[v] = this.shadeForOffset(Math.abs(p.offset), s.width);
         vertexGrade[v] = grade;
         v++;
@@ -518,6 +615,26 @@ export class Stage {
     if (absOffset <= width + VERGE_WIDTH + 0.01) return 0.84;
     if (absOffset <= width + VERGE_WIDTH + BANK_WIDTH + 0.01) return 0.66;
     return 0.5;
+  }
+
+  /**
+   * Whether a point on the road is in standing water.
+   *
+   * Signed lateral, which is the reason this is not folded into
+   * `surfaceForOffset`: that one takes the distance from the centreline and
+   * cannot tell the two sides apart, which is exactly what a patch down one
+   * edge needs to know. `lateral` is positive to the *left*.
+   */
+  private wetAt(distance: number, lateral: number, width: number): boolean {
+    const patches = this.def.water;
+    if (!patches) return false;
+    for (const w of patches) {
+      if (distance < w.from || distance > w.to) continue;
+      if (lateral === 0 || Math.sign(lateral) !== -w.side) continue;
+      const across = Math.abs(lateral) / Math.max(width, 0.01);
+      if (across <= 1.02 && across >= 1 - w.reach) return true;
+    }
+    return false;
   }
 
   private surfaceForOffset(absOffset: number, width: number, road: SurfaceId): SurfaceId {
@@ -725,8 +842,52 @@ export class Stage {
     return signs;
   }
 
+  /**
+   * Props standing on the road: the authored ones, and the slide.
+   *
+   * Kept apart from the hazard scatter because the scatter's whole job is to
+   * stay off the road — it starts its offsets past the verge. These start from
+   * the centreline and are allowed anywhere.
+   */
+  private roadProps(): StageProp[] {
+    const props: StageProp[] = [];
+    const place = (kind: PropKind, distance: number, across: number, size: number) => {
+      const sample = this.spline.at(Math.max(0, Math.min(distance, this.length)));
+      const shape = PROP_SHAPE[kind];
+      const base = add(sample.position, scale(sample.left, across * sample.width));
+      props.push({
+        kind,
+        position: v3(base.x, base.y, base.z),
+        radius: shape.radius * size,
+        height: shape.height * size,
+        yaw: across * 2.1 + distance * 0.7,
+        ...(shape.mass ? { mass: shape.mass } : {}),
+      });
+    };
+
+    for (const o of this.def.obstacles ?? []) {
+      place(o.kind, o.distance, o.across, o.size ?? 1);
+    }
+
+    const slide = this.def.slide;
+    if (slide && this.slideSide !== 0) {
+      // Its own stream, so adding or moving a boulder cannot reshuffle the
+      // hazards scattered along the rest of the stage.
+      const random = seededRandom(hashString(`${this.seed}:slide:debris`));
+      for (let i = 0; i < slide.count; i++) {
+        const along = slide.from + random() * slide.length;
+        // From the road edge inward, never past `reach`, and a few spilling
+        // out onto the verge so it reads as having come from up the hill
+        // rather than having been put there.
+        const inward = 1.15 - random() * (slide.reach + 0.15);
+        place('rock', along, this.slideSide * inward, 0.55 + random() * 0.75);
+      }
+    }
+    return props;
+  }
+
   private buildProps(): StageProp[] {
-    const props: StageProp[] = [...this.gatePosts(), ...this.piers()];
+    const props: StageProp[] = [...this.gatePosts(), ...this.piers(), ...this.roadProps()];
     const profile = this.def.hazards;
     if (!profile || profile.kinds.length === 0) return props;
 
@@ -1004,6 +1165,9 @@ export class Stage {
    */
   surfaceAt(point: Vec3, hint?: number): { surface: SurfaceId; index: number } {
     const loc = this.spline.locate(point, hint);
+    if (this.wetAt(loc.distance, loc.lateral, loc.sample.width)) {
+      return { surface: 'water', index: loc.index };
+    }
     return {
       surface: this.surfaceForOffset(Math.abs(loc.lateral), loc.sample.width, loc.sample.surface),
       index: loc.index,

@@ -572,6 +572,270 @@ const gated = GENERATED_STAGES.map((stage, i) => ({
   requiresMedals: 3 + Math.floor(i * 0.8),
 }));
 
+
+/**
+ * The hard one. A mountain pass: up one side, over the top, and down the other.
+ *
+ * Its difficulty is not in the corners, and that was measured before a metre of
+ * it was drawn. Gradient barely slows this car — flat out it holds 160 km/h on
+ * the level, 131 up a 20% slope and 84 up a 60% one — so a climb can never be
+ * hard on its own, only slow. What costs time on the way up is the stack: four
+ * legs across the face of the slope at 26%, joined by hairpins, each one taken
+ * at a crawl with the whole valley on the outside.
+ *
+ * The descent is the opposite, and it is why this stage exists. There is a
+ * brake fade model in this game that nothing could reach: fade begins at 520 C
+ * and a full `--trace=stops` run peaked at 175. A long enough hill gets there.
+ * Measured on a straight ramp holding 70 km/h — 18% over 1800 m peaks a disc at
+ * 248 C, 26% at 434 C, 30% over 2600 m at 553 C. This drops 280 m over roughly
+ * 1100 m of road at 23-24%, with two real corners in it, so the discs arrive at
+ * the bottom genuinely hot and a driver who has leant on them the whole way
+ * down arrives with nothing.
+ *
+ * Which is what the water at the bottom is for.
+ *
+ * ## Authored as a driven path
+ *
+ * The centreline below was walked rather than typed: every segment starts
+ * pointing where the last one ended. Written as coordinates it had a bare 90
+ * degree kink where the approach met the first leg, and the car arrived at
+ * 109 km/h and stopped dead against it — which showed up as "DNF at 20%" at
+ * four different gradients and radii and looked for all the world like the
+ * hairpins being too tight.
+ */
+const coldwaterPass: StageDef = {
+  id: 'coldwater-pass',
+  name: 'Coldwater Pass',
+  biome: 'alpine',
+  verge: 'grass',
+  bank: 'dirt',
+  hazards: { kinds: ['rock', 'tree', 'pole'], spacing: 17 },
+  // The most expensive stage to enter and the best paid. It is also half again
+  // the length of anything else, so a retirement near the bottom costs more
+  // here than a retirement anywhere else does.
+  entryFee: 1400,
+  payouts: { author: 26000, gold: 16200, silver: 9000, bronze: 5000, finish: 2900 },
+  requiresMedals: 11,
+  checkpoints: 4,
+  // Calibrated against a measured AI lap of 120.8 s, at the same ratios the
+  // other stages use — gold is author x1.10, silver x1.38, bronze x1.81.
+  medals: { author: 124, gold: 136, silver: 171, bronze: 224 },
+  /*
+   * The rockslide, part way down the descent and round a blind right.
+   *
+   * Which side is seeded rather than authored, so the same road is blocked on
+   * the left under one set of conditions and can be blocked on the right under
+   * another, and a driver who has learned the stage still has to look. It
+   * reaches three quarters of the way across its own half of the road, so
+   * there is always a line through — finding it at descent speed on hot brakes
+   * is the whole problem.
+   */
+  slide: { from: 2090, length: 80, reach: 0.75, count: 16 },
+  /*
+   * Meltwater down the inside edge of the run-out.
+   *
+   * At the bottom of the descent, before the bales, and only on one side. Two
+   * wheels in it is slow and it pulls toward the verge, so using it costs
+   * something — and it is the only place on the stage to put a cooked set of
+   * brakes out. Refusing it means arriving at the chicane with whatever the
+   * hill left.
+   */
+  water: [{ from: 2690, to: 2890, side: -1, reach: 0.55 }],
+  /*
+   * The bale chicane on the valley floor.
+   *
+   * Straw, so it is the one thing here cheaper to hit than to go round — a
+   * bale is 120 kg and it moves. It is on the run to the finish because that
+   * run is otherwise flat and straight after a descent that has just taken
+   * everything, and a flat straight is not where this stage should end.
+   */
+  obstacles: [
+    { kind: 'bale', distance: 2950, across: -0.6 },
+    { kind: 'bale', distance: 2966, across: -0.6 },
+    { kind: 'bale', distance: 2982, across: -0.6 },
+    { kind: 'bale', distance: 3014, across: 0.6 },
+    { kind: 'bale', distance: 3030, across: 0.6 },
+    { kind: 'bale', distance: 3046, across: 0.6 },
+    { kind: 'bale', distance: 3078, across: -0.58 },
+    { kind: 'bale', distance: 3094, across: -0.58 },
+  ],
+  /*
+   * The flock, on the summit.
+   *
+   * The only level ground on the stage and the one place a driver has stopped
+   * concentrating, which is exactly where a dozen sheep should be standing. A
+   * sheep is 28 kg against a deer's 130, so driving through them is survivable
+   * and merely expensive — the danger is entirely in what a swerve costs when
+   * the outside of the road is a mountain.
+   */
+  flocks: [{ kind: 'sheep', at: 1470, count: 13, spread: 110 }],
+  variants: [
+    variant('dusk', 'dusk', 'clear', 1.06, 1.3, 11),
+    variant('rain', 'day', 'rain', 1.24, 1.7, 12),
+    // The worst thing in the game: 200 m of climb and a 24% descent, in the
+    // dark, on snow, with fading brakes.
+    variant('night-snow', 'night', 'snowfall', 1.55, 2.4, 13),
+  ],
+  cameraZones: [
+    { from: 0, yaw: Math.PI * 0.08, zoom: 15 },
+    // Pulled back through the stack so two legs are in frame at once: the road
+    // you are on and the road you are about to be on, forty metres above it.
+    { from: 340, yaw: -Math.PI * 0.45, zoom: 19 },
+    { from: 820, yaw: Math.PI * 0.5, zoom: 19 },
+    { from: 1340, yaw: Math.PI * 0.12, zoom: 16 },
+    // Tight on the descent. It is fast, and the slide is somewhere in it.
+    { from: 1700, yaw: Math.PI * 0.06, zoom: 13 },
+    { from: 2900, yaw: -Math.PI * 0.04, zoom: 14 },
+  ],
+  controlPoints: [
+    cp(0, 0, 0.0, 7.0, 'tarmac'),
+    cp(0, 30, 0.0, 7.0, 'tarmac'),
+    cp(0, 60, 0.0, 7.0, 'tarmac'),
+    cp(0, 90, 0.0, 7.0, 'tarmac'),
+    cp(0, 120, 0.0, 7.0, 'tarmac'),
+    cp(0, 150, 0.0, 7.0, 'tarmac'),
+    cp(0, 180, 2.1, 6.8, 'tarmac'),
+    cp(0, 210, 4.2, 6.8, 'tarmac'),
+    cp(0, 240, 6.3, 6.8, 'tarmac'),
+    cp(0, 270, 8.4, 6.8, 'tarmac'),
+    cp(3, 283, 9.2, 7.0, 'tarmac'),
+    cp(10, 294, 10.0, 7.0, 'tarmac'),
+    cp(19, 303, 10.8, 7.0, 'tarmac'),
+    cp(31, 310, 11.5, 7.0, 'tarmac'),
+    cp(43, 313, 12.3, 7.0, 'tarmac'),
+    cp(56, 313, 13.1, 7.0, 'tarmac'),
+    cp(84, 313, 20.3, 6.4, 'tarmac'),
+    cp(111, 313, 27.4, 6.4, 'tarmac'),
+    cp(139, 313, 34.6, 6.4, 'tarmac'),
+    cp(166, 313, 41.7, 6.4, 'tarmac'),
+    cp(194, 313, 48.9, 6.4, 'tarmac'),
+    cp(221, 313, 56.0, 6.4, 'tarmac'),
+    cp(234, 318, 56.8, 7.6, 'tarmac'),
+    cp(243, 328, 57.6, 7.6, 'tarmac'),
+    cp(248, 340, 58.4, 7.6, 'tarmac'),
+    cp(248, 353, 59.2, 7.6, 'tarmac'),
+    cp(243, 366, 60.0, 7.6, 'tarmac'),
+    cp(234, 375, 60.8, 7.6, 'tarmac'),
+    cp(221, 380, 61.6, 7.6, 'tarmac'),
+    cp(208, 380, 62.4, 7.6, 'tarmac'),
+    cp(180, 380, 69.6, 6.4, 'tarmac'),
+    cp(153, 380, 76.7, 6.4, 'tarmac'),
+    cp(125, 380, 83.9, 6.4, 'tarmac'),
+    cp(98, 380, 91.0, 6.4, 'tarmac'),
+    cp(70, 380, 98.2, 6.4, 'tarmac'),
+    cp(43, 380, 105.3, 6.4, 'tarmac'),
+    cp(31, 385, 106.1, 7.6, 'tarmac'),
+    cp(21, 395, 106.9, 7.6, 'tarmac'),
+    cp(16, 407, 107.7, 7.6, 'tarmac'),
+    cp(16, 421, 108.5, 7.6, 'tarmac'),
+    cp(21, 433, 109.3, 7.6, 'tarmac'),
+    cp(31, 442, 110.1, 7.6, 'tarmac'),
+    cp(43, 447, 110.9, 7.6, 'tarmac'),
+    cp(56, 447, 111.7, 7.6, 'tarmac'),
+    cp(84, 447, 118.9, 6.4, 'tarmac'),
+    cp(111, 447, 126.0, 6.4, 'tarmac'),
+    cp(139, 447, 133.2, 6.4, 'tarmac'),
+    cp(166, 447, 140.3, 6.4, 'tarmac'),
+    cp(194, 447, 147.5, 6.4, 'tarmac'),
+    cp(221, 447, 154.6, 6.4, 'tarmac'),
+    cp(234, 453, 155.4, 7.6, 'tarmac'),
+    cp(243, 462, 156.2, 7.6, 'tarmac'),
+    cp(248, 474, 157.0, 7.6, 'tarmac'),
+    cp(248, 488, 157.8, 7.6, 'tarmac'),
+    cp(243, 500, 158.6, 7.6, 'tarmac'),
+    cp(234, 509, 159.4, 7.6, 'tarmac'),
+    cp(221, 515, 160.2, 7.6, 'tarmac'),
+    cp(208, 515, 161.0, 7.6, 'tarmac'),
+    cp(180, 515, 168.2, 6.4, 'tarmac'),
+    cp(153, 515, 175.3, 6.4, 'tarmac'),
+    cp(125, 515, 182.5, 6.4, 'tarmac'),
+    cp(98, 515, 189.6, 6.4, 'tarmac'),
+    cp(70, 515, 196.8, 6.4, 'tarmac'),
+    cp(43, 515, 203.9, 6.4, 'tarmac'),
+    cp(15, 515, 205.0, 7.2, 'gravel'),
+    cp(-12, 515, 206.1, 7.2, 'gravel'),
+    cp(-40, 515, 207.2, 7.2, 'gravel'),
+    cp(-67, 515, 208.3, 7.2, 'gravel'),
+    cp(-80, 517, 208.3, 7.0, 'gravel'),
+    cp(-92, 521, 208.3, 7.0, 'gravel'),
+    cp(-104, 528, 208.3, 7.0, 'gravel'),
+    cp(-114, 536, 208.3, 7.0, 'gravel'),
+    cp(-122, 546, 208.3, 7.0, 'gravel'),
+    cp(-129, 558, 208.3, 7.0, 'gravel'),
+    cp(-133, 570, 208.3, 7.0, 'gravel'),
+    cp(-135, 583, 208.3, 7.0, 'gravel'),
+    cp(-135, 596, 208.3, 7.0, 'gravel'),
+    cp(-135, 623, 207.5, 7.0, 'gravel'),
+    cp(-135, 649, 206.7, 7.0, 'gravel'),
+    cp(-135, 676, 205.9, 7.0, 'gravel'),
+    cp(-135, 704, 199.1, 6.6, 'tarmac'),
+    cp(-135, 733, 192.3, 6.6, 'tarmac'),
+    cp(-135, 761, 185.5, 6.6, 'tarmac'),
+    cp(-135, 789, 178.7, 6.6, 'tarmac'),
+    cp(-135, 818, 171.9, 6.6, 'tarmac'),
+    cp(-135, 846, 165.1, 6.6, 'tarmac'),
+    cp(-135, 874, 158.3, 6.6, 'tarmac'),
+    cp(-135, 903, 151.5, 6.6, 'tarmac'),
+    cp(-135, 931, 144.7, 6.6, 'tarmac'),
+    cp(-135, 959, 137.9, 6.6, 'tarmac'),
+    cp(-135, 988, 131.1, 6.6, 'tarmac'),
+    cp(-135, 1016, 124.3, 6.6, 'tarmac'),
+    cp(-133, 1029, 121.1, 6.4, 'tarmac'),
+    cp(-130, 1042, 117.9, 6.4, 'tarmac'),
+    cp(-124, 1054, 114.7, 6.4, 'tarmac'),
+    cp(-117, 1066, 111.4, 6.4, 'tarmac'),
+    cp(-108, 1076, 108.2, 6.4, 'tarmac'),
+    cp(-98, 1085, 105.0, 6.4, 'tarmac'),
+    cp(-87, 1092, 101.8, 6.4, 'tarmac'),
+    cp(-75, 1098, 98.6, 6.4, 'tarmac'),
+    cp(-62, 1102, 95.3, 6.4, 'tarmac'),
+    cp(-49, 1104, 92.1, 6.4, 'tarmac'),
+    cp(-20, 1108, 85.2, 6.6, 'tarmac'),
+    cp(8, 1113, 78.2, 6.6, 'tarmac'),
+    cp(37, 1117, 71.3, 6.6, 'tarmac'),
+    cp(65, 1122, 64.4, 6.6, 'tarmac'),
+    cp(94, 1127, 57.4, 6.6, 'tarmac'),
+    cp(122, 1131, 50.5, 6.6, 'tarmac'),
+    cp(151, 1136, 43.6, 6.6, 'tarmac'),
+    cp(180, 1140, 36.6, 6.6, 'tarmac'),
+    cp(208, 1145, 29.7, 6.6, 'tarmac'),
+    cp(221, 1149, 26.6, 6.4, 'tarmac'),
+    cp(233, 1155, 23.6, 6.4, 'tarmac'),
+    cp(243, 1163, 20.5, 6.4, 'tarmac'),
+    cp(253, 1172, 17.4, 6.4, 'tarmac'),
+    cp(261, 1183, 14.4, 6.4, 'tarmac'),
+    cp(267, 1195, 11.3, 6.4, 'tarmac'),
+    cp(271, 1207, 8.2, 6.4, 'tarmac'),
+    cp(273, 1221, 5.1, 6.4, 'tarmac'),
+    cp(277, 1248, -1.1, 6.6, 'tarmac'),
+    cp(282, 1275, -7.4, 6.6, 'tarmac'),
+    cp(286, 1301, -13.7, 6.6, 'tarmac'),
+    cp(290, 1328, -20.0, 6.6, 'tarmac'),
+    cp(294, 1355, -26.2, 6.6, 'tarmac'),
+    cp(299, 1382, -32.5, 6.6, 'tarmac'),
+    cp(303, 1409, -38.8, 6.6, 'tarmac'),
+    cp(307, 1436, -45.0, 6.6, 'tarmac'),
+    cp(311, 1463, -51.3, 6.6, 'tarmac'),
+    cp(316, 1490, -57.6, 6.6, 'tarmac'),
+    cp(320, 1517, -63.9, 6.6, 'tarmac'),
+    cp(324, 1543, -65.5, 7.6, 'tarmac'),
+    cp(328, 1570, -67.1, 7.6, 'tarmac'),
+    cp(332, 1596, -68.7, 7.6, 'tarmac'),
+    cp(337, 1622, -70.3, 7.6, 'tarmac'),
+    cp(341, 1649, -71.9, 7.6, 'tarmac'),
+    cp(345, 1675, -73.5, 7.6, 'tarmac'),
+    cp(350, 1704, -73.5, 7.6, 'tarmac'),
+    cp(354, 1732, -73.5, 7.6, 'tarmac'),
+    cp(359, 1761, -73.5, 7.6, 'tarmac'),
+    cp(363, 1789, -73.5, 7.6, 'tarmac'),
+    cp(368, 1818, -73.5, 7.6, 'tarmac'),
+    cp(372, 1846, -73.5, 7.6, 'tarmac'),
+    cp(377, 1875, -73.5, 7.6, 'tarmac'),
+    cp(381, 1903, -73.5, 7.6, 'tarmac'),
+    cp(386, 1932, -73.5, 7.6, 'tarmac'),
+  ],
+};
+
 export const STAGES: StageDef[] = [
   pineLoop,
   quarryRun,
@@ -581,6 +845,7 @@ export const STAGES: StageDef[] = [
   vieuxVillage,
   scrubbedFlats,
   grandTraverse,
+  coldwaterPass,
 ];
 
 export const stageById = (id: string): StageDef => {

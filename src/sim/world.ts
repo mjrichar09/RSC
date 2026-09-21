@@ -15,7 +15,7 @@ import { CLEAR_DAY, type Conditions, ambientTemperature } from './conditions.js'
 import { DamageModel, type DamageOptions, impactPointFromForce } from './damage.js';
 import { DebrisModel, type DetachEvent, type PartId } from './debris.js';
 import { Ambient } from './ambient.js';
-import { DEER_MASS, Wildlife } from './wildlife.js';
+import { Wildlife } from './wildlife.js';
 import { Markers, Signs } from './markers.js';
 import { type Quat, type Vec3, add, lerpVec, rotate, rotateInverse, slerp, v3 } from './math.js';
 import { type Stage, type StageProp } from './stage.js';
@@ -406,6 +406,7 @@ export class SimWorld {
             // Seeded from the stage id, so a stage's animals stand in the same
             // places on every load — the same rule its hazards follow.
             random: stageStream(this.stage.def.id),
+            ...(this.stage.def.flocks ? { flocks: this.stage.def.flocks } : {}),
           })
         : null;
     this.events = wantsDamage ? new RAPIER.EventQueue(true) : null;
@@ -671,12 +672,15 @@ export class SimWorld {
             // Felt and heard, not just billed: this is what the camera shake
             // and the impact sound read.
             this.noteImpact(hit.impulse, v3(0, 0, 1.8));
-            this.notices.push('Deer strike');
+            this.notices.push(hit.kind === 'sheep' ? 'Sheep strike' : 'Deer strike');
           }
           // And the car loses the momentum it gave the deer, which at speed is
           // a couple of metres per second and a very unwelcome shove.
+          // The animal's own mass, not a deer's: a sheep shoves the car a
+          // fifth as hard, which is the whole difference between driving
+          // through a flock and hitting something that ends the run.
           car.vehicle.body.applyImpulse(
-            { x: -hit.push.x * DEER_MASS * speed, y: 0, z: -hit.push.z * DEER_MASS * speed },
+            { x: -hit.push.x * hit.mass * speed, y: 0, z: -hit.push.z * hit.mass * speed },
             true,
           );
         }

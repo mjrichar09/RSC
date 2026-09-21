@@ -23,7 +23,19 @@ import { type Quat, type Vec3, add, rotateInverse, scale, v3 } from './math.js';
  */
 export type AnimalState = 'grazing' | 'alert' | 'bolting' | 'struck' | 'gone';
 
+/**
+ * What is standing in the verge.
+ *
+ * Two, and the difference between them is mass. A deer is the accident that
+ * ends a run; a flock of sheep is thirty kilos apiece and mostly an
+ * embarrassment — but there are a dozen of them across the road at the summit,
+ * and the one thing worse than hitting a sheep is swerving off a mountain to
+ * avoid one.
+ */
+export type AnimalKind = 'deer' | 'sheep';
+
 export interface Animal {
+  kind: AnimalKind;
   /** Distance along the stage where it started, metres. */
   distance: number;
   /** Which verge it grazes on: -1 left, 1 right. */
@@ -51,15 +63,50 @@ export interface Animal {
   groundY: number;
 }
 
+/**
+ * A flock standing together at one place on the stage.
+ *
+ * Scattered wildlife is a surprise you meet one at a time. A flock is a wall
+ * of them, and it is placed rather than seeded because where it stands is a
+ * decision about the stage — on Coldwater Pass it is the summit, which is the
+ * one piece of level road and the one place a driver has stopped concentrating.
+ */
+export interface FlockSpec {
+  kind: AnimalKind;
+  /** Metres along the stage. */
+  at: number;
+  /** How many, spread over `spread` metres of road. */
+  count: number;
+  spread: number;
+}
+
 export interface WildlifeOptions {
   /** How many animals per kilometre of stage. */
   perKm?: number;
+  /** Animals standing together, placed rather than scattered. */
+  flocks?: readonly FlockSpec[];
   /** Deterministic stream. Placement and behaviour both draw from it. */
   random?: () => number;
 }
 
 /** Mass of an adult deer, kg. Heavy enough that hitting one is an accident. */
 export const DEER_MASS = 130;
+
+/**
+ * Mass of a hill sheep, kg.
+ *
+ * A fifth of a deer, so a strike is a fifth of the impulse and a fraction of
+ * the bill. Deliberately survivable: the flock exists to be driven *through*
+ * at a price, not to end the stage. `npm run crash -- --deer=` prices the
+ * other one; this is the same curve with a smaller mass in it.
+ */
+export const SHEEP_MASS = 28;
+
+/** What each species weighs, for the strike. */
+export const ANIMAL_MASS: Record<AnimalKind, number> = {
+  deer: DEER_MASS,
+  sheep: SHEEP_MASS,
+};
 /**
  * How much harder a strike loads the car's front than its momentum change
  * suggests.
@@ -139,8 +186,8 @@ const STRIKE_KNEE = 27_000;
  * world does; that harness computing the raw product itself is how the
  * calibration and the game drifted apart in the first place.
  */
-export function strikeImpulse(speed: number): number {
-  const raw = DEER_MASS * Math.abs(speed) * STRIKE_CONCENTRATION;
+export function strikeImpulse(speed: number, kind: AnimalKind = 'deer'): number {
+  const raw = ANIMAL_MASS[kind] * Math.abs(speed) * STRIKE_CONCENTRATION;
   if (raw <= STRIKE_KNEE) return raw;
   const room = STRIKE_CEILING - STRIKE_KNEE;
   return STRIKE_KNEE + room * (1 - Math.exp(-(raw - STRIKE_KNEE) / room));
@@ -185,6 +232,7 @@ export class Wildlife {
     this.spline = spline;
     this.random = options.random ?? (() => 0.5);
     const perKm = options.perKm ?? 3;
+    for (const flock of options.flocks ?? []) this.placeFlock(flock);
     const count = Math.max(0, Math.round((length / 1000) * perKm));
 
     for (let i = 0; i < count; i++) {
@@ -200,6 +248,7 @@ export class Wildlife {
       const sample = this.spline.at(distance);
       const offset = sample.width * VERGE_OFFSET + this.random() * 2;
       this.animals.push({
+        kind: 'deer',
         distance,
         side,
         state: 'grazing',
@@ -223,6 +272,37 @@ export class Wildlife {
    * speed in m/s — a deer is far more likely to panic in front of something
    * arriving fast.
    */
+  /**
+   * Stand a flock across the verges at one point on the stage.
+   *
+   * Both sides, because a flock down one side is something to drive past and a
+   * flock across the road is something to drive through. Spread along the road
+   * as well as across it so it reads as animals rather than as a fence.
+   */
+  private placeFlock(spec: FlockSpec): void {
+    for (let i = 0; i < spec.count; i++) {
+      const along = spec.at + (this.random() - 0.5) * spec.spread;
+      const sample = this.spline.at(Math.max(0, along));
+      const side: -1 | 1 = this.random() < 0.5 ? -1 : 1;
+      // Closer in than the scattered animals: these are on the road's edge and
+      // wandering onto it, which is what a flock on an open summit does.
+      const offset = sample.width * (0.55 + this.random() * 0.6);
+      this.animals.push({
+        kind: spec.kind,
+        distance: along,
+        side,
+        state: 'grazing',
+        position: add(sample.position, scale(sample.left, offset * side)),
+        yaw: this.random() * Math.PI * 2,
+        crossed: 0,
+        velocity: v3(0, 0, 0),
+        roll: 0,
+        spin: 0,
+        groundY: sample.position.y,
+      });
+    }
+  }
+
   update(dt: number, carDistance: number, carSpeed: number): void {
     for (const animal of this.animals) {
       if (animal.state === 'gone') continue;
@@ -280,7 +360,7 @@ export class Wildlife {
     carPosition: Vec3,
     carVelocity: Vec3,
     carRotation: Quat,
-  ): { impulse: number; push: Vec3 } | null {
+  ): { impulse: number; push: Vec3; kind: AnimalKind; mass: number } | null {
     for (const animal of this.animals) {
       // Already hit, or gone. A struck animal is scenery from that moment: it
       // is thrown down the road ahead of you and may well land on the racing
@@ -313,7 +393,9 @@ export class Wildlife {
       animal.spin = (this.random() - 0.5) * 9;
       animal.groundY = animal.position.y;
       return {
-        impulse: strikeImpulse(speed),
+        kind: animal.kind,
+        mass: ANIMAL_MASS[animal.kind],
+        impulse: strikeImpulse(speed, animal.kind),
         // Pushed along the car's own travel: the deer goes over the bonnet.
         push: speed > 0.1 ? v3(carVelocity.x / speed, 0, carVelocity.z / speed) : v3(0, 0, 1),
       };

@@ -220,6 +220,15 @@ anyone skipping a checkpoint.
 ### Conditions
 
 A stage can be raced under different **variants** — clear daylight, dusk, night,
+**Coldwater Pass** is the hard one: a 3.2 km mountain pass, up a stack of four
+hairpins at 26%, over a summit where a flock of sheep is standing, and down the
+far side at 24% for a kilometre. The descent is the point. There is a brake fade
+model in this game that no other stage can reach — fade starts at 520 °C and a
+hard stopping run peaks at 175 — and a hill this long gets there, so the discs
+arrive at the bottom genuinely cooked. There is meltwater down one edge of the
+run-out to put them out again, which costs grip and time to use, and a rockslide
+part way down that lands on a side the stage picks for itself.
+
 rain, fog, night snow — and each one is its own race with its own record, ghost,
 medals, entry fee and payout. Weather changes grip as well as visibility, and it
 does so per surface rather than as a flat multiplier: rain costs tarmac far more
