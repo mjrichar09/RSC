@@ -93,6 +93,16 @@ const FINISH_BAND = 4;
  */
 const GATE_RANGE = 30;
 
+/**
+ * How far past a gate, along the road, counts as having gone past it.
+ *
+ * Generous, because the penalty for being wrong is telling somebody to turn
+ * round when they did not need to. A car crosses a gate within a metre or two
+ * of its arc length, so anything the far side of this by a bus length either
+ * never went through it or went round it.
+ */
+const PAST_GATE = 25;
+
 /** Where a point sits relative to a gate: through it, and across it. */
 function relativeTo(gate: Checkpoint, point: Vec3): { through: number; across: number } {
   const dx = point.x - gate.position.x;
@@ -266,11 +276,30 @@ export class Race {
         continue;
       }
 
-      // Past it and it was never taken. Said this way round rather than as
-      // "crossed the plane outside the gate", because a car that went round the
-      // outside by fifty metres never crossed anything — and that is exactly
-      // the car that most needs telling.
-      if (now.through > GATE_RANGE && !this.cleared.has(i) && !this.missed.includes(i)) {
+      /*
+       * Past it and it was never taken.
+       *
+       * Measured along the *road*, not along the gate's own normal. Said this
+       * way round rather than as "crossed the plane outside the gate" because
+       * a car that went round the outside by fifty metres never crossed
+       * anything, and that is the car that most needs telling — arc length
+       * still catches it, because going round the outside still takes you past
+       * the point on the road the gate stands at.
+       *
+       * The normal was the original test and it is wrong on any stage that
+       * doubles back. `through` is a dot product against an infinite plane, so
+       * a gate on a returning leg of a switchback faces back down the mountain
+       * and reads as *behind* you from the start line: on Coldwater Pass the
+       * car was told it had missed checkpoint 1 while sitting on the grid 419 m
+       * away from it, and checkpoint 2 from the middle of the road at 520 m.
+       * The same fault as the infinite plane the crossing test already guards
+       * against, in the one place the guard was never applied.
+       */
+      if (
+        this.furthest > gate.distance + PAST_GATE &&
+        !this.cleared.has(i) &&
+        !this.missed.includes(i)
+      ) {
         this.missed.push(i);
       }
     }

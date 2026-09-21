@@ -201,3 +201,69 @@ describe('the clock', () => {
     expect(race.time).toBeCloseTo(0.5, 6);
   });
 });
+
+/**
+ * Gates on a stage that doubles back on itself.
+ *
+ * Coldwater Pass climbs a stack of switchbacks, so a checkpoint on a returning
+ * leg faces back down the mountain. "Past the gate" was a dot product against
+ * the gate's own normal, and an infinite plane does not care that the car is
+ * four hundred metres away and has not started yet: sitting on the grid, the
+ * game said checkpoint 1 had been missed, and checkpoint 2 went the same way
+ * from the middle of the road. Measured along the road instead, which is the
+ * only thing that stays true however the road is shaped.
+ */
+describe('a stage that doubles back', () => {
+  const pass = new Stage(stageById('coldwater-pass'));
+
+  /** The car at `d` along, `off` metres to the left of the centreline. */
+  const on = (d: number, off = 0): VehicleState => {
+    const s = pass.spline.at(Math.min(d, pass.length));
+    return {
+      position: {
+        x: s.position.x + s.left.x * off,
+        y: s.position.y,
+        z: s.position.z + s.left.z * off,
+      },
+      speed: 25,
+    } as VehicleState;
+  };
+
+  it('calls nothing missed before the car has gone anywhere', () => {
+    const race = new Race(pass);
+    race.start();
+    race.update(on(5), 1 / 120);
+    expect(race.missed).toEqual([]);
+  });
+
+  it('still calls nothing missed part way up the climb', () => {
+    // The second gate read as behind you from the middle of the road, five
+    // hundred metres before reaching it.
+    const race = new Race(pass);
+    race.start();
+    for (let d = 0; d <= 600; d += 2) race.update(on(d), 1 / 120);
+    expect(race.missed).toEqual([]);
+  });
+
+  it('gets round cleanly down the middle', () => {
+    const race = new Race(pass);
+    race.start();
+    for (let d = 0; d <= pass.length; d += 1) race.update(on(d), 1 / 120);
+    expect(race.missed).toEqual([]);
+    expect(race.phase).toBe('finished');
+  });
+
+  it('still catches a gate gone round the outside', () => {
+    // The whole reason the rule exists. Swing wide of the second checkpoint
+    // and it has to be reported — and the finish has to stay shut.
+    const target = pass.checkpoints[1]!.distance;
+    const race = new Race(pass);
+    race.start();
+    for (let d = 0; d <= pass.length; d += 1) {
+      const wide = Math.abs(d - target) < 30 ? pass.spline.at(d).width + 18 : 0;
+      race.update(on(d, wide), 1 / 120);
+    }
+    expect(race.missed).toEqual([1]);
+    expect(race.phase).not.toBe('finished');
+  });
+});
