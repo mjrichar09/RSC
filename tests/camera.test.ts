@@ -122,14 +122,16 @@ describe('corner boards', () => {
   it('warns before the corner, on the outside of the bend', () => {
     for (const def of STAGES.slice(0, 4)) {
       const stage = new Stage(def);
-      for (const sign of stage.signs) {
-        expect(sign.distance).toBeLessThan(sign.corner.entry);
+      // Corner boards only. A stage can also carry authored hazard boards,
+      // which warn about what is *on* the road and have no corner behind them.
+      for (const sign of stage.signs.filter((s) => s.corner)) {
+        expect(sign.distance).toBeLessThan(sign.corner!.entry);
         // Outside of the bend: a left-hander's board is on the right verge,
         // which is `lateral` negative, because lateral is positive to the left.
         const here = stage.progressAt(sign.position);
         expect(here.onRoad).toBe(false);
         const side = Math.sign(here.lateral);
-        expect(side).toBe(sign.corner.direction === 'left' ? -1 : 1);
+        expect(side).toBe(sign.corner!.direction === 'left' ? -1 : 1);
       }
     }
   });

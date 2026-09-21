@@ -1353,6 +1353,84 @@ export class StartLightsView {
  */
 const SIGN_TEXTURES = new Map<string, THREE.CanvasTexture>();
 
+/**
+ * A hazard board: a warning triangle with a pictogram in it.
+ *
+ * Yellow rather than the corner boards' palette, because it is saying
+ * something different — a corner board tells you the shape of the road ahead
+ * and these tell you there is something *on* it. At race distance under an
+ * orthographic camera the only things that survive are the outline and one
+ * strong shape inside it, so that is all either of them is.
+ */
+function warningTexture(kind: 'slide' | 'chicane'): THREE.CanvasTexture {
+  const cached = SIGN_TEXTURES.get(`warn:${kind}`);
+  if (cached) return cached;
+
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const draw = canvas.getContext('2d')!;
+
+  // The triangle, filled yellow with a heavy dark border.
+  draw.fillStyle = '#f2c14e';
+  draw.strokeStyle = '#1b2129';
+  draw.lineWidth = 9;
+  draw.beginPath();
+  draw.moveTo(size / 2, 12);
+  draw.lineTo(size - 10, size - 16);
+  draw.lineTo(10, size - 16);
+  draw.closePath();
+  draw.fill();
+  draw.stroke();
+
+  draw.fillStyle = '#1b2129';
+  draw.strokeStyle = '#1b2129';
+  if (kind === 'slide') {
+    // A slope with rocks coming off it. Read as a shape, not a picture: a
+    // wedge on one side and three lumps tumbling away from it.
+    draw.beginPath();
+    draw.moveTo(34, 88);
+    draw.lineTo(58, 46);
+    draw.lineTo(58, 88);
+    draw.closePath();
+    draw.fill();
+    for (const [x, y, r] of [
+      [70, 58, 7],
+      [84, 74, 9],
+      [66, 84, 6],
+    ] as const) {
+      draw.beginPath();
+      draw.arc(x, y, r, 0, Math.PI * 2);
+      draw.fill();
+    }
+  } else {
+    // A zigzag: left, then right. The shape of the thing it is warning about.
+    draw.lineWidth = 11;
+    draw.lineJoin = 'round';
+    draw.lineCap = 'round';
+    draw.beginPath();
+    draw.moveTo(50, 92);
+    draw.lineTo(50, 74);
+    draw.lineTo(78, 62);
+    draw.lineTo(78, 50);
+    draw.stroke();
+    // The arrowhead on the end, so it reads as a direction and not a bolt.
+    draw.beginPath();
+    draw.moveTo(78, 38);
+    draw.lineTo(88, 54);
+    draw.lineTo(68, 54);
+    draw.closePath();
+    draw.fill();
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 4;
+  SIGN_TEXTURES.set(`warn:${kind}`, texture);
+  return texture;
+}
+
 function signTexture(direction: 'left' | 'right', severity: number): THREE.CanvasTexture {
   const key = `${direction}${severity}`;
   const cached = SIGN_TEXTURES.get(key);
@@ -1554,7 +1632,9 @@ function buildSigns(stage: Stage): SignsView {
     const board = new THREE.Mesh(
       boardGeo,
       new THREE.MeshBasicMaterial({
-        map: signTexture(sign.corner.direction, sign.corner.severity),
+        map: sign.warn
+          ? warningTexture(sign.warn)
+          : signTexture(sign.corner!.direction, sign.corner!.severity),
         // Visible from behind too: with a camera that changes zone the board
         // would otherwise vanish on half the stage.
         side: THREE.DoubleSide,

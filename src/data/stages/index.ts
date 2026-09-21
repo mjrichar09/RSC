@@ -645,6 +645,19 @@ const coldwaterPass: StageDef = {
    */
   water: [{ from: 2690, to: 2890, side: -1, reach: 0.55 }],
   /*
+   * Hazard boards, for the two things a corner board cannot warn about.
+   *
+   * Both are placed far enough back to be acted on at descent speed rather
+   * than merely seen: about 90 m, which at 130 km/h is two and a half seconds.
+   * The slide board cannot say which side the boulders are on, because the
+   * stage does not decide that until the run starts — and that is the point of
+   * it. It says there is something there and you have to look.
+   */
+  warnings: [
+    { at: 2000, kind: 'slide' },
+    { at: 2860, kind: 'chicane' },
+  ],
+  /*
    * The bale chicane on the valley floor.
    *
    * Straw, so it is the one thing here cheaper to hit than to go round — a

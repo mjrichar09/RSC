@@ -61,13 +61,38 @@ export type PropKind =
   | 'pier';
 
 /** A corner warning board standing on the verge. */
+/**
+ * What a board is warning about, when it is not warning about a corner.
+ *
+ * The corner boards are derived — the stage finds its own corners and puts a
+ * board before each. These are authored, because the things they warn about
+ * are authored: a rockslide is somewhere a stage decided to put boulders, and
+ * a chicane is somewhere a stage decided to put bales.
+ */
+export type WarningKind = 'slide' | 'chicane';
+
 export interface CornerSign {
   /** Where it stands, in metres along the stage. */
   distance: number;
   position: Vec3;
   /** Facing, radians about Y — turned to face the camera, not the road. */
   yaw: number;
-  corner: Corner;
+  /** The corner it warns about, on a corner board. */
+  corner?: Corner;
+  /** What it warns about, on a hazard board. */
+  warn?: WarningKind;
+}
+
+/** A hazard board the stage author asked for, rather than one derived. */
+export interface WarningSign {
+  /** Where the board stands, metres along the stage. */
+  at: number;
+  kind: WarningKind;
+  /**
+   * Which verge to stand it on: -1 left, 1 right. Defaults to the outside of
+   * whatever the road is doing, which is where a driver is already looking.
+   */
+  side?: -1 | 1;
 }
 
 /**
@@ -263,6 +288,8 @@ export interface StageDef {
   obstacles?: RoadObstacle[];
   /** Standing water along one edge of the road. */
   water?: WetPatch[];
+  /** Hazard boards, for the things a corner board would not know about. */
+  warnings?: WarningSign[];
   /** Animals standing together somewhere on the stage. */
   flocks?: FlockSpec[];
   /** A rockslide across one side of the road. The side is seeded. */
@@ -810,6 +837,39 @@ export class Stage {
    * previous corner is close, so a board never appears before the corner it
    * belongs to has been left.
    */
+  /**
+   * Where a board stands and which way it faces, shared by both kinds.
+   *
+   * The facing is the *camera's*, not the road's. A board turned to face the
+   * oncoming car is seen almost edge-on from an isometric view and renders as
+   * a bright sliver that reads as nothing at all.
+   */
+  private signAt(at: number, outward: -1 | 1): { position: Vec3; yaw: number } {
+    const sample = this.spline.at(Math.max(0, Math.min(at, this.length)));
+    const offset = sample.width + VERGE_WIDTH * 0.7;
+    const base = add(sample.position, scale(sample.left, offset * outward));
+    let yaw = this.cameraZones[0]?.yaw ?? 0;
+    for (const zone of this.cameraZones) {
+      if (at >= zone.from && zone.yaw !== undefined) yaw = zone.yaw;
+    }
+    return { position: v3(base.x, base.y - VERGE_DROP * 0.7, base.z), yaw };
+  }
+
+  /**
+   * The boards a stage asked for by hand.
+   *
+   * A rockslide and a chicane are both things you cannot see until you are in
+   * them — the slide sits round a blind bend and the bales are on a flat
+   * straight after a descent that has taken all your attention. A corner board
+   * warns about the shape of the road; these warn about what is on it.
+   */
+  private warningSigns(): CornerSign[] {
+    return (this.def.warnings ?? []).map((w) => {
+      const outward: -1 | 1 = w.side ?? 1;
+      return { distance: w.at, ...this.signAt(w.at, outward), warn: w.kind };
+    });
+  }
+
   private buildSigns(): CornerSign[] {
     const WARNING = 55;
     const signs: CornerSign[] = [];
@@ -848,7 +908,7 @@ export class Stage {
         corner,
       });
     }
-    return signs;
+    return [...signs, ...this.warningSigns()];
   }
 
   /**

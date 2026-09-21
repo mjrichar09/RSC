@@ -425,7 +425,22 @@ html, body {
   visibility: hidden;
   transition: opacity 180ms ease, transform 180ms ease;
 }
-.race-panel.is-open { opacity: 1; visibility: visible; transform: translate(-50%, -50%) scale(1); }
+.race-panel.is-open {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, -50%) scale(1);
+  /*
+   * Interactive once it is up, so it can be scrolled.
+   *
+   * `#hud` is `pointer-events: none` and only `.finish-actions` opted back in,
+   * which is right while a race is running — the panel must never eat a click
+   * meant for the road. It is wrong the moment the panel is open: on a phone a
+   * long repair bill makes it taller than the screen, and a thumb dragged down
+   * it passed straight through to the game, so the retry button below the fold
+   * could not be reached at all. There is no road to click on by then.
+   */
+  pointer-events: auto;
+}
 
 .finish-medal { font-size: 14px; letter-spacing: 0.28em; color: var(--accent); }
 .medal-author .finish-medal { color: #b06bff; }
@@ -472,7 +487,7 @@ html, body {
   gap: 10px;
   justify-content: center;
   margin-top: 20px;
-  /* The panel itself is inert so it never eats a click meant for the road. */
+  /* Kept explicit: the panel only becomes interactive once it is open. */
   pointer-events: auto;
 }
 .finish-btn {
@@ -510,7 +525,26 @@ html, body {
 
 @media (max-height: 500px) {
   .race-panel { padding: 12px 18px; min-width: 240px; max-height: 92%; overflow-y: auto; touch-action: pan-y; }
-  .finish-actions { margin-top: 12px; }
+  /*
+   * The buttons stay on screen however long the bill is.
+   *
+   * Scrolling worked once the panel stopped being inert, but a retry button
+   * you have to go looking for is still the wrong answer at the end of a run
+   * you want to start again. Stuck to the bottom of the scrolling panel, they
+   * are simply always there — measured at 844x390 with a written-off car, the
+   * bill ran the panel to 407 px inside 357 and put both buttons at 368-412,
+   * below a 390 px screen.
+   *
+   * Opaque, because the bill scrolls underneath them and two lines of text
+   * through a button is worse than either.
+   */
+  .finish-actions {
+    position: sticky;
+    bottom: -12px;
+    margin-top: 12px;
+    padding: 8px 0 10px;
+    background: rgba(10, 13, 18, 0.97);
+  }
 }
 
 .race-delta {

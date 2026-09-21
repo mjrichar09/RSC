@@ -75,8 +75,21 @@ export class Hud {
     this.drift.textContent = deg > 12 ? `${deg.toFixed(0)}° DRIFT` : '';
     this.drift.classList.toggle('big', deg > 35);
 
-    const ground = state.wheels.find((w) => w.grounded);
-    const surface = ground?.surface.id;
+    /*
+     * The worst surface under the car, not the first wheel that happens to be
+     * grounded.
+     *
+     * This read `wheels.find(w => w.grounded)`, which is the front left — so a
+     * car with two wheels in standing water and two on dry road reported dry
+     * road, at exactly the moment the driver most wants to know why it has
+     * stopped gripping. Whichever surface has the least grip is the one
+     * deciding what the car does, so that is the one worth naming.
+     */
+    const worst = state.wheels.reduce<VehicleState['wheels'][number] | null>(
+      (low, w) => (w.grounded && (!low || w.surface.grip < low.surface.grip) ? w : low),
+      null,
+    );
+    const surface = worst?.surface.id;
     this.surfaceEl.textContent = state.airborne
       ? 'airborne'
       : surface

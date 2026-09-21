@@ -539,6 +539,34 @@ try {
   await tight.evaluate(() => window.RSC!.finishWithAi(240));
   await tight.waitForSelector('.race-panel.is-open', { timeout: 120_000 });
 
+  /*
+   * On screen without being scrolled to.
+   *
+   * The check below calls `scrollIntoView` before it measures, which is fair
+   * for "can this be tapped" and hides the thing that was actually broken: a
+   * written-off car makes the repair bill long enough to run the panel past
+   * the bottom of a 390 px screen, and the panel was `pointer-events: none`
+   * inherited from `#hud`, so a thumb dragged down it went straight through to
+   * the game and the buttons below the fold could not be reached at all.
+   * Measured at the time: buttons at 368-412 in a 390 px viewport.
+   *
+   * The actions row is stuck to the bottom of the panel now, so this asks the
+   * blunt question — is it on screen as it stands.
+   */
+  const offscreen = await tight.evaluate(() => {
+    const out: string[] = [];
+    const h = window.innerHeight;
+    for (const el of Array.from(document.querySelectorAll<HTMLElement>('.finish-btn'))) {
+      const b = el.getBoundingClientRect();
+      const label = (el.textContent ?? '').replace(/\s+/g, ' ').trim();
+      if (b.top < 0 || b.bottom > h) out.push(`${label} at ${Math.round(b.top)}-${Math.round(b.bottom)} of ${h}`);
+    }
+    return out;
+  });
+  if (offscreen.length) {
+    fail(`a finish button is off screen before scrolling: ${offscreen.join('; ')}`);
+  }
+
   const unreachable = await tight.evaluate(() => {
     const bad: string[] = [];
     for (const el of Array.from(document.querySelectorAll<HTMLElement>('.finish-btn'))) {
