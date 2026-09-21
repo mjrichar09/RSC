@@ -227,7 +227,8 @@ model in this game that no other stage can reach — fade starts at 520 °C and 
 hard stopping run peaks at 175 — and a hill this long gets there, so the discs
 arrive at the bottom genuinely cooked. There is meltwater down one edge of the
 run-out to put them out again, which costs grip and time to use, and a rockslide
-part way down that lands on a side the stage picks for itself.
+part way down that lands on a different side every run — the one hazard in the
+game you cannot learn, and the only one that is not the same twice.
 
 rain, fog, night snow — and each one is its own race with its own record, ghost,
 medals, entry fee and payout. Weather changes grip as well as visibility, and it

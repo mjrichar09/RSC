@@ -22,10 +22,11 @@ describe('the rockslide', () => {
     expect([-1, 1]).toContain(stage.slideSide);
   });
 
-  it('lands in the same place for everyone racing the same pairing', () => {
-    // The whole reason it is seeded rather than random. A hazard that moved
-    // between runs would make a ghost a recording of a different road and the
-    // leaderboard a comparison of different races.
+  it('is the same road twice when no seed is given', () => {
+    // The property every headless caller depends on. `npm run stages`, the
+    // medal calibration and the stage tests all build a `Stage` with no seed,
+    // and they have to drive the same road each time or none of their numbers
+    // mean anything. The randomness is at the call site that asks for it.
     const again = new Stage(def);
     expect(again.slideSide).toBe(stage.slideSide);
     const boulders = (s: Stage) =>
@@ -33,16 +34,25 @@ describe('the rockslide', () => {
     expect(boulders(again)).toEqual(boulders(stage));
   });
 
-  it('can land on the other side under different conditions', () => {
-    // `loadStage` seeds with the variant, so the dry road and the wet road are
-    // allowed to differ — and across the seeds there has to be at least one of
-    // each, or "which side" was never a question.
-    const sides = new Set(
-      ['day-clear', 'dusk', 'rain', 'night-snow', 'a', 'b', 'c'].map(
-        (v) => new Stage(def, `${def.id}:${v}`).slideSide,
-      ),
-    );
+  it('re-rolls from one run to the next', () => {
+    // `loadStage` seeds with the run number, so an attempt is not the attempt
+    // before it. Over a run of seeds both sides have to come up, or "which
+    // side" was never a question — and the boulders have to move with it, not
+    // just the flag.
+    const sides = new Set<number>();
+    const layouts = new Set<string>();
+    for (let run = 0; run < 12; run++) {
+      const s = new Stage(def, `${def.id}:day-clear:${run}`);
+      sides.add(s.slideSide);
+      layouts.add(
+        s.props
+          .filter((p) => p.kind === 'rock')
+          .map((p) => p.position.x.toFixed(1))
+          .join(),
+      );
+    }
     expect(sides.size).toBe(2);
+    expect(layouts.size).toBeGreaterThan(6);
   });
 
   it('always leaves a way through', () => {

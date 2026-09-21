@@ -114,6 +114,8 @@ interface HarnessHooks {
    */
   showRecordGhost: () => Promise<Record<string, unknown>>;
   draw: () => void;
+  /** Which side this run's rockslide came down, or 0 where there is none. */
+  slideSide: () => number;
   /** Text snapshot for the harness: cheaper to check than a screenshot. */
   status: () => Record<string, unknown>;
   /**
@@ -591,6 +593,18 @@ const params = new URLSearchParams(location.search);
     tagLayer.innerHTML = '';
   };
 
+  /**
+   * Which run this is, for anything a stage re-rolls.
+   *
+   * Started somewhere arbitrary rather than at zero, or the first attempt of
+   * every session would find the rockslide on the same side and the surprise
+   * would only ever be a surprise once. `Math.random` is fine here and nowhere
+   * below it: `main.ts` is not `sim/` or `game/`, and what it produces is fed
+   * in as a *seed*, so the stage itself stays a pure function of what it was
+   * given and every headless run — which passes no seed — is untouched.
+   */
+  let runIndex = Math.floor(Math.random() * 1_000_000);
+
   const loadStage = (
     stageId: string,
     variantId?: string,
@@ -601,12 +615,12 @@ const params = new URLSearchParams(location.search);
 
     const def = stageById(stageId);
     variant = findVariant(def, variantId);
-    // Seeded with the variant, so anything the stage decides for itself can
-    // differ between conditions and still be the same for everyone racing that
-    // pairing — which is what keeps a ghost a recording of the road it was set
-    // on and the board a comparison of the same race. Coldwater Pass uses it
-    // to decide which side its rockslide came down.
-    stage = new Stage(def, `${def.id}:${variant.id}`);
+    // Seeded with the variant *and the run*, so a stage that re-rolls anything
+    // gets a fresh answer every attempt. Coldwater Pass decides which side its
+    // rockslide came down from this. Headless callers pass no seed at all and
+    // get the stable default, which is what keeps `npm run stages`, the medal
+    // calibration and every test driving the same road twice.
+    stage = new Stage(def, `${def.id}:${variant.id}:${runIndex}`);
 
     // Conditions light the scene, set the fog, and decide how much the
     // headlights matter — which is what finally gives the `lights` component
@@ -723,7 +737,15 @@ const params = new URLSearchParams(location.search);
   tuningPanel = new TuningPanel(hudRoot, world!.vehicle.tuning);
   controls.onToggleTuning = () => tuningPanel!.toggle();
 
-  const restart = () => {
+  /**
+   * Put the car back on the line.
+   *
+   * `reroll` is off for the screenshot harness only. A stage that re-rolls its
+   * hazards has to be *rebuilt* to get them — the slide is colliders and a mesh,
+   * decided when the `Stage` is constructed — and `seekStage` restarts a stage
+   * it has just attached a ghost to, which a reload would drop.
+   */
+  const restart = (reroll = true) => {
     if (stage && race) {
       // Each attempt on a paid stage costs its fee again: that is what makes a
       // committed run different from an idle retry. The free stage stays freely
@@ -740,6 +762,19 @@ const params = new URLSearchParams(location.search);
           return;
         }
         void career.enter(currentTarget());
+      }
+      /*
+       * A stage that re-rolls something is reloaded rather than reset.
+       *
+       * Never in a network race: every car is stepping the same world, and one
+       * client quietly rebuilding its colliders is a desync. And never when the
+       * caller asked for the road to be left alone.
+       */
+      if (reroll && !session && stage.def.slide) {
+        runIndex++;
+        loadStage(stage.def.id, variant?.id);
+        stuckFor = 0;
+        return;
       }
       world.vehicle.reset(stage.start.position, stage.start.heading);
       race.reset();
@@ -2070,9 +2105,10 @@ const params = new URLSearchParams(location.search);
       // none of them should sit through a countdown.
       lights.skip();
       // Reuse the loaded stage when possible: reloading would drop the ghost
-      // that seedGhostAndSeek has just attached.
+      // that seedGhostAndSeek has just attached — which is also why this asks
+      // for no re-roll.
       if (!stage || stage.def.id !== stageId) loadStage(stageId);
-      else restart();
+      else restart(false);
       const driver = new Driver(stage!, { gripBudget: grip, tuning: world.vehicle.tuning });
       for (let i = 0; i < 60; i++) world.step(NEUTRAL_INPUT);
       world.time = 0;
@@ -2247,6 +2283,9 @@ const params = new URLSearchParams(location.search);
       raceHud.setNotes(cornersAhead(stage.corners, race.furthest, 2));
       minimap.update(world.state().position, race.progress);
       return this.status();
+    },
+    slideSide() {
+      return stage?.slideSide ?? 0;
     },
     status() {
       const d = world.damage;

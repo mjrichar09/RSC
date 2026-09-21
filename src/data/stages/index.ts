@@ -623,12 +623,15 @@ const coldwaterPass: StageDef = {
   /*
    * The rockslide, part way down the descent and round a blind right.
    *
-   * Which side is seeded rather than authored, so the same road is blocked on
-   * the left under one set of conditions and can be blocked on the right under
-   * another, and a driver who has learned the stage still has to look. It
+   * Which side is re-rolled every run, so the stage cannot be learned — the
+   * one thing here a driver has to actually look for rather than remember. It
    * reaches three quarters of the way across its own half of the road, so
-   * there is always a line through — finding it at descent speed on hot brakes
+   * there is always a line through; finding it at descent speed on hot brakes
    * is the whole problem.
+   *
+   * It is also the only hazard in the game that moves, and that has a price:
+   * see `SlideSpec`. Restarting this stage reloads it rather than resetting
+   * it, because the boulders are colliders and a mesh.
    */
   slide: { from: 2090, length: 80, reach: 0.75, count: 16 },
   /*

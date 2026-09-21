@@ -1114,12 +1114,28 @@ overlapping road with a large height gap, does exactly what it is for, and
 carries a mountainside on piers. The tell is `closest to self`: 14.6 m and two
 crossings the wrong way round, 67 m and none the right way.
 
-**A hazard that moves between runs breaks three things at once.** The rockslide
-lands on a seeded side, never a random one: medal times come from a calibrated
-AI lap, a ghost is a recording of a specific road, and the board is a
-comparison of the same race. `Stage` takes an optional seed for this and
-`loadStage` passes `${id}:${variant}`, so the slide can be on the left in the
-dry and the right in the wet while staying fixed for everyone racing either.
+**The rockslide is the one hazard in the game that moves, and it is deliberate.**
+Its side is re-rolled every run, so the stage cannot be memorised. Three things
+make that safe rather than reckless:
+
+- **The randomness is at one call site.** `Stage` takes an optional seed and
+  `loadStage` passes `${id}:${variant}:${run}`; every headless caller passes
+  nothing and gets the stable default. `npm run stages`, the medal calibration
+  and every test drive the same road twice, which is the only reason their
+  numbers mean anything.
+- **`Math.random` still appears nowhere in `sim/` or `game/`.** The run number
+  is rolled in `main.ts` and fed in as a seed, so the stage stays a pure
+  function of what it was handed.
+- **A re-roll is a reload, not a reset.** The boulders are colliders and a
+  mesh, decided when the `Stage` is built, so `restart()` rebuilds the stage on
+  a stage that has a slide — never in a network race, where one client quietly
+  rebuilding its colliders is a desync, and never for `seekStage`, which
+  restarts a stage it has just attached a ghost to.
+
+What it costs is that this stage is not quite the same stage twice, so a ghost
+may be a recording of a road blocked on the other side and two board times were
+not set on identical runs. That is the trade, it was made on purpose, and it is
+why nothing else in the game does it.
 
 Grand Traverse is the fragile one, and its night-snow variant is the canary.
 `validateStage` drives each variant three times at rising commitment and wants

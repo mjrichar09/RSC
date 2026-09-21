@@ -184,12 +184,21 @@ export interface RoadObstacle {
 /**
  * A rockslide lying across one side of the road.
  *
- * Which side is not authored — it is drawn from the stage's own seeded stream,
- * so the same track can have the slide on the left for one set of conditions
- * and the right for another, and a player who has learned the stage still has
- * to look. Seeded rather than random for the reason everything here is: a
- * hazard that moved between runs would make the ghost a recording of a
- * different road and the leaderboard a comparison of different races.
+ * Which side is not authored. It comes out of the seed the `Stage` was built
+ * with, and in a real game that seed carries the run number — so it is a fresh
+ * answer every attempt and a player who has learned the stage still has to
+ * look, which is the whole point of it.
+ *
+ * Seeded rather than `Math.random` even so, and the distinction matters: every
+ * headless caller passes no seed and gets the stable default, so `npm run
+ * stages`, the medal calibration and every test still drive the same road
+ * twice. The randomness lives at the one call site that wants it.
+ *
+ * What it costs is honesty about times. A stage that re-rolls a hazard is not
+ * quite the same stage twice, so a ghost is a recording of a road that may
+ * have been blocked on the other side and two leaderboard times were not set
+ * on identical runs. That is a deliberate trade for a hazard you cannot
+ * memorise, and it is the reason nothing else in the game does this.
  */
 export interface SlideSpec {
   /** Where the debris starts, metres along the stage. */
