@@ -63,6 +63,41 @@ export const json = (body: unknown, status = 200): Response =>
 export const BOARD_SIZE = 10;
 
 /**
+ * How much one address may do per minute, by what it is asking for.
+ *
+ * Reading is generous because the arcade screen is one `/bs` per open and a
+ * player flicking through conditions is not an attack. Writing is not: a human
+ * finishes a stage every minute or two at the very best, so ten is already far
+ * past what playing can produce, and a ghost is up to 370 KB so it gets less
+ * still.
+ *
+ * These are a cost ceiling and a nuisance floor, not a security control —
+ * anything that needs to be *true* needs an account behind it, which this
+ * board deliberately does not have. What they stop is one bored person filling
+ * every slot on every track in a minute, and a runaway client emptying the
+ * free tier by lunchtime.
+ */
+export const RATE_LIMITS = { read: 120, submit: 10, ghost: 5 } as const;
+
+/** The window those counts apply to, ms. */
+const RATE_WINDOW = 60_000;
+
+/**
+ * How many addresses are tracked before the oldest are forgotten.
+ *
+ * Held in memory rather than storage on purpose. Rate-limit state is worth
+ * nothing once it is stale, and a write per request would cost more — in
+ * Durable Object storage operations, which are billed — than the traffic it is
+ * protecting against. A Durable Object is evicted when idle, so the counters
+ * reset after a quiet spell, which is the correct behaviour: an attacker who
+ * pauses long enough to be forgotten has already stopped attacking, and one
+ * who does not keeps the object alive and keeps the limits with it.
+ */
+const RATE_TABLE_MAX = 5000;
+
+export type RateKind = keyof typeof RATE_LIMITS;
+
+/**
  * A track key: a stage id and a variant, as the game's `variantKey` builds it.
  *
  * Checked at the edge so a malformed key can never allocate storage. The board
@@ -142,12 +177,135 @@ export interface BoardStorage {
 }
 
 /**
+ * Letters and nothing else, with the usual dodges undone.
+ *
+ * A filter that matches the literal word catches nobody: the first thing
+ * anyone tries is a zero for an o and a dollar for an s, then a dot between
+ * every letter. This flattens the substitutions, drops everything that is not
+ * a letter, and collapses runs of the same letter — so `f.u.u.c.k`, `PH-U-C-K`
+ * and `fuuuck` all land on the same string as the word itself.
+ *
+ * Deliberately aggressive, because it is only ever used to *compare*. The name
+ * that gets stored is what the player typed.
+ */
+function flatten(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[4@]/g, 'a')
+    .replace(/[8]/g, 'b')
+    .replace(/[3€]/g, 'e')
+    .replace(/[6]/g, 'g')
+    .replace(/[1l|!]/g, 'i')
+    .replace(/[0°]/g, 'o')
+    .replace(/[5$]/g, 's')
+    .replace(/[7]/g, 't')
+    .replace(/[2]/g, 'z')
+    .replace(/ph/g, 'f')
+    .replace(/[^a-z]/g, '')
+    .replace(/(.)\1{1,}/g, '$1');
+}
+
+/**
+ * Words a public leaderboard should not display.
+ *
+ * Stored flattened, because that is what they are compared against — writing
+ * them the normal way and flattening at startup would be tidier and would also
+ * mean `cleanName` did work on every call for a list that never changes.
+ *
+ * This is a first line, not a solution. It covers the common English
+ * profanity and the slurs somebody reaches for in the first thirty seconds; it
+ * will not cover everything, and it is not supposed to. Anything that needs to
+ * be *right* wants a maintained word list and somebody able to delete an entry
+ * after the fact — see the note on `fetch` about that second part being the
+ * one that actually matters.
+ */
+const BANNED = [
+  'fuck', 'shit', 'cunt', 'bitch', 'bastard', 'wanker', 'twat', 'prick',
+  'dick', 'cock', 'pussy', 'arsehole', 'asshole', 'bollocks', 'wank',
+  'nigger', 'nigga', 'faggot', 'fag', 'retard', 'spastic', 'tranny',
+  'paki', 'chink', 'kike', 'spic', 'coon', 'wetback', 'gook',
+  'rape', 'rapist', 'nazi', 'hitler', 'pedo', 'paedo',
+  'cum', 'jizz', 'anal', 'penis', 'vagina', 'porn',
+].map(flatten);
+
+/**
+ * Words short enough that a substring match would eat innocent names.
+ *
+ * `fag` inside `Fagan`, `cum` inside `Cumbria`, `coon` inside `Cocoon`. These
+ * have to match the whole name or nothing. Three letters was four once, which
+ * quietly meant `fuck` and `shit` only matched on their own — `shitter` went
+ * straight through, which is how this number got measured rather than picked.
+ */
+const WHOLE_ONLY = 3;
+
+/**
+ * The ones worth catching even with the vowels mangled.
+ *
+ * Vowel substitution is the second thing everybody tries — `f4ck`, `fck`,
+ * `sh!t` — and no table of letter swaps catches it, because the digit is not
+ * standing in for the letter it usually means. Comparing consonants only does
+ * catch it, and it is too blunt to use on the whole list: run it on `cunt` and
+ * `Canute` goes with it. So it is a short list of the words most likely to be
+ * dressed up, and the cost is a handful of unlucky real names.
+ */
+const SKELETONS = ['fuck', 'shit', 'nigger', 'faggot', 'cunt'].map((w) =>
+  flatten(w).replace(/[aeiou]/g, ''),
+);
+
+/**
+ * Real words that contain a banned one, and are allowed anyway.
+ *
+ * Matching substrings means the Scunthorpe problem is real rather than
+ * theoretical: `cunt` is inside Scunthorpe, `cock` inside Hitchcock, `anal`
+ * inside analysis, `dick` inside Dickens. Somebody's actual name being refused
+ * by a leaderboard is a worse failure than a rude one getting through, so the
+ * collisions anybody can predict are listed here.
+ *
+ * Matched against the *whole* flattened name, not as a substring: `Scunthorpe`
+ * is a person's town and `xXScunthorpeXx` is somebody who has read this list.
+ *
+ * It is a starting set, and it is supposed to grow. The first time a real
+ * player is refused their own name, their name goes here.
+ */
+const ALLOWED = [
+  'scunthorpe', 'cockburn', 'hitchcock', 'woodcock', 'cocktail',
+  'dickens', 'dickinson', 'dickson', 'dicky', 'benedick',
+  'penistone', 'clitheroe', 'lightwater', 'assington',
+  'analysis', 'analyst', 'analogue', 'banal', 'canal',
+  'cumbria', 'cummings', 'cumberland', 'circumstance',
+  'shiitake', 'bassett', 'grape', 'grapes', 'drape', 'scrape', 'therapist',
+].map(flatten);
+
+/**
+ * Whether a name is one of those, or contains one.
+ *
+ * Substring rather than whole word, because `xXfuckerXx` is the same problem
+ * as `fucker` — and then `ALLOWED` takes back the collisions that creates.
+ */
+export function offensive(name: string): boolean {
+  const flat = flatten(name);
+  if (!flat) return false;
+  if (ALLOWED.includes(flat)) return false;
+  if (BANNED.some((word) => (word.length <= WHOLE_ONLY ? flat === word : flat.includes(word)))) {
+    return true;
+  }
+  const bones = flat.replace(/[aeiou]/g, '');
+  // Only on names with enough consonants to mean anything: a two-letter name
+  // has a one-letter skeleton and would match almost anything.
+  return bones.length >= 3 && SKELETONS.some((skeleton) => bones.includes(skeleton));
+}
+
+/**
  * Clean a submitted name, or reject it.
  *
  * Control characters are stripped rather than rejected: they arrive from a
  * paste far more often than from malice, and dropping a stray tab is kinder
  * than refusing a run somebody just drove. What is left has to be non-empty
  * after trimming, which is the actual requirement.
+ *
+ * And it has to be something a stranger's board can display. Rejected rather
+ * than masked: a name replaced with asterisks is a puzzle to be solved by
+ * trying again, and the player gets told rather than quietly renamed.
  */
 export function cleanName(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
@@ -156,7 +314,8 @@ export function cleanName(raw: unknown): string | null {
     .trim()
     .slice(0, MAX_NAME)
     .trim();
-  return stripped.length > 0 ? stripped : null;
+  if (stripped.length === 0 || offensive(stripped)) return null;
+  return stripped;
 }
 
 /** `decodeURIComponent` throws on a malformed escape; a bad key is a 400. */
@@ -176,7 +335,42 @@ export function placeOf(board: Entry[], time: number): number {
 }
 
 export class BoardStore {
+  /** Per-address counters, by kind. See `RATE_TABLE_MAX`. */
+  private readonly hits = new Map<string, { until: number; n: number }>();
+
   constructor(private readonly storage: BoardStorage) {}
+
+  /**
+   * Count one request against an address, and say whether it may proceed.
+   *
+   * A fixed window rather than a sliding one: it is a handful of arithmetic
+   * per request and the failure mode — twice the allowance across a window
+   * boundary — does not matter for a limit chosen this far above real play.
+   *
+   * `now` is a parameter so the tests can drive the clock rather than sleep.
+   */
+  allow(kind: RateKind, address: string, now = Date.now()): boolean {
+    // No address means the request did not come through the edge — a direct
+    // object call, or a test. Nothing to attribute it to, so nothing to limit.
+    if (!address) return true;
+
+    if (this.hits.size > RATE_TABLE_MAX) {
+      for (const [key, seen] of this.hits) if (seen.until <= now) this.hits.delete(key);
+      // Still full of live entries: this is either a very popular minute or a
+      // distributed flood, and either way the table itself must not grow
+      // without bound. Dropping it costs one window of accounting.
+      if (this.hits.size > RATE_TABLE_MAX) this.hits.clear();
+    }
+
+    const key = `${kind}:${address}`;
+    const seen = this.hits.get(key);
+    if (!seen || seen.until <= now) {
+      this.hits.set(key, { until: now + RATE_WINDOW, n: 1 });
+      return true;
+    }
+    seen.n++;
+    return seen.n <= RATE_LIMITS[kind];
+  }
 
   private async read(track: string): Promise<Entry[]> {
     return (await this.storage.get<Entry[]>(`b:${track}`)) ?? [];
@@ -275,6 +469,28 @@ export class BoardStore {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const parts = url.pathname.split('/').filter(Boolean);
+
+    /*
+     * Who is asking, and may they.
+     *
+     * The address arrives as a header the worker in `index.ts` copies off
+     * `CF-Connecting-IP`, which Cloudflare sets at the edge and a client
+     * cannot forge — a header of the same name sent by the client is
+     * overwritten before it reaches the worker.
+     */
+    const from = request.headers.get('x-from') ?? '';
+    const kind: RateKind =
+      request.method !== 'POST' ? 'read' : parts[0] === 'g' ? 'ghost' : 'submit';
+    if (!this.allow(kind, from)) {
+      return new Response(JSON.stringify({ error: 'slow down' }), {
+        status: 429,
+        headers: {
+          'content-type': 'application/json',
+          'retry-after': String(Math.ceil(RATE_WINDOW / 1000)),
+          ...CORS,
+        },
+      });
+    }
 
     // /bs?t=a:b,c:d — every board the arcade screen needs, in one request.
     if (parts[0] === 'bs') {

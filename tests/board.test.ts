@@ -13,6 +13,8 @@ import {
   BoardStore,
   MAX_GHOST,
   MemoryBoardStorage,
+  RATE_LIMITS,
+  offensive,
   type StoredGhost,
   cleanName,
 } from '../server/src/board.js';
@@ -347,5 +349,134 @@ describe('the record holder’s ghost', () => {
     expect((await getGhost(board)).ghost).toBeNull();
     await post(board, TRACK, 'Ari', 41.5);
     expect((await getGhost(board)).ghost).toBeNull();
+  });
+});
+
+/**
+ * Rate limiting.
+ *
+ * A cost ceiling and a nuisance floor rather than a security control — the
+ * board has no accounts and nothing here makes a posted time *true*. What it
+ * stops is one person filling every slot on every track in a minute, and a
+ * runaway client spending the free tier by lunchtime.
+ */
+describe('how fast one address may go', () => {
+  const TRACK = 'pine-loop:day-clear';
+  const from = (board: BoardStore, method: string, path: string, ip: string, body?: unknown) =>
+    board.fetch(
+      new Request(`https://boards${path}`, {
+        method,
+        headers: { 'x-from': ip },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
+
+  it('lets ordinary play through untouched', async () => {
+    // Opening the arcade screen is one batch read. Nobody playing gets near
+    // the ceiling, and a limit that catches a player is worse than no limit.
+    const board = store();
+    for (let i = 0; i < RATE_LIMITS.read; i++) {
+      expect((await from(board, 'GET', '/bs?t=' + TRACK, '1.2.3.4')).status).toBe(200);
+    }
+  });
+
+  it('stops an address that will not stop', async () => {
+    const board = store();
+    for (let i = 0; i < RATE_LIMITS.read; i++) await from(board, 'GET', '/bs?t=' + TRACK, '9.9.9.9');
+    const over = await from(board, 'GET', '/bs?t=' + TRACK, '9.9.9.9');
+    expect(over.status).toBe(429);
+    // With something to act on rather than a bare refusal.
+    expect(over.headers.get('retry-after')).toBeTruthy();
+  });
+
+  it('counts each address on its own', async () => {
+    // One person hammering it must not lock everybody else out, which is the
+    // failure mode of a single global counter.
+    const board = store();
+    for (let i = 0; i <= RATE_LIMITS.read; i++) await from(board, 'GET', '/bs?t=' + TRACK, 'a');
+    expect((await from(board, 'GET', '/bs?t=' + TRACK, 'a')).status).toBe(429);
+    expect((await from(board, 'GET', '/bs?t=' + TRACK, 'b')).status).toBe(200);
+  });
+
+  it('holds writes to far less than reads', async () => {
+    // Ten submissions a minute is already past what finishing stages can
+    // produce; reading is a menu opening and gets room to breathe.
+    const board = store();
+    expect(RATE_LIMITS.submit).toBeLessThan(RATE_LIMITS.read / 4);
+    expect(RATE_LIMITS.ghost).toBeLessThan(RATE_LIMITS.submit);
+    for (let i = 0; i < RATE_LIMITS.submit; i++) {
+      await from(board, 'POST', `/b/${TRACK}`, 'c', { name: `d${i}`, time: 50 + i });
+    }
+    const over = await from(board, 'POST', `/b/${TRACK}`, 'c', { name: 'again', time: 44 });
+    expect(over.status).toBe(429);
+    // And nothing it refused reached the board.
+    const { top } = await read(board, TRACK);
+    expect(top.some((e) => e.name === 'again')).toBe(false);
+  });
+
+  it('forgets an address once its minute is up', async () => {
+    const board = store();
+    const now = 1_000_000;
+    for (let i = 0; i < RATE_LIMITS.read; i++) expect(board.allow('read', 'x', now)).toBe(true);
+    expect(board.allow('read', 'x', now)).toBe(false);
+    expect(board.allow('read', 'x', now + 61_000)).toBe(true);
+  });
+
+  it('limits nothing when there is no address to limit', async () => {
+    // A direct object call has not come through the edge, so there is nothing
+    // to attribute it to — and every test above this one in the file relies on
+    // that, which is why it is worth saying out loud.
+    const board = store();
+    for (let i = 0; i < RATE_LIMITS.read * 2; i++) expect(board.allow('read', '')).toBe(true);
+  });
+});
+
+describe('names a stranger will read', () => {
+  it('lets ordinary names through', () => {
+    for (const name of ['Ari', 'Kaisa', 'BK', 'Solveig', 'marky', 'Ottó', 'x_x', 'Scunthorpe']) {
+      expect(offensive(name), name).toBe(false);
+    }
+  });
+
+  it('refuses the obvious ones', () => {
+    for (const name of ['fuck', 'FUCK', 'shitter', 'a cunt']) {
+      expect(offensive(name), name).toBe(true);
+    }
+  });
+
+  it('sees through the first things anybody tries', () => {
+    // Digits for letters, punctuation between them, and letters doubled up.
+    for (const name of ['f4ck', 'sh1t', 'f.u.c.k', 'f u c k', 'fuuuck', '$hit', 'phuck']) {
+      expect(offensive(name), name).toBe(true);
+    }
+  });
+
+  it('gives somebody their own name back', () => {
+    // The Scunthorpe problem, which substring matching makes real rather than
+    // theoretical. A real player refused their own name is a worse failure
+    // than a rude one getting through.
+    for (const name of ['Scunthorpe', 'Cockburn', 'Dickens', 'Analyst', 'Cumbria']) {
+      expect(offensive(name), name).toBe(false);
+    }
+    // But not somebody who has read the list.
+    expect(offensive('xXScunthorpeXx')).toBe(true);
+  });
+
+  it('refuses a submission rather than quietly renaming it', async () => {
+    // Masked with asterisks it is a puzzle to solve by trying again; the
+    // player is told instead.
+    const board = store();
+    const posted = await post(board, 'pine-loop:day-clear', 'fuck', 41.5);
+    expect(posted.status).toBe(400);
+    expect(posted.body.error).toBe('bad name');
+    const { top } = await read(board, 'pine-loop:day-clear');
+    expect(top).toHaveLength(0);
+  });
+
+  it('keeps the name the player actually typed', () => {
+    // The flattening is for comparing only. A board full of lowercase
+    // alphabet-only names would be the filter leaking into the product.
+    expect(cleanName('  Ottó  ')).toBe('Ottó');
+    expect(cleanName('MaRkY 07')).toBe('MaRkY 07');
   });
 });

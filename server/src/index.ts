@@ -60,7 +60,20 @@ export default {
           `https://boards/${parts[0]}${track ? `/${encodeURIComponent(track)}` : ''}${url.search}`,
           {
             method: request.method,
-            headers: { 'content-type': 'application/json' },
+            headers: {
+              'content-type': 'application/json',
+              /*
+               * Who the request came from, for the rate limiter inside.
+               *
+               * `CF-Connecting-IP` is set by Cloudflare at the edge and
+               * overwrites anything a client sends under that name, so it is
+               * the one thing here that cannot be forged. Renamed on the way
+               * in so the object is never reading a header a caller controls:
+               * a direct request to the Durable Object could set `x-from` to
+               * anything, and it is only reachable from this worker.
+               */
+              'x-from': request.headers.get('CF-Connecting-IP') ?? '',
+            },
             ...(request.method === 'POST' ? { body: await request.text() } : {}),
           },
         ),
