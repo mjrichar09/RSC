@@ -21,6 +21,15 @@ import { BoardStore, TRACK_KEY, safeDecode } from './board.js';
 export interface Env {
   ROOMS: DurableObjectNamespace;
   BOARDS: DurableObjectNamespace;
+  /**
+   * The key that lets somebody take an entry off the board.
+   *
+   * Set with `wrangler secret put ADMIN_KEY`, so it lives in Cloudflare rather
+   * than in this repository. Absent means the delete route does not exist at
+   * all — a deployment with no key cannot be talked into deleting anything,
+   * which is the right default for a fork.
+   */
+  ADMIN_KEY?: string;
 }
 
 export default {
@@ -40,7 +49,24 @@ export default {
     // object would put every leaderboard read behind the handshake traffic of
     // whoever happened to be starting a race.
     if (parts[0] === 'b' || parts[0] === 'bs' || parts[0] === 'g') {
-      if (request.method !== 'GET' && request.method !== 'POST') return empty(405);
+      const del = request.method === 'DELETE';
+      if (request.method !== 'GET' && request.method !== 'POST' && !del) return empty(405);
+      /*
+       * Taking something down needs the key, and the key is checked here.
+       *
+       * At the edge rather than inside the object, for the same reason the
+       * track pattern is: a request that is not allowed should never reach the
+       * thing that holds the data. `board.ts` has no idea a secret exists.
+       *
+       * A missing `ADMIN_KEY` refuses everything rather than allowing it — the
+       * failure mode of the other way round is a fork of this repository with
+       * an open delete endpoint.
+       */
+      if (del) {
+        const key = env.ADMIN_KEY;
+        const given = request.headers.get('x-admin-key') ?? '';
+        if (!key || given.length !== key.length || given !== key) return empty(404);
+      }
       const url = new URL(request.url);
       // Decoded before it is checked: the key carries a colon, which the
       // client percent-encodes into the path.

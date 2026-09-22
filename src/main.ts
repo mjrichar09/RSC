@@ -1446,7 +1446,10 @@ const params = new URLSearchParams(location.search);
       void (async () => {
         const posted =
           board && career.driverName
-            ? await board.submit(key, career.driverName, finished)
+            ? // The lap goes with it. The board only asks for it if this turns
+              // out to be a record, so an ordinary finish still sends a name
+              // and a number — see `Leaderboard.submit`.
+              await board.submit(key, career.driverName, finished, lap.frames)
             : null;
 
         // A new world record carries its lap up behind it, so the next player
@@ -1459,8 +1462,10 @@ const params = new URLSearchParams(location.search);
           // Into the cache as well as up to the board, so the gold car on the
           // next attempt is the lap just driven rather than the one it beat —
           // and so taking the record does not cost a re-download of it.
+          // The board already has the ghost — a record cannot be accepted
+          // without it any more — so this only seeds the local cache, and the
+          // gold car on the next attempt is the lap just driven.
           wrCache = { key, ghost: { name, time: finished, frames: lap.frames } };
-          void board.submitGhost(key, name, finished, lap.frames);
         }
 
         raceHud.markBoard({

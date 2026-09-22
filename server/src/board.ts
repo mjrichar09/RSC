@@ -135,13 +135,50 @@ export const MAX_GHOST = 700_000;
 /**
  * Bounds a real lap falls inside.
  *
- * The shortest stage is Scrubbed Flats at 973 m, which the AI drives in 44 s;
- * the longest is Grand Traverse at 1859 m in 83 s. An hour is not a lap and
- * neither is four seconds. Deliberately generous at both ends — this rejects
- * garbage and overflow, it does not adjudicate a close time it cannot check.
+ * Measured rather than guessed: the AI drives the fastest stage in the game,
+ * Vieux Village, in 33.0 s, and nothing else is under 37. A human record is
+ * slower than the AI's author lap, not faster, so 25 s is comfortably below
+ * anything anybody can actually drive and comfortably above the numbers a
+ * forger types. An hour is not a lap either.
+ *
+ * It still does not adjudicate a close time — nothing here can. It rejects
+ * garbage, overflow, and the lazy `"time": 6`.
  */
-const MIN_TIME = 5;
+export const MIN_TIME = 25;
 const MAX_TIME = 3600;
+
+/**
+ * How much recording a lap of a given length has to come with, bytes of
+ * base64 per second of lap.
+ *
+ * A record has to arrive with the lap that set it — that is the one check here
+ * that is expensive to forge, because a fake time then needs a fake recording
+ * whose length agrees with it.
+ *
+ * Derived from what the recorder actually produces. `sim/replay.ts` samples at
+ * 60 Hz and writes 14 floats a frame, so a second of lap is 60 x 56 = 3360
+ * bytes raw and 4480 encoded. Measured across all fourteen stages the ratio
+ * comes out flat, as it must: Vieux Village 33.0 s / 144 KB, Pine Loop 41.0 s
+ * / 179 KB, Grand Traverse 90.2 s / 395 KB, Coldwater Pass 126.5 s / 554 KB —
+ * 4470 bytes per second every time.
+ *
+ * Set at 70% of that, so a slow connection truncating nothing and a recorder
+ * that starts a frame late both still pass, and a submission carrying a token
+ * gesture of a ghost does not.
+ *
+ * A flat floor was the other option and it cannot work: 200 KB would have been
+ * more than the whole ghost of six of the fourteen stages, including Pine
+ * Loop, which is the free one everybody plays.
+ */
+const GHOST_BYTES_PER_SECOND = 3130;
+
+/**
+ * And an absolute floor, whatever the arithmetic says.
+ *
+ * The shortest possible legitimate ghost is a 25 s lap, which is 112 KB. Half
+ * of that is a number no real recording is under and no gesture is over.
+ */
+const MIN_RECORD_GHOST = 56_000;
 
 export interface Entry {
   name: string;
@@ -318,6 +355,20 @@ export function cleanName(raw: unknown): string | null {
   return stripped;
 }
 
+/**
+ * The name on a delete, which is *not* run through the word filter.
+ *
+ * Whatever is being taken down got onto the board before the filter caught it,
+ * or before the filter existed. Refusing to name it because it is offensive
+ * would make exactly the entries this endpoint is for the ones it cannot
+ * remove.
+ */
+function cleanNameForDelete(raw: string | null): string | null {
+  if (typeof raw !== 'string') return null;
+  const stripped = raw.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, MAX_NAME).trim();
+  return stripped.length > 0 ? stripped : null;
+}
+
 /** `decodeURIComponent` throws on a malformed escape; a bad key is a 400. */
 export function safeDecode(raw: string): string {
   try {
@@ -420,6 +471,16 @@ export class BoardStore {
    * the person who improves most. Their slot moves when they beat themselves
    * and is left alone when they do not.
    */
+  /**
+   * How much ghost a claimed time has to be accompanied by, in base64 bytes.
+   *
+   * Exported shape rather than a literal at the call site so the rule and the
+   * error message cannot drift apart.
+   */
+  static ghostNeededFor(time: number): number {
+    return Math.max(MIN_RECORD_GHOST, Math.floor(time * GHOST_BYTES_PER_SECOND));
+  }
+
   async submit(
     track: string,
     name: string,
@@ -464,6 +525,30 @@ export class BoardStore {
       if (TRACK_KEY.test(track)) out[track] = await this.top(track, limit);
     }
     return out;
+  }
+
+  /**
+   * Remove one entry, and the ghost behind it if it was the record.
+   *
+   * There is no moderation on a board with no accounts, so the only thing that
+   * makes it safe to show strangers is being able to take something down
+   * afterwards. Everything else here guesses in advance; this is the one that
+   * fixes what got through.
+   */
+  async remove(track: string, name: string): Promise<{ removed: boolean; top: Entry[] }> {
+    const board = await this.read(track);
+    const at = board.findIndex((e) => e.name.toLowerCase() === name.toLowerCase());
+    if (at < 0) return { removed: false, top: board };
+
+    const wasLeader = at === 0;
+    board.splice(at, 1);
+    await this.storage.put(`b:${track}`, board);
+    // The ghost belongs to whoever was first. Dropping the leader without it
+    // leaves a lap on the road with nobody's name against it — `ghost()` would
+    // refuse to serve it anyway, so this only saves the space, but a blob that
+    // can never be read again is not worth keeping.
+    if (wasLeader) await this.storage.put(`g:${track}`, undefined as unknown as StoredGhost);
+    return { removed: true, top: board };
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -551,6 +636,20 @@ export class BoardStore {
       return json({ top: await this.top(track, Number.isFinite(asked) ? asked : BOARD_SIZE) });
     }
 
+    /*
+     * DELETE /b/:track?name=… — take one entry down.
+     *
+     * The worker has already checked the secret; by the time a request is
+     * here it is authorised or it is not a DELETE. Nothing about the key is
+     * visible in this file, which is the same reason the rate limiter reads an
+     * address it was handed rather than a header it trusts.
+     */
+    if (request.method === 'DELETE') {
+      const name = cleanNameForDelete(url.searchParams.get('name'));
+      if (!name) return json({ error: 'bad name' }, 400);
+      return json(await this.remove(track, name));
+    }
+
     let body: unknown;
     try {
       body = await request.json();
@@ -567,7 +666,41 @@ export class BoardStore {
 
     // Rounded on the way in, so a place can never be won by floating-point
     // noise a player cannot see and could not have driven differently.
-    return json(await this.submit(track, name, Math.round(time * 1000) / 1000));
+    const at = Math.round(time * 1000) / 1000;
+
+    /*
+     * A new best has to arrive with the lap that set it.
+     *
+     * Checked before anything is written, so a record can never exist on this
+     * board without the recording behind it — which is the one check here that
+     * is genuinely expensive to forge, because the ghost has to be long enough
+     * to agree with the time being claimed.
+     *
+     * Only for first place. Everything below it is a name and a number and
+     * always was; asking every finisher to upload 300 KB to sit ninth would
+     * cost far more than it is worth.
+     */
+    const board = await this.read(track);
+    const wouldLead = placeOf(board, at) === 0 && (board[0] === undefined || at < board[0].time);
+    const frames = (body as { frames?: unknown }).frames;
+    if (wouldLead) {
+      const need = BoardStore.ghostNeededFor(at);
+      const have = typeof frames === 'string' ? frames.length : 0;
+      if (have < need) {
+        return json({ error: 'a record needs its ghost', needsGhost: true, need, have }, 400);
+      }
+      if (have > MAX_GHOST || !/^[A-Za-z0-9+/]+={0,2}$/.test(frames as string)) {
+        return json({ error: 'bad ghost' }, 400);
+      }
+    }
+
+    const result = await this.submit(track, name, at);
+    // Stored after the entry, so the ghost is never the thing left behind by a
+    // submission that did not place.
+    if (result.rank === 0 && typeof frames === 'string') {
+      await this.putGhost(track, name, at, frames);
+    }
+    return json(result);
   }
 }
 

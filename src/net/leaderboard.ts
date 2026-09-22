@@ -176,12 +176,44 @@ export class Leaderboard {
     track: string,
     name: string,
     time: number,
+    /**
+     * The lap, for when this turns out to be a record.
+     *
+     * Sent only if the board asks. A time that lands ninth is a name and a
+     * number, and uploading 300 KB to sit ninth would cost far more than it is
+     * worth — so the first attempt goes without, and the board says whether it
+     * needs one.
+     */
+    frames?: Float32Array,
   ): Promise<{ rank: number | null; top: BoardEntry[]; was: string | null } | null> {
-    const body = (await this.call(`/b/${encodeURIComponent(track)}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name, time }),
-    })) as { rank?: unknown; top?: unknown; was?: unknown } | null;
+    const post = async (withGhost: boolean) =>
+      (await this.call(
+        `/b/${encodeURIComponent(track)}`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            name,
+            time,
+            ...(withGhost && frames ? { frames: toBase64(frames) } : {}),
+          }),
+        },
+        withGhost ? GHOST_TIMEOUT : TIMEOUT,
+      )) as
+        | { rank?: unknown; top?: unknown; was?: unknown; needsGhost?: unknown }
+        | null;
+
+    let body = await post(false);
+    /*
+     * Refused because it would be a record and came without the lap.
+     *
+     * Two round trips, and only ever for a record — which is rare, and the one
+     * case where the extra one is worth it. The board cannot tell the client in
+     * advance whether a time will lead, because the answer depends on what
+     * everybody else did while this lap was being driven.
+     */
+    if (body?.needsGhost && frames && frames.length > 0) body = await post(true);
+
     if (!body || !Array.isArray(body.top)) return null;
     return {
       rank: typeof body.rank === 'number' && body.rank >= 0 ? body.rank : null,
