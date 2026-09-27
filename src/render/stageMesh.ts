@@ -118,6 +118,31 @@ function shadeByGrade(color: THREE.Color, grade: number, scratch: THREE.Color): 
 const CONTOUR_INTERVAL = 0.6;
 
 /**
+ * Value noise for surface detail, shared by the road and the ground.
+ *
+ * World-space, so there are no UVs to lay out and no texture to load, and a
+ * stage is covered seamlessly however it winds. The finest octave is faded out
+ * as it approaches a pixel — `fwidth` of the world position is metres per
+ * pixel — because detail smaller than a pixel does not add texture, it
+ * shimmers, and it shimmers most on a phone.
+ */
+const SURFACE_NOISE = /* glsl */ `
+float sHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float sNoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(sHash(i), sHash(i + vec2(1.0, 0.0)), f.x),
+             mix(sHash(i + vec2(0.0, 1.0)), sHash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+float sGrain(vec2 w) {
+  float perPixel = fwidth(w.x) + fwidth(w.y);
+  float fineVisible = 1.0 - smoothstep(0.035, 0.09, perPixel);
+  return sNoise(w * 6.0) * 0.6 + (sNoise(w * 15.0) - 0.5) * 0.4 * fineVisible + 0.2;
+}
+`;
+
+/**
  * Contour lines on the road, exactly as a map draws them.
  *
  * The problem this solves is that the camera is orthographic and near
@@ -158,23 +183,63 @@ function addContours(material: THREE.MeshStandardMaterial): void {
   material.onBeforeCompile = (shader) => {
     shader.vertexShader = `attribute float aRoad;
 attribute float aGrade;
+attribute float aAcross;
+attribute vec4 aKind;
 varying float vHeight;
 varying float vRoad;
 varying float vGrade;
+varying float vAcross;
+varying vec4 vKind;
+varying vec2 vWorldXZ;
 ${shader.vertexShader}`.replace(
       '#include <begin_vertex>',
       `#include <begin_vertex>
-  vHeight = (modelMatrix * vec4(transformed, 1.0)).y;
+  vec4 worldAt = modelMatrix * vec4(transformed, 1.0);
+  vHeight = worldAt.y;
+  vWorldXZ = worldAt.xz;
   vRoad = aRoad;
-  vGrade = aGrade;`,
+  vGrade = aGrade;
+  vAcross = aAcross;
+  vKind = aKind;`,
     );
 
     shader.fragmentShader = `varying float vHeight;
 varying float vRoad;
 varying float vGrade;
+varying float vAcross;
+varying vec4 vKind;
+varying vec2 vWorldXZ;
+${SURFACE_NOISE}
 ${shader.fragmentShader}`.replace(
       '#include <color_fragment>',
       `#include <color_fragment>
+  {
+    // What the road is made of, drawn into it. Before this every surface was
+    // a flat colour with a little per-vertex mottle, so tarmac, gravel and
+    // snow differed only in hue. Each kind gets its own texture now, all of it
+    // subtle: the camera is far off and the road has to stay readable.
+    vec2 w = vWorldXZ;
+    float grain = sGrain(w);
+    float blot = sNoise(w * 0.8) * 0.65 + sNoise(w * 0.21) * 0.35;
+    // Stones: one chance in a cell a fifth of a metre across.
+    vec2 cell = floor(w * 5.0);
+    float roll = sHash(cell);
+    vec2 inCell = fract(w * 5.0) - 0.5 - (vec2(sHash(cell + 3.1), sHash(cell + 7.7)) - 0.5) * 0.35;
+    float stone = step(0.8, roll) * (1.0 - smoothstep(0.12, 0.26, length(inCell)));
+    // The two lines every car drives, a little under half a road-width either
+    // side of the centre: polished on tarmac, packed on gravel, grey in snow.
+    float track = vRoad * exp(-pow((abs(vAcross) - 0.42) / 0.12, 2.0));
+    float shade = 1.0;
+    shade += vKind.x * ((grain - 0.5) * 0.2 + (blot - 0.5) * 0.22 + stone * 0.15
+                        - track * 0.18 - step(0.74, blot) * 0.08);
+    shade += vKind.y * ((grain - 0.5) * 0.38 + (blot - 0.5) * 0.22
+                        + stone * (roll > 0.9 ? 0.32 : -0.26) - track * 0.26);
+    shade += vKind.z * ((grain - 0.5) * 0.09 + (blot - 0.5) * 0.1 + stone * 0.08 - track * 0.14);
+    shade += vKind.w * ((grain - 0.5) * 0.16 + (blot - 0.5) * 0.16);
+    diffuseColor.rgb *= shade;
+    // Packed snow goes grey-blue where the tyres have been.
+    diffuseColor.rgb *= mix(vec3(1.0), vec3(0.85, 0.9, 1.0), track * vKind.z);
+  }
   {
     // Where this pixel sits between one contour and the next.
     float band = vHeight / ${CONTOUR_INTERVAL.toFixed(2)};
@@ -256,13 +321,32 @@ export function buildStageView(stage: Stage, markers: Markers): StageView {
   geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geometry.setAttribute('aRoad', new THREE.BufferAttribute(onRoad, 1));
   geometry.setAttribute('aGrade', new THREE.BufferAttribute(vertexGrade, 1));
+
+  // Where each vertex sits across the corridor, in road half-widths, and what
+  // kind of surface it is, for the texture the road's shader draws. The
+  // corridor is built nine columns to a row (`Stage.buildGeometry`), with the
+  // road's edges at columns 3 and 5 and its crown at 4; outside that only
+  // "more than 1" matters.
+  const COLUMN_ACROSS = [-3, -2.2, -1.4, -1, 0, 1, 1.4, 2.2, 3];
+  const across = new Float32Array(vertexSurfaces.length);
+  const kind = new Float32Array(vertexSurfaces.length * 4);
+  for (let i = 0; i < vertexSurfaces.length; i++) {
+    across[i] = COLUMN_ACROSS[i % 9]!;
+    const id = vertexSurfaces[i]!;
+    const k = id === 'tarmac' ? 0 : id === 'snow' || id === 'ice' ? 2 : id === 'water' ? 3 : 1;
+    kind[i * 4 + k] = 1;
+  }
+  geometry.setAttribute('aAcross', new THREE.BufferAttribute(across, 1));
+  geometry.setAttribute('aKind', new THREE.BufferAttribute(kind, 4));
   geometry.computeVertexNormals();
 
+  // Smooth-shaded: the corridor is a coarse ribbon, and with a normal per face
+  // every sample along it was a visible kink — the road read as a folded
+  // strip of card rather than as a road following the ground.
   const roadMaterial = new THREE.MeshStandardMaterial({
     vertexColors: true,
     roughness: 0.95,
     metalness: 0,
-    flatShading: true,
   });
   addContours(roadMaterial);
 
@@ -570,7 +654,9 @@ function buildScenery(stage: Stage): THREE.Group {
       parts.main,
       new THREE.MeshStandardMaterial({
         roughness: 0.9,
-        flatShading: true,
+        // Not flat-shaded: a cone's own normals are smooth, so trees come out
+        // round rather than as nine-sided spikes. Rocks recompute theirs after
+        // `roughen`, per face, so they keep their facets — stone should.
         // A floor under the shadowed faces. Scenery is mostly vertical sides,
         // and a vertical side lit only by a blue hemisphere is a navy slab
         // whatever colour it is painted — which is what a village of cream
@@ -592,7 +678,6 @@ function buildScenery(stage: Stage): THREE.Group {
           new THREE.MeshStandardMaterial({
             color: parts.extra.color,
             roughness: 0.92,
-            flatShading: true,
             emissive: parts.extra.color,
             emissiveIntensity: 0.12,
           }),
@@ -935,7 +1020,9 @@ function buildTerrain(stage: Stage): THREE.Group {
   const pad = 260;
   minX -= pad; maxX += pad; minZ -= pad; maxZ += pad;
 
-  const cells = 40;
+  // 80, from 40: at 40 a cell was twenty to forty metres of a stage's
+  // surroundings, and a hillside came out as a handful of big flat facets.
+  const cells = 80;
   const geometry = new THREE.PlaneGeometry(maxX - minX, maxZ - minZ, cells, cells);
   geometry.rotateX(-Math.PI / 2);
   geometry.translate((minX + maxX) / 2, 0, (minZ + maxZ) / 2);
@@ -970,10 +1057,32 @@ function buildTerrain(stage: Stage): THREE.Group {
   geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geometry.computeVertexNormals();
 
-  const mesh = new THREE.Mesh(
-    geometry,
-    new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, flatShading: true }),
-  );
+  const groundMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 });
+  // Its own cache key, or three hands it the road's compiled program: the
+  // trap `addContours` already describes, from the other side.
+  groundMaterial.customProgramCacheKey = () => 'stage-ground-grain';
+  groundMaterial.onBeforeCompile = (shader) => {
+    shader.vertexShader = `varying vec2 vWorldXZ;
+${shader.vertexShader}`.replace(
+      '#include <begin_vertex>',
+      `#include <begin_vertex>
+  vWorldXZ = (modelMatrix * vec4(transformed, 1.0)).xz;`,
+    );
+    shader.fragmentShader = `varying vec2 vWorldXZ;
+${SURFACE_NOISE}
+${shader.fragmentShader}`.replace(
+      '#include <color_fragment>',
+      `#include <color_fragment>
+  {
+    // A grain and some larger patches, so the ground away from the road is
+    // not a smooth gradient between two colours.
+    float grain = sGrain(vWorldXZ * 0.7);
+    float patches = sNoise(vWorldXZ * 0.09) * 0.6 + sNoise(vWorldXZ * 0.35) * 0.4;
+    diffuseColor.rgb *= 1.0 + (grain - 0.5) * 0.22 + (patches - 0.5) * 0.34;
+  }`,
+    );
+  };
+  const mesh = new THREE.Mesh(geometry, groundMaterial);
   /*
    * The background does not take shadows, and that is the fix for the second
    * road.

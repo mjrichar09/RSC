@@ -67,7 +67,9 @@ const cells = cellSpec.split(',').map((whole) => {
   // composite can put the looks side by side.
   const lookCell = /^look(\w+):(.+)$/.exec(whole);
   const cellLook = lookCell?.[1] ?? lookArg;
-  const spec = lookCell?.[2] ?? whole;
+  // `surf<id>:trace:<name>` drives a trace on a proving ground of that surface.
+  const surfCell = /^surf(\w+):(.+)$/.exec(lookCell?.[2] ?? whole);
+  const spec = surfCell?.[2] ?? lookCell?.[2] ?? whole;
   const [name, t] = spec.split('@');
   const seconds = Number(t ?? '3');
   const isTrace = name!.startsWith('trace:');
@@ -137,7 +139,7 @@ const cells = cellSpec.split(',').map((whole) => {
   const [id, cellVariant] = raw.split('/');
   const useVariant = cellVariant ?? variantArg;
   const url = isTrace
-    ? `/?trace=${id}&t=${seconds}`
+    ? `/?trace=${id}&t=${seconds}${surfCell ? `&surface=${surfCell[1]}` : ''}`
     : `/?stage=${id}&t=${seconds}&grip=${grip}${useVariant ? `&variant=${useVariant}` : ''}${
         withGhost ? '&ghost=1' : ''
       }${crashFor ? `&crash=${crashFor}` : ''}${hotFor ? `&brakes=${hotFor}` : ''}${zoomArg ? `&zoom=${zoomArg}` : ''}${looseFor ? `&loosen=${looseFor}` : ''}${afterFor ? `&after=${afterFor}` : ''}${
@@ -146,7 +148,7 @@ const cells = cellSpec.split(',').map((whole) => {
       }${signArg ? `&sign=${signArg}` : ''}${visionFor ? `&vision=${visionFor}` : ''}${carsArg ? `&cars=${carsArg}` : ''}${boilArg ? `&boil=${boilArg}` : ''}${knockArg ? `&knock=${knockArg}` : ''}${lightsArg ? `&lights=${lightsArg}` : ''}${awardArg ? `&award=${awardArg}` : ''}${replayArg ? '&replay=1' : ''}${cellLook ? `&look=${cellLook}` : ''}`;
   return {
     url,
-    label: `${cellLook ? `[${cellLook}] ` : ''}${id}${useVariant ? ` ${useVariant}` : ''} @ ${seconds}s${glassMatch ? ` · glass ${glassMatch[1]}%` : ''}${withGhost ? ' + ghost' : ''}${
+    label: `${cellLook ? `[${cellLook}] ` : ''}${surfCell ? `${surfCell[1]} ` : ''}${id}${useVariant ? ` ${useVariant}` : ''} @ ${seconds}s${glassMatch ? ` · glass ${glassMatch[1]}%` : ''}${withGhost ? ' + ghost' : ''}${
       crashFor ? ` + ${crashFor}s crash` : ''
     }${carsArg ? ` · ${carsArg} cars` : ''}${boilArg ? ` · boiling` : ''}${hotMatch ? ` · ${hotFor}°C` : ''}${
       looseMatch ? ` · ${looseFor} N·s +${afterFor}s` : ''

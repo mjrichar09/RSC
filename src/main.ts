@@ -62,6 +62,7 @@ import {
 } from './render/scene.js';
 import { buildStageView, type StageView } from './render/stageMesh.js';
 import { Controls } from './ui/controls.js';
+import { SURFACES, type SurfaceId } from './sim/surfaces.js';
 import { GamepadInput, cleanBindings } from './ui/gamepad.js';
 import { Hud } from './ui/hud.js';
 import { RaceHud } from './ui/raceHud.js';
@@ -191,8 +192,9 @@ async function main(): Promise<void> {
   const wildlifeView = new WildlifeView(scene);
   ghostView.visible = false;
   wrView.visible = false;
-  const particles = new ParticleField(scene);
-  particles.density = quality.particles;
+  // With a soft layer of its own for dust, powder, mist and smoke.
+  const particles = new ParticleField(scene, undefined, { haze: 1200 });
+  particles.densityAll = quality.particles;
   /**
    * A second pool, for what a crash throws off.
    *
@@ -722,7 +724,11 @@ const params = new URLSearchParams(location.search);
   const loadFreeRoam = () => {
     addProvingGround(scene);
     addSurfacePatches(scene, TEST_PATCHES);
-    world = new SimWorld({ baseSurface: 'tarmac', patches: TEST_PATCHES });
+    // `?surface=` lays the proving ground in something else, so a harness
+    // can drive one trace across every surface and compare what each throws.
+    const asked = params.get('surface');
+    const base = asked && asked in SURFACES ? (asked as SurfaceId) : 'tarmac';
+    world = new SimWorld({ baseSurface: base, patches: TEST_PATCHES });
     camera.jumpTo(world.state().position);
   };
 
@@ -2290,7 +2296,18 @@ const params = new URLSearchParams(location.search);
       if (!trace) throw new Error(`unknown trace: ${traceName}`);
       world.vehicle.reset({ x: 0, y: 1.2, z: 0 }, 0);
       world.time = 0;
-      while (world.time < seconds) world.step(sampleTrace(trace, world.time));
+      while (world.time < seconds) {
+        world.step(sampleTrace(trace, world.time));
+        // The wheel effects as well, for the last few seconds: this path steps
+        // the world directly and never reaches the frame loop, so a trace
+        // frame showed no spray, dust or smoke at all — and every question
+        // about what a surface throws is asked of a trace.
+        if (world.time > seconds - 3) {
+          const state = world.state();
+          updateWheelEffects(particles, skids, state.wheels, state.velocity, world.dt, world.damage?.brakeTemp);
+          particles.update(world.dt);
+        }
+      }
       camera.jumpTo(world.state().position);
       hud.update(world.state(), 60);
     },

@@ -41,23 +41,49 @@ const PARTICLE_VERTEX = `
   attribute float size;
   attribute float alpha;
   attribute vec3 aColor;
+  attribute float aSeed;
   uniform float uScale;
   varying float vAlpha;
   varying vec3 vColor;
+  varying float vSeed;
   void main() {
     vAlpha = alpha;
     vColor = aColor;
+    vSeed = aSeed;
     gl_PointSize = max(size * uScale, 1.0);
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }`;
 
 const PARTICLE_FRAGMENT = `
+  uniform float uSoft;
   varying float vAlpha;
   varying vec3 vColor;
+  varying float vSeed;
+  float pHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float pNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(pHash(i), pHash(i + vec2(1.0, 0.0)), f.x),
+               mix(pHash(i + vec2(0.0, 1.0)), pHash(i + vec2(1.0, 1.0)), f.x), f.y);
+  }
   void main() {
     vec2 d = gl_PointCoord - vec2(0.5);
     float r = dot(d, d);
     if (r > 0.25) discard;
+    // Haze is a cloud, not a pebble. A soft disc was still a disc: a trail of
+    // them read as a row of tiles laid along the road. Each puff is ragged
+    // now — its density broken up by noise seeded per particle, so no two are
+    // the same shape — and it is the overlap of many faint ones that makes the
+    // cloud, not the outline of any one.
+    if (uSoft > 0.5) {
+      vec2 at = gl_PointCoord * 3.0 + vSeed * 17.0;
+      float lumps = pNoise(at) * 0.65 + pNoise(at * 2.3) * 0.35;
+      float fall = 1.0 - r * 4.0;
+      float density = fall * fall * (0.35 + 1.1 * lumps);
+      gl_FragColor = vec4(vColor * (0.9 + 0.2 * lumps), vAlpha * clamp(density, 0.0, 1.0));
+      return;
+    }
     gl_FragColor = vec4(vColor, vAlpha * (1.0 - r * 3.2));
   }`;
 
@@ -93,6 +119,28 @@ export class ParticleField {
    * the debris was still in the air two and a half seconds after the impact.
    */
   private readonly drop: Float32Array;
+  /** Opacity at birth, 0..1. Spray is solid; dust and mist are a veil. */
+  private readonly peak: Float32Array;
+  /** Size at birth, and how much it swells by the end of its life (1 = doubles). */
+  private readonly size0: Float32Array;
+  private readonly grow: Float32Array;
+  /** A random number per particle, for the shape of a haze puff. */
+  private readonly seeds: Float32Array;
+  /**
+   * Fraction of life spent fading *in*. A puff that appears at full strength
+   * is a puff you see arrive, and a stream of them arriving is the tiling.
+   */
+  fadeIn = 0;
+  /**
+   * The soft layer: dust plumes, snow powder, mist and tyre smoke.
+   *
+   * Its own pool, for the reason every pool here is its own: gravel spray
+   * churns the main one at thousands a second, and a dust cloud that has to
+   * hang for two seconds would be recycled before it had drifted a metre. A
+   * child of the main field's points, so whatever hides the spray — a replay,
+   * a reel — hides the haze with it, and `update` advances both.
+   */
+  readonly haze: ParticleField | null = null;
   private next = 0;
   /** How many slots this field has. Its own, not the module's. */
   private readonly capacity: number;
@@ -118,7 +166,11 @@ export class ParticleField {
    * lifetime, and a crash happens while the car is sliding on gravel with
    * every wheel spraying. Its own field cannot be evicted by anything.
    */
-  constructor(parent: THREE.Object3D, capacity = MAX_PARTICLES) {
+  constructor(
+    parent: THREE.Object3D,
+    capacity = MAX_PARTICLES,
+    options: { haze?: number; soft?: boolean } = {},
+  ) {
     this.capacity = capacity;
     this.positions = new Float32Array(capacity * 3);
     this.colors = new Float32Array(capacity * 3);
@@ -129,16 +181,21 @@ export class ParticleField {
     this.maxLife = new Float32Array(capacity);
     this.floor = new Float32Array(capacity).fill(-Infinity);
     this.drop = new Float32Array(capacity).fill(1);
+    this.peak = new Float32Array(capacity).fill(1);
+    this.size0 = new Float32Array(capacity);
+    this.grow = new Float32Array(capacity);
+    this.seeds = new Float32Array(capacity);
 
     this.geometry.setAttribute('position', new THREE.BufferAttribute(this.positions, 3));
     this.geometry.setAttribute('aColor', new THREE.BufferAttribute(this.colors, 3));
     this.geometry.setAttribute('size', new THREE.BufferAttribute(this.sizes, 1));
     this.geometry.setAttribute('alpha', new THREE.BufferAttribute(this.alphas, 1));
+    this.geometry.setAttribute('aSeed', new THREE.BufferAttribute(this.seeds, 1));
 
     this.material = new THREE.ShaderMaterial({
       vertexShader: PARTICLE_VERTEX,
       fragmentShader: PARTICLE_FRAGMENT,
-      uniforms: { uScale: { value: 40 } },
+      uniforms: { uScale: { value: 40 }, uSoft: { value: options.soft ? 1 : 0 } },
       transparent: true,
       depthWrite: false,
     });
@@ -146,6 +203,21 @@ export class ParticleField {
     this.points = new THREE.Points(this.geometry, this.material);
     this.points.frustumCulled = false;
     parent.add(this.points);
+
+    if (options.haze) {
+      const haze = new ParticleField(this.points, options.haze, { soft: true });
+      // A veil fades more evenly than a thrown stone: gone by the end, but
+      // still there in the middle of its life, which is when it is the plume.
+      haze.fade = 1.3;
+      haze.fadeIn = 0.25;
+      this.haze = haze;
+    }
+  }
+
+  /** Thinning applies to the haze too, so a phone gets less of both. */
+  set densityAll(value: number) {
+    this.density = value;
+    if (this.haze) this.haze.density = value;
   }
 
   /** Spawn one particle. Oldest are recycled once the pool is full. */
@@ -168,7 +240,7 @@ export class ParticleField {
      * `floor` is a height to come to rest on, for anything that should land;
      * `drop` scales gravity, for anything heavier or lighter than spray.
      */
-    options?: { floor?: number; drop?: number },
+    options?: { floor?: number; drop?: number; peak?: number; grow?: number },
   ): void {
     if (this.density < 1) {
       // Deterministic thinning: an accumulator rather than a random draw, so a
@@ -190,6 +262,10 @@ export class ParticleField {
     this.colors[i * 3 + 1] = color.g;
     this.colors[i * 3 + 2] = color.b;
     this.sizes[i] = size;
+    this.size0[i] = size;
+    this.grow[i] = options?.grow ?? 0;
+    this.peak[i] = options?.peak ?? 1;
+    this.seeds[i] = Math.random();
     this.life[i] = life;
     this.maxLife[i] = life;
     this.floor[i] = options?.floor ?? -Infinity;
@@ -231,10 +307,13 @@ export class ParticleField {
       }
 
       const t = this.life[i]! / this.maxLife[i]!;
-      this.alphas[i] = this.fade === 2 ? t * t : t ** this.fade;
+      this.alphas[i] = (this.fade === 2 ? t * t : t ** this.fade) * this.peak[i]!;
+      if (this.fadeIn > 0) this.alphas[i]! *= Math.min((1 - t) / this.fadeIn, 1);
+      if (this.grow[i]! > 0) this.sizes[i] = this.size0[i]! * (1 + this.grow[i]! * (1 - t));
     }
+    this.haze?.update(dt);
 
-    for (const name of ['position', 'aColor', 'size', 'alpha']) {
+    for (const name of ['position', 'aColor', 'size', 'alpha', 'aSeed']) {
       this.geometry.getAttribute(name).needsUpdate = true;
     }
   }
@@ -278,6 +357,7 @@ export class ParticleField {
    */
   setScale(pixelsPerMetre: number): void {
     this.material.uniforms.uScale!.value = pixelsPerMetre;
+    this.haze?.setScale(pixelsPerMetre);
   }
 
   clear(): void {
@@ -286,6 +366,7 @@ export class ParticleField {
     this.floor.fill(-Infinity);
     this.drop.fill(1);
     this.geometry.getAttribute('alpha').needsUpdate = true;
+    this.haze?.clear();
   }
 }
 
@@ -829,6 +910,148 @@ export function emitSteam(
  */
 const STEAM_FROM_C = 140;
 
+/** Soft-layer colours that are not the surface's own. */
+const POWDER = new THREE.Color(0xf1f5f9);
+const MIST = new THREE.Color(0xdbe8ef);
+const SMOKE = new THREE.Color(0xc4c8cc);
+const HAZE_COLOR = new THREE.Color();
+const up = { x: 0, y: 0, z: 0 };
+const born = { x: 0, y: 0, z: 0 };
+
+/** A whole number of emissions from a rate, carrying the fraction by chance. */
+const howMany = (perSecond: number, dt: number): number => {
+  const want = perSecond * dt;
+  const whole = Math.floor(want);
+  return whole + (Math.random() < want - whole ? 1 : 0);
+};
+
+/**
+ * What a tyre throws, by what it is running on.
+ *
+ * One plume for every surface used to be the whole of it — surface-coloured
+ * pebbles, only while the tyre was past its limit — so a car cruising a gravel
+ * road at 120 km/h raised nothing at all, snow came off as white gravel and a
+ * ford was a brown puff. Each surface throws what it is made of now:
+ *
+ * - **Gravel and dirt** raise a dust plume that trails the car at speed, gripping
+ *   or not, and throw heavy clods backward when the tyre is sliding.
+ * - **Snow** goes up in powder: rooster tails that hang and drift.
+ * - **Water** is thrown out sideways in sheets, with mist behind.
+ * - **Mud** comes off in heavy dark clumps and raises nothing.
+ * - **Tarmac** smokes, only when the tyre is sliding, which is the one thing
+ *   that says a tarmac tyre has let go.
+ *
+ * Plumes come off the rear wheels only: the fronts run in the same air, and
+ * four plumes are twice the particles for a cloud that looks the same.
+ */
+function emitSpray(
+  particles: ParticleField,
+  wheel: WheelState,
+  index: number,
+  slip: number,
+  carVelocity: Vec3,
+  dt: number,
+): void {
+  const surface = wheel.surface;
+  const haze = particles.haze;
+  const speed = Math.hypot(carVelocity.x, carVelocity.z);
+  const bx = speed > 0.5 ? -carVelocity.x / speed : 0;
+  const bz = speed > 0.5 ? -carVelocity.z / speed : 0;
+  const rear = index >= 2;
+  const pace = Math.min(Math.max((speed - 4) / 22, 0), 1.4);
+  const at = wheel.contact;
+  up.x = at.x;
+  up.y = at.y + 0.08;
+  up.z = at.z;
+
+  // What a sliding tyre throws is the grip readout, so it keeps the rate the
+  // single plume always had — about 2 640 a second per unit of slip, capped at
+  // ten a frame. The dust is on top of that, never instead of it.
+  const sliding = Math.min(slip * surface.spray * 2640, 600);
+  const clods = (rate: number, color: THREE.Color, size: number, drop: number) => {
+    for (let n = howMany(rate, dt); n > 0; n--) {
+      scratch.x = bx * speed * 0.28 + carVelocity.x * 0.35 + (Math.random() - 0.5) * 3.5;
+      scratch.y = 1.4 + Math.random() * 3.0 * Math.min(0.4 + slip, 1);
+      scratch.z = bz * speed * 0.28 + carVelocity.z * 0.35 + (Math.random() - 0.5) * 3.5;
+      particles.emit(up, scratch, color, size * (0.6 + Math.random() * 0.8), 0.5 + Math.random() * 0.7, { drop });
+    }
+  };
+  const plume = (
+    rate: number,
+    color: THREE.Color,
+    size: number,
+    peak: number,
+    life: number,
+    lift: number,
+    drop: number,
+    grow: number,
+  ) => {
+    if (!haze) return;
+    // Twice as many at a little under the opacity, born scattered round the
+    // wheel rather than all at the contact patch, and swelling to three times
+    // their size: a cloud is many faint things overlapping, and it billows.
+    for (let n = howMany(rate * 2, dt); n > 0; n--) {
+      born.x = up.x + (Math.random() - 0.5) * 1.4;
+      born.y = up.y + Math.random() * 0.5;
+      born.z = up.z + (Math.random() - 0.5) * 1.4;
+      scratch.x = carVelocity.x * 0.25 + bx * 1.5 + (Math.random() - 0.5) * 2.6;
+      scratch.y = lift * (0.4 + Math.random());
+      scratch.z = carVelocity.z * 0.25 + bz * 1.5 + (Math.random() - 0.5) * 2.6;
+      haze.emit(born, scratch, color, size * (0.65 + Math.random() * 1.0), life * (0.7 + Math.random() * 0.7), {
+        peak: peak * 0.8,
+        grow: grow * 1.6,
+        drop,
+      });
+    }
+  };
+
+  switch (surface.id) {
+    case 'gravel':
+    case 'dirt':
+    case 'grass': {
+      const dusty = surface.id === 'grass' ? 0.35 : surface.id === 'dirt' ? 1.1 : 1;
+      if (rear) {
+        HAZE_COLOR.setHex(surface.color).offsetHSL(0, -0.12, 0.2);
+        plume((pace * 16 + slip * 30) * dusty, HAZE_COLOR, 2.1, 0.3 * dusty, 2.2, 0.8, -0.03, 1.3);
+      }
+      SPRAY_COLOR.setHex(surface.color).multiplyScalar(0.8);
+      clods(sliding + (rear ? pace * 10 : 0), SPRAY_COLOR, 0.24, 1.5);
+      break;
+    }
+    case 'mud': {
+      SPRAY_COLOR.setHex(surface.color).multiplyScalar(0.7);
+      clods(sliding + (rear ? pace * 14 : 0), SPRAY_COLOR, 0.34, 1.9);
+      break;
+    }
+    case 'snow': {
+      if (rear) plume(pace * 26 + slip * 45, POWDER, 1.25, 0.5, 1.4, 2.6 * (0.6 + slip), 0.12, 0.9);
+      SPRAY_COLOR.setHex(0xf6f9fb);
+      clods(sliding, SPRAY_COLOR, 0.22, 1.2);
+      break;
+    }
+    case 'water': {
+      // Sheets thrown out to both sides, carried along with the car.
+      const wet = Math.min(speed / 10, 1.6);
+      for (let n = howMany(wet * 55, dt); n > 0; n--) {
+        const side = Math.random() < 0.5 ? -1 : 1;
+        const out = 2.5 + Math.random() * 3.5;
+        scratch.x = carVelocity.x * 0.45 + -bz * side * out;
+        scratch.y = 2.0 + Math.random() * 3.2;
+        scratch.z = carVelocity.z * 0.45 + bx * side * out;
+        particles.emit(up, scratch, MIST, 0.2 + Math.random() * 0.24, 0.45 + Math.random() * 0.45, { drop: 1.3 });
+      }
+      plume(wet * 14, MIST, 1.7, 0.26, 1.3, 1.0, -0.02, 1.0);
+      break;
+    }
+    case 'tarmac': {
+      if (slip > 0.08) plume(slip * 60, SMOKE, 1.6, 0.34, 2.2, 0.9, -0.06, 1.6);
+      break;
+    }
+    default:
+      break;
+  }
+}
+
 export function updateWheelEffects(
   particles: ParticleField,
   skids: SkidMarks,
@@ -862,24 +1085,7 @@ export function updateWheelEffects(
 
     const slip = Math.max(0, wheel.saturation - 0.95);
     const surface = wheel.surface;
-
-    // Loose surfaces spray; the amount tracks how hard the tyre is working.
-    if (surface.spray > 0.05 && slip > 0.02) {
-      const count = Math.min(Math.round(slip * surface.spray * 44 * dt * 60), 10);
-      SPRAY_COLOR.setHex(surface.color).offsetHSL(0, 0, 0.12);
-      for (let n = 0; n < count; n++) {
-        scratch.x = -carVelocity.x * 0.22 + (Math.random() - 0.5) * 4.5;
-        scratch.y = 1.6 + Math.random() * 3.2 * Math.min(slip, 1);
-        scratch.z = -carVelocity.z * 0.22 + (Math.random() - 0.5) * 4.5;
-        particles.emit(
-          wheel.contact,
-          scratch,
-          SPRAY_COLOR,
-          0.26 + Math.random() * 0.4,
-          0.55 + Math.random() * 0.8,
-        );
-      }
-    }
+    emitSpray(particles, wheel, i, slip, carVelocity, dt);
 
     // What the tyre leaves behind.
     //

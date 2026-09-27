@@ -557,7 +557,13 @@ export class VisionPass {
     this.renderer = renderer;
 
     const options = { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: true };
-    this.sceneTarget = new THREE.WebGLRenderTarget(1, 1, options);
+    // Multisampled, when the canvas itself is. The canvas's antialiasing only
+    // ever applied to frames drawn straight to it, so every frame this pass
+    // composites — any weather, any look, any cracked glass — had hard stair
+    // steps on every edge in the scene, which reads as low-poly as much as the
+    // polygons themselves do.
+    const samples = renderer.getContextAttributes()?.antialias ? 4 : 0;
+    this.sceneTarget = new THREE.WebGLRenderTarget(1, 1, { ...options, samples });
     // Half resolution for the blur: it is a blur, and nobody can tell.
     this.blurA = new THREE.WebGLRenderTarget(1, 1, { ...options, depthBuffer: false });
     this.blurB = new THREE.WebGLRenderTarget(1, 1, { ...options, depthBuffer: false });

@@ -153,7 +153,9 @@ export function createScene(canvas: HTMLCanvasElement, quality = qualityFor('hig
   // A phone's shadow pass costs more than everything else in the frame put
   // together, and at that screen size it is the least missed thing to lose.
   renderer.shadowMap.enabled = quality.shadowMap > 0;
-  renderer.shadowMap.type = THREE.PCFShadowMap;
+  // Soft: a hard-edged shadow is the last stair-step left once the polygons
+  // are smoothed, and it is the one that moves with the car.
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(PALETTE.sky);
