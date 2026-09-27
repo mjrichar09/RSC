@@ -123,10 +123,26 @@ describe('cornering', () => {
   });
 
   it('does not spin all the way round under a normal handbrake pull', async () => {
-    const { summary } = await runTrace(TRACES.handbrake!);
-    // Past ~150° the car has swapped ends, which is a loss of control rather
-    // than a rally slide.
-    expect(summary.maxDriftDeg).toBeLessThan(150);
+    const { recorder } = await runTrace(TRACES.handbrake!);
+    // How far the car's *heading* turns, integrated from the yaw rate — which
+    // is what "spin all the way round" means, where max drift is not: it reads
+    // 180° for any car sliding slowly backwards, spun or not.
+    //
+    // The bound moved with the stable wheel step (0afa176). Before it this pull
+    // stayed under 150° of drift; after it the heading turns 183° — full lock
+    // and full handbrake at 95 km/h swaps the car's ends, and it then drives
+    // away forwards (the next test). That car was driven and signed off, so
+    // this records it rather than tuning it back. What it still catches is the
+    // failure that matters: a car that keeps going round.
+    let heading = 0;
+    let furthest = 0;
+    for (let i = 1; i < recorder.samples.length; i++) {
+      const s = recorder.samples[i]!;
+      heading += s.yawRate * (s.t - recorder.samples[i - 1]!.t);
+      furthest = Math.max(furthest, Math.abs(heading));
+    }
+    expect(furthest).toBeGreaterThan(45);
+    expect(furthest).toBeLessThan(240);
   });
 
   it('returns to grip after the slide rather than spinning out', async () => {
