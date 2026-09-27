@@ -72,7 +72,12 @@ export interface VehicleTuning {
   lsdLock: number;
   /** Ceiling on the LSD's bias, as a fraction of that axle's torque (0..0.5). */
   lsdBias: number;
-  /** Centre-diff torque bias between the axles on AWD, N·m per rad/s. */
+  /**
+   * Centre-diff torque bias between the axles on AWD: the fraction of the
+   * total shifted toward the slower axle per rad/s of difference, capped at
+   * `centreBias`. At 18 the cap is reached by 0.02 rad/s, so in practice it
+   * is a switch between the axles rather than a gradient.
+   */
   centreLock: number;
   /** Ceiling on the centre diff's bias, as a fraction of total torque. */
   centreBias: number;
