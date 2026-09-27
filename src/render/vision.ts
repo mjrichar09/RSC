@@ -76,7 +76,7 @@ const COMPOSITE = /* glsl */ `
   uniform float uGrainMoves;
   uniform float uFringe;
   uniform float uHalation;
-  uniform float uTilt;
+  uniform float uScan;
   uniform float uInk;
   uniform float uPoster;
   uniform vec3 uPaper;
@@ -413,10 +413,7 @@ const COMPOSITE = /* glsl */ `
       sharp.b = texture2D(uScene, vUv - off).b;
     }
     vec4 soft = texture2D(uBlur, vUv);
-    // Tilt-shift: in focus across the car's own row of the screen, going soft
-    // above and below it, the way a macro lens photographs a model.
-    float band = uTilt * smoothstep(0.07, 0.3, abs(vUv.y - uOrigin.y));
-    vec4 colour = mix(sharp, soft, max(soften, band));
+    vec4 colour = mix(sharp, soft, soften);
     // Outlines, from the brightness gradient of the finished scene. Taken on
     // a perceptual scale, or every edge in shadow vanishes and every edge in
     // sunlight is a stripe.
@@ -534,6 +531,7 @@ const COMPOSITE = /* glsl */ `
       srgb *= min(band / max(tone, 1e-3), 1.8);
     }
     srgb = mix(srgb, srgb * uPaper, uPaperMix);
+    if (uScan > 0.0) srgb *= 1.0 - uScan * step(0.5, fract(gl_FragCoord.y * 0.5));
     if (uGrain > 0.0) {
       vec2 grainAt = floor(vUv / uTexel) + fract(uTime * 7.3) * 113.0 * uGrainMoves;
       srgb += (hash(grainAt) - 0.5) * uGrain;
@@ -605,7 +603,7 @@ export class VisionPass {
         uGrainMoves: { value: 0 },
         uFringe: { value: 0 },
         uHalation: { value: 0 },
-        uTilt: { value: 0 },
+        uScan: { value: 0 },
         uInk: { value: 0 },
         uPoster: { value: 0 },
         uPaper: { value: new THREE.Vector3(1, 1, 1) },
@@ -718,25 +716,21 @@ export class VisionPass {
     // blur passes for a texture nothing samples would be a waste of the only
     // per-frame budget this renderer has.
     const look = this.look;
-    const blurred = !this.clearScreen(state) || look.tilt > 0 || look.halation > 0;
+    // Halation reads the blur too: the glow is the soft picture's highlights.
+    const blurred = !this.clearScreen(state) || look.halation > 0;
     if (blurred) {
-      // Two-tap separable blur at half size — three times over for a
-      // tilt-shift, whose out-of-focus band has to look like a lens and not
-      // like a slightly soft picture.
+      // Two-tap separable blur at half size.
       this.quad.material = this.blurMaterial;
       const uniforms = this.blurMaterial.uniforms;
-      const rounds = look.tilt > 0 ? 4 : 1;
-      for (let round = 0; round < rounds; round++) {
-        uniforms.uScene!.value = round === 0 ? this.sceneTarget.texture : this.blurB.texture;
-        (uniforms.uDirection!.value as THREE.Vector2).set((1 + round) / this.blurA.width, 0);
-        this.renderer.setRenderTarget(this.blurA);
-        this.renderer.render(this.quadScene, this.quadCamera);
+      uniforms.uScene!.value = this.sceneTarget.texture;
+      (uniforms.uDirection!.value as THREE.Vector2).set(1 / this.blurA.width, 0);
+      this.renderer.setRenderTarget(this.blurA);
+      this.renderer.render(this.quadScene, this.quadCamera);
 
-        uniforms.uScene!.value = this.blurA.texture;
-        (uniforms.uDirection!.value as THREE.Vector2).set(0, (1 + round) / this.blurA.height);
-        this.renderer.setRenderTarget(this.blurB);
-        this.renderer.render(this.quadScene, this.quadCamera);
-      }
+      uniforms.uScene!.value = this.blurA.texture;
+      (uniforms.uDirection!.value as THREE.Vector2).set(0, 1 / this.blurA.height);
+      this.renderer.setRenderTarget(this.blurB);
+      this.renderer.render(this.quadScene, this.quadCamera);
     }
 
     const c = this.compositeMaterial.uniforms;
@@ -767,7 +761,7 @@ export class VisionPass {
     c.uGrainMoves!.value = look.grainMoves;
     c.uFringe!.value = look.fringe;
     c.uHalation!.value = look.halation;
-    c.uTilt!.value = look.tilt;
+    c.uScan!.value = look.scan;
     c.uInk!.value = look.ink;
     c.uPoster!.value = look.poster;
     (c.uPaper!.value as THREE.Vector3).set(look.paper[0], look.paper[1], look.paper[2]);

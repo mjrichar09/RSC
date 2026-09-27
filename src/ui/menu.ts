@@ -28,6 +28,7 @@ import {
   type PadAction,
   type PadBindings,
 } from './gamepad.js';
+import { LOOKS, type LookId } from '../render/look.js';
 
 export interface ArcadePick {
   def: StageDef;
@@ -75,6 +76,16 @@ export class StartMenu {
   /** The action waiting for a control, while one is. */
   private binding: PadAction | null = null;
   private bindingTimer = 0;
+
+  /** Raised when a look is picked on the front screen. */
+  onLook: ((id: LookId) => void) | null = null;
+  /** The look in force, so the picker can show it. */
+  private look: LookId = 'standard';
+
+  /** Show the saved look as picked, without raising a change. */
+  setLook(id: LookId): void {
+    this.look = id;
+  }
 
   /** Redraw the controller screen when a pad arrives while it is up. */
   padChanged(): void {
@@ -196,6 +207,12 @@ export class StartMenu {
         break;
       case 'pad':
         this.screen = 'pad';
+        break;
+      case 'look':
+        if (id in LOOKS) {
+          this.look = id as LookId;
+          this.onLook?.(this.look);
+        }
         break;
       case 'pad-bind':
         void this.bind(id as PadAction);
@@ -440,6 +457,7 @@ export class StartMenu {
           <button class="menu-aux" data-action="help">How to play</button>
           <button class="menu-aux" data-action="pad">Controller</button>
         </div>
+        ${this.lookRow()}
         ${this.volumeRow()}
         <div class="menu-foot">
           <span><b>Esc</b> menu · <b>R</b> restart · <b>Q</b> rescue · <b>T</b> tuning · <b>V</b> visibility · <b>K</b> slow-mo</span>
@@ -503,6 +521,27 @@ export class StartMenu {
           <span>In menus: stick or D-pad to move, <b>A</b> to choose, <b>B</b> to go back.
           <b>A</b>, <b>B</b> or <b>Menu</b> skips a crash replay.</span>
         </div>
+      </div>`;
+  }
+
+  /**
+   * The look, on the front screen beside the volume.
+   *
+   * Here because it is a taste setting everybody will want to try once, and
+   * the front screen is behind the game — picking one here repaints the stage
+   * the moment the menu closes, which is how a look is judged.
+   */
+  private lookRow(): string {
+    const choices = Object.values(LOOKS)
+      .map(
+        (l) =>
+          `<button class="look-choice${l.id === this.look ? ' is-on' : ''}" data-action="look" data-id="${l.id}">${escapeHtml(l.name)}</button>`,
+      )
+      .join('');
+    return `
+      <div class="menu-look">
+        <span>Look</span>
+        <div class="look-choices">${choices}</div>
       </div>`;
   }
 

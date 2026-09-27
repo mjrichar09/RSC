@@ -131,6 +131,12 @@ export interface Settings {
    * and `game/` does not import from `ui/`.
    */
   pad: Record<string, unknown>;
+  /**
+   * The look the picture is drawn in, by id. A string at this layer, like
+   * `pad`: what the ids mean belongs to `render/look.ts`, whose `lookById`
+   * turns anything it does not know back into the standard look.
+   */
+  look: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -142,6 +148,7 @@ export const DEFAULT_SETTINGS: Settings = {
   // does not — so it is a thing you choose, never a thing you find yourself in.
   tilt: false,
   pad: {},
+  look: 'standard',
 };
 
 /** Exposed for tests: bringing a stored profile up to date and making it safe. */
@@ -221,6 +228,10 @@ function migrate(stored: unknown): Profile {
               ? stored.settings.tilt
               : DEFAULT_SETTINGS.tilt,
           pad: isObject(stored.settings.pad) ? { ...stored.settings.pad } : {},
+          look:
+            typeof stored.settings.look === 'string'
+              ? stored.settings.look.slice(0, 24)
+              : DEFAULT_SETTINGS.look,
         }
       : { ...DEFAULT_SETTINGS },
   };

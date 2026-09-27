@@ -175,6 +175,28 @@ await page.evaluate(`(() => {
 })()`);
 console.log('a gamepad moves through the menu, binds by moving a control, and backs out with B');
 
+// The look picker: picked on the front screen, lit there, and still picked
+// after a reload, because it is a saved setting and not a URL.
+await page.click('[data-action="look"][data-id="cyberpunk"]');
+await page.waitForSelector('.look-choice.is-on[data-id="cyberpunk"]');
+// The save is an IndexedDB write, and a reload the instant after the click
+// can beat it — so wait on the stored profile saying so, not on a duration.
+await page.waitForFunction(`new Promise((done) => {
+  const open = indexedDB.open('rsc');
+  open.onerror = () => done(false);
+  open.onsuccess = () => {
+    const get = open.result.transaction('profile', 'readonly').objectStore('profile').get('profile');
+    get.onsuccess = () => { done(get.result?.settings?.look === 'cyberpunk'); open.result.close(); };
+    get.onerror = () => done(false);
+  };
+})`);
+await page.reload();
+await page.waitForFunction(() => window.RSC?.ready === true);
+await page.waitForSelector('.look-choice.is-on[data-id="cyberpunk"]');
+await page.click('[data-action="look"][data-id="standard"]');
+await page.waitForSelector('.look-choice.is-on[data-id="standard"]');
+console.log('the look picker lights its choice and keeps it across a reload');
+
 // Career -> garage
 await page.click('[data-action="career"]');
 await page.waitForSelector('.garage.is-open');

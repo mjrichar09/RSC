@@ -36,7 +36,7 @@ import { GhostPlayer, GhostRecorder } from './sim/replay.js';
 import { COMPONENTS, FAILURE_LABEL, type ComponentId } from './sim/damage.js';
 import { Stage, findVariant, type StageVariant, variantKey } from './sim/stage.js';
 import { cornersAhead } from './sim/corners.js';
-import { visibility } from './sim/conditions.js';
+import { CLEAR_DAY, visibility } from './sim/conditions.js';
 import { TRACES, sampleTrace } from './sim/trace.js';
 import { SimWorld, initPhysics } from './sim/world.js';
 import { Mixer } from './audio/mixer.js';
@@ -297,10 +297,14 @@ const REPLAY_LEAD = 1.25;
 const REPLAY_LAG = 0.5;
 
 const params = new URLSearchParams(location.search);
-  // `?look=rallye|diorama|ink` lays a style over the whole picture. See
-  // render/look.ts. Declared here, above `loadStage`, which boot calls.
-  const look = lookById(params.get('look'));
+  // The look laid over the whole picture: `?look=` for the harness, otherwise
+  // the saved setting, which the front screen changes. See render/look.ts.
+  // Declared here, above `loadStage`, which boot calls.
+  const lookParam = params.get('look');
+  let look = lookById(lookParam ?? career.profile.settings.look);
   visionPass.look = look.fx;
+  /** The conditions' own grade, so a new look can be laid on it without a reload. */
+  let conditionsGrade = gradeFor(CLEAR_DAY);
   // `?vision=0.6` scales the whole windscreen effect. It is the setting most
   // likely to need a human eye, so it is adjustable rather than baked in.
   const visionParam = params.get('vision');
@@ -635,7 +639,8 @@ const params = new URLSearchParams(location.search);
     // The colour of the light. Set with the conditions, not with the weather
     // effects: turning the windscreen effect off is asking not to be blinded,
     // not asking for dusk to look like midday.
-    visionPass.grade = withLook(gradeFor(variant.conditions), look);
+    conditionsGrade = gradeFor(variant.conditions);
+    visionPass.grade = withLook(conditionsGrade, look);
     // And the sound of it: wind, surf, rain and birds, by biome and weather.
     mixer.setPlace(def.biome, variant.conditions);
     precipitation.setWeather(variant.conditions.weather);
@@ -994,6 +999,15 @@ const params = new URLSearchParams(location.search);
   const menu = new StartMenu(hudRoot, career);
   menu.board = board;
   menu.onName = (name) => multiplayer.setName(name);
+  menu.setLook(look.id);
+  menu.onLook = (id) => {
+    look = lookById(id);
+    visionPass.look = look.fx;
+    visionPass.grade = withLook(conditionsGrade, look);
+    void save.update((profile) => {
+      profile.settings.look = id;
+    });
+  };
   menu.onCareer = () => {
     rivalLiveries = [];
     mode = 'career';
