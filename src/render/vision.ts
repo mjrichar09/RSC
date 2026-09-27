@@ -21,6 +21,7 @@
 import * as THREE from 'three';
 import type { VisionState } from '../sim/vision.js';
 import { NEUTRAL_GRADE, crashGrade, gradeStrength, type Grade } from './grade.js';
+import { LOOKS, lookActive, type LookFx } from './look.js';
 
 const VERTEX = /* glsl */ `
   varying vec2 vUv;
@@ -70,6 +71,17 @@ const COMPOSITE = /* glsl */ `
   uniform float uSaturation;
   uniform float uContrast;
   uniform float uVignette;
+  // The look, on top of the grade. See render/look.ts; zero is off for each.
+  uniform float uGrain;
+  uniform float uGrainMoves;
+  uniform float uFringe;
+  uniform float uHalation;
+  uniform float uTilt;
+  uniform float uInk;
+  uniform float uPoster;
+  uniform vec3 uPaper;
+  uniform float uPaperMix;
+  uniform vec2 uTexel;
   varying vec2 vUv;
 
   // Cheap value noise: enough for droplets and splatter, and no texture to load.
@@ -393,8 +405,42 @@ const COMPOSITE = /* glsl */ `
     float soften = clamp(hidden * 1.15 + haze + shatter * 0.45, 0.0, 1.0) * (1.0 - onCar);
 
     vec4 sharp = texture2D(uScene, vUv);
+    // A long lens fringes: red and blue land a little apart, more toward the
+    // corners, and not at all in the middle where the car is.
+    if (uFringe > 0.0) {
+      vec2 off = (vUv - 0.5) * uFringe * 2.0;
+      sharp.r = texture2D(uScene, vUv + off).r;
+      sharp.b = texture2D(uScene, vUv - off).b;
+    }
     vec4 soft = texture2D(uBlur, vUv);
-    vec4 colour = mix(sharp, soft, soften);
+    // Tilt-shift: in focus across the car's own row of the screen, going soft
+    // above and below it, the way a macro lens photographs a model.
+    float band = uTilt * smoothstep(0.07, 0.3, abs(vUv.y - uOrigin.y));
+    vec4 colour = mix(sharp, soft, max(soften, band));
+    // Outlines, from the brightness gradient of the finished scene. Taken on
+    // a perceptual scale, or every edge in shadow vanishes and every edge in
+    // sunlight is a stripe.
+    if (uInk > 0.0) {
+      vec2 t = uTexel;
+      float tl = sqrt(dot(texture2D(uScene, vUv + vec2(-t.x, t.y)).rgb, vec3(0.2126, 0.7152, 0.0722)));
+      float tc = sqrt(dot(texture2D(uScene, vUv + vec2(0.0, t.y)).rgb, vec3(0.2126, 0.7152, 0.0722)));
+      float tr = sqrt(dot(texture2D(uScene, vUv + vec2(t.x, t.y)).rgb, vec3(0.2126, 0.7152, 0.0722)));
+      float ml = sqrt(dot(texture2D(uScene, vUv + vec2(-t.x, 0.0)).rgb, vec3(0.2126, 0.7152, 0.0722)));
+      float mr = sqrt(dot(texture2D(uScene, vUv + vec2(t.x, 0.0)).rgb, vec3(0.2126, 0.7152, 0.0722)));
+      float bl = sqrt(dot(texture2D(uScene, vUv + vec2(-t.x, -t.y)).rgb, vec3(0.2126, 0.7152, 0.0722)));
+      float bc = sqrt(dot(texture2D(uScene, vUv + vec2(0.0, -t.y)).rgb, vec3(0.2126, 0.7152, 0.0722)));
+      float br = sqrt(dot(texture2D(uScene, vUv + vec2(t.x, -t.y)).rgb, vec3(0.2126, 0.7152, 0.0722)));
+      float gx = (tr + 2.0 * mr + br) - (tl + 2.0 * ml + bl);
+      float gy = (tl + 2.0 * tc + tr) - (bl + 2.0 * bc + br);
+      float edge = smoothstep(0.16, 0.4, length(vec2(gx, gy)));
+      colour.rgb *= 1.0 - edge * uInk * 0.88;
+    }
+    // Halation: bright things bleed warm light into their surroundings, the
+    // way film does and a digital sensor does not.
+    if (uHalation > 0.0) {
+      vec3 glow = max(soft.rgb - 0.6, 0.0);
+      colour.rgb += glow * uHalation * vec3(1.0, 0.72, 0.5);
+    }
 
     // Muck is lit by your own lights, so it greys rather than blackens; the
     // dark is genuinely dark.
@@ -472,9 +518,27 @@ const COMPOSITE = /* glsl */ `
     // switches itself off in clear weather: an approximation would show up as
     // the whole screen changing brightness the moment it starts raining.
     vec3 linear = max(colour.rgb, 0.0);
-    gl_FragColor = vec4(
-      mix(linear * 12.92, 1.055 * pow(linear, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, linear)),
-      1.0);
+    vec3 srgb = mix(linear * 12.92, 1.055 * pow(linear, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, linear));
+    // The look's print stage, on display values because that is what a
+    // printed tone or a grain of film is measured in.
+    // Bands of brightness, with the hue kept. Per channel, every green on a
+    // stage stepped through yellow on its way down, and the grass came out
+    // the colour of mustard.
+    if (uPoster > 0.0) {
+      float tone = dot(srgb, vec3(0.2126, 0.7152, 0.0722));
+      // The darkest band is ink, not a dim colour: scaling a near-black pixel
+      // up to its band divides by almost nothing and blew shadows out into
+      // saturated blue and red. The cap keeps the same thing from happening
+      // at the edge of every other band.
+      float band = floor(tone * uPoster + 0.35) / uPoster;
+      srgb *= min(band / max(tone, 1e-3), 1.8);
+    }
+    srgb = mix(srgb, srgb * uPaper, uPaperMix);
+    if (uGrain > 0.0) {
+      vec2 grainAt = floor(vUv / uTexel) + fract(uTime * 7.3) * 113.0 * uGrainMoves;
+      srgb += (hash(grainAt) - 0.5) * uGrain;
+    }
+    gl_FragColor = vec4(srgb, 1.0);
   }
 `;
 
@@ -537,6 +601,16 @@ export class VisionPass {
         uSaturation: { value: 1 },
         uContrast: { value: 1 },
         uVignette: { value: 0 },
+        uGrain: { value: 0 },
+        uGrainMoves: { value: 0 },
+        uFringe: { value: 0 },
+        uHalation: { value: 0 },
+        uTilt: { value: 0 },
+        uInk: { value: 0 },
+        uPoster: { value: 0 },
+        uPaper: { value: new THREE.Vector3(1, 1, 1) },
+        uPaperMix: { value: 0 },
+        uTexel: { value: new THREE.Vector2(1 / 1280, 1 / 720) },
       },
       depthTest: false,
       depthWrite: false,
@@ -553,6 +627,10 @@ export class VisionPass {
     this.blurA.setSize(Math.max(Math.floor((width * ratio) / 2), 1), Math.max(Math.floor((height * ratio) / 2), 1));
     this.blurB.setSize(this.blurA.width, this.blurA.height);
     this.compositeMaterial.uniforms.uAspect!.value = width / Math.max(height, 1);
+    (this.compositeMaterial.uniforms.uTexel!.value as THREE.Vector2).set(
+      1 / Math.max(width * ratio, 1),
+      1 / Math.max(height * ratio, 1),
+    );
   }
 
   /**
@@ -563,6 +641,9 @@ export class VisionPass {
    * not to be blinded, not asking for dusk to look like midday.
    */
   grade: Grade = NEUTRAL_GRADE;
+
+  /** The look's shader stage. Its grade is already composed into `grade`. */
+  look: LookFx = LOOKS.standard.fx;
 
   /**
    * How hard the world is being shaken by an impact right now, 0..1.
@@ -603,7 +684,8 @@ export class VisionPass {
     return (
       this.clearScreen(state) &&
       state.cracks * this.strength < 0.02 &&
-      gradeStrength(this.liveGrade) < 0.02
+      gradeStrength(this.liveGrade) < 0.02 &&
+      !lookActive(this.look)
     );
   }
 
@@ -635,20 +717,26 @@ export class VisionPass {
     // clear afternoon the pass still runs, for the grade, and two half-res
     // blur passes for a texture nothing samples would be a waste of the only
     // per-frame budget this renderer has.
-    const blurred = !this.clearScreen(state);
+    const look = this.look;
+    const blurred = !this.clearScreen(state) || look.tilt > 0 || look.halation > 0;
     if (blurred) {
-      // Two-tap separable blur at half size.
+      // Two-tap separable blur at half size — three times over for a
+      // tilt-shift, whose out-of-focus band has to look like a lens and not
+      // like a slightly soft picture.
       this.quad.material = this.blurMaterial;
       const uniforms = this.blurMaterial.uniforms;
-      uniforms.uScene!.value = this.sceneTarget.texture;
-      (uniforms.uDirection!.value as THREE.Vector2).set(1 / this.blurA.width, 0);
-      this.renderer.setRenderTarget(this.blurA);
-      this.renderer.render(this.quadScene, this.quadCamera);
+      const rounds = look.tilt > 0 ? 4 : 1;
+      for (let round = 0; round < rounds; round++) {
+        uniforms.uScene!.value = round === 0 ? this.sceneTarget.texture : this.blurB.texture;
+        (uniforms.uDirection!.value as THREE.Vector2).set((1 + round) / this.blurA.width, 0);
+        this.renderer.setRenderTarget(this.blurA);
+        this.renderer.render(this.quadScene, this.quadCamera);
 
-      uniforms.uScene!.value = this.blurA.texture;
-      (uniforms.uDirection!.value as THREE.Vector2).set(0, 1 / this.blurA.height);
-      this.renderer.setRenderTarget(this.blurB);
-      this.renderer.render(this.quadScene, this.quadCamera);
+        uniforms.uScene!.value = this.blurA.texture;
+        (uniforms.uDirection!.value as THREE.Vector2).set(0, (1 + round) / this.blurA.height);
+        this.renderer.setRenderTarget(this.blurB);
+        this.renderer.render(this.quadScene, this.quadCamera);
+      }
     }
 
     const c = this.compositeMaterial.uniforms;
@@ -675,6 +763,15 @@ export class VisionPass {
     c.uSaturation!.value = grade.saturation;
     c.uContrast!.value = grade.contrast;
     c.uVignette!.value = grade.vignette;
+    c.uGrain!.value = look.grain;
+    c.uGrainMoves!.value = look.grainMoves;
+    c.uFringe!.value = look.fringe;
+    c.uHalation!.value = look.halation;
+    c.uTilt!.value = look.tilt;
+    c.uInk!.value = look.ink;
+    c.uPoster!.value = look.poster;
+    (c.uPaper!.value as THREE.Vector3).set(look.paper[0], look.paper[1], look.paper[2]);
+    c.uPaperMix!.value = look.paperMix;
     c.uTime!.value = time;
     // At full strength the world outside the beams keeps about a twelfth of
     // its light; at low strength it barely dims at all. This used to bottom

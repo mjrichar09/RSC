@@ -122,6 +122,15 @@ export interface Settings {
    * a device that then says no simply plays with the pad.
    */
   tilt: boolean;
+  /**
+   * Gamepad bindings the player changed, by action. Only the changes: an
+   * action missing here takes the default for whatever pad is connected.
+   *
+   * Opaque at this layer on purpose — what a binding is belongs to
+   * `ui/gamepad.ts`, which validates this with `cleanBindings` on the way in,
+   * and `game/` does not import from `ui/`.
+   */
+  pad: Record<string, unknown>;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -132,6 +141,7 @@ export const DEFAULT_SETTINGS: Settings = {
   // Off. The thumb drag works lying on a sofa, in a car and in bed, and tilt
   // does not — so it is a thing you choose, never a thing you find yourself in.
   tilt: false,
+  pad: {},
 };
 
 /** Exposed for tests: bringing a stored profile up to date and making it safe. */
@@ -210,6 +220,7 @@ function migrate(stored: unknown): Profile {
             typeof stored.settings.tilt === 'boolean'
               ? stored.settings.tilt
               : DEFAULT_SETTINGS.tilt,
+          pad: isObject(stored.settings.pad) ? { ...stored.settings.pad } : {},
         }
       : { ...DEFAULT_SETTINGS },
   };

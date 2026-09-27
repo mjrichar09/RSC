@@ -199,7 +199,26 @@ function decalTexture(value: string, ink: number, ground: number): THREE.CanvasT
  * and bare metal behind. A panel that only darkens reads as dirty, and a panel
  * with bright metal along its ridges reads as bent.
  */
-const BARE_METAL = new THREE.Color(0x9aa0a6);
+const BARE_METAL = new THREE.Color(0x9da3a9);
+/**
+ * What is under the paint before the steel: a grey primer coat. Most of a
+ * scrape stops here, and it is what makes a chip read as a chip — straight from
+ * livery to bright steel looks like a highlight, not like damage.
+ */
+const PRIMER = new THREE.Color(0x505457);
+/** Paint that has been dragged along something and kept: flatter and greyer. */
+const SCUFF = new THREE.Color(0x8c8680);
+/** Size of a patch of lost paint, metres, and of the steel showing inside one. */
+const PATCH = 0.16;
+const FLECK = 0.07;
+/** Burnt and blackened, where a wreck has been properly ground into the road. */
+const SOOT = new THREE.Color(0x222222);
+/** The structure behind a panel that has come off. */
+const SCAR = 0x2a2c2f;
+/** Glass, the lens colour of a working lamp, and a lamp that has been broken out. */
+const GLASS = '#9fb6c4';
+const LENS = new THREE.Color(0xe6edf1);
+const LENS_DEAD = new THREE.Color(0x17191b);
 
 /**
  * Spacing of the fold planes, metres.
@@ -212,8 +231,74 @@ const BARE_METAL = new THREE.Color(0x9aa0a6);
  */
 const CREASE = 0.13;
 
-/** A crazed windscreen: milky, not shattered — this car still has to be driven. */
-const WINDSCREEN_CRAZED = new THREE.Color(0xd8dee3);
+/**
+ * A cracked windscreen, drawn: a star where it was hit and cracks running out
+ * of it, more of them the worse it is.
+ *
+ * It used to go uniformly milky, which reads as fog or as a dirty window. Glass
+ * that has taken a hit is clear between its cracks — the cracks are the
+ * damage. `level` is the damage in sixths; the pattern is seeded by nothing but
+ * the level, so every machine draws the same windscreen.
+ */
+function crackedGlass(level: number): THREE.CanvasTexture {
+  const size = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const g = canvas.getContext('2d')!;
+  g.fillStyle = GLASS;
+  g.fillRect(0, 0, size, size);
+  if (level > 0) {
+    // A little milk as well, rising late: laminated glass clouds as it
+    // delaminates, and only once it is well broken.
+    g.fillStyle = `rgba(216, 222, 227, ${Math.max(level - 2, 0) * 0.07})`;
+    g.fillRect(0, 0, size, size);
+    const cx = size * 0.38;
+    const cy = size * 0.42;
+    let n = 1;
+    const rand = () => hash3(n++ * 1.37, level * 0.71, 3.1);
+    g.strokeStyle = 'rgba(240, 244, 247, 0.9)';
+    g.lineCap = 'round';
+    // Radial cracks, each a walk that wanders a little as it goes.
+    const rays = 3 + level * 3;
+    for (let r = 0; r < rays; r++) {
+      const heading0 = (r / rays) * Math.PI * 2 + rand() * 0.6;
+      let x = cx;
+      let y = cy;
+      let heading = heading0;
+      const reach = size * (0.18 + rand() * 0.14 * level);
+      g.lineWidth = 1.6;
+      g.beginPath();
+      g.moveTo(x, y);
+      for (let d = 0; d < reach; d += 9) {
+        heading += (rand() - 0.5) * 0.5;
+        x += Math.cos(heading) * 9;
+        y += Math.sin(heading) * 9;
+        g.lineTo(x, y);
+      }
+      g.stroke();
+    }
+    // Rings round the star, broken into arcs, once it is more than chipped.
+    for (let ring = 1; ring < level; ring++) {
+      const radius = ring * 13 + rand() * 6;
+      g.lineWidth = 1.1;
+      for (let a = 0; a < Math.PI * 2; a += 0.7) {
+        if (rand() < 0.35) continue;
+        g.beginPath();
+        g.arc(cx, cy, radius, a, a + 0.5 + rand() * 0.2);
+        g.stroke();
+      }
+    }
+    // The impact itself: a small white bruise.
+    g.fillStyle = 'rgba(245, 247, 250, 0.85)';
+    g.beginPath();
+    g.arc(cx, cy, 3 + level, 0, Math.PI * 2);
+    g.fill();
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
 
 /** Disc colours: cool cast iron, heat-tinted bronze, cherry red, and white heat. */
 const DISC_COLD = new THREE.Color(0x8d949c);
@@ -268,6 +353,12 @@ export class CarView {
   private screenRestGeometry: Float32Array | null = null;
   /** Windscreen health the glass was last built for. */
   private glassAt = -1;
+  /** Crack level the windscreen texture was last drawn for. */
+  private crackAt = -1;
+  /** Headlight lenses, which show a working or broken lamp in daylight too. */
+  private readonly lenses: THREE.Mesh[] = [];
+  /** The dark structure behind each panel, shown when the panel is gone. */
+  private readonly scars = new Map<PartId, THREE.Mesh>();
   private readonly folds = new Map<
     THREE.Mesh,
     { axis: 0 | 1 | 2; sign: number; half: [number, number, number]; components: ComponentId[] }
@@ -288,6 +379,8 @@ export class CarView {
   private readonly partRest = new Map<PartId, THREE.Vector3>();
   /** Which component's health deforms each panel. */
   private readonly partComponent = new Map<PartId, ComponentId>();
+  /** Half-size of each panel, for hinging it about one of its own edges. */
+  private readonly partHalf = new Map<PartId, THREE.Vector3>();
 
   constructor(parent: THREE.Object3D, options: CarViewOptions = {}) {
     const h = CAR.halfExtents;
@@ -403,6 +496,27 @@ export class CarView {
       this.parts.set(id, mesh);
       this.partRest.set(id, mesh.position.clone());
       this.partComponent.set(id, component);
+      const dims = geometry.parameters;
+      this.partHalf.set(id, new THREE.Vector3(dims.width / 2, dims.height / 2, dims.depth / 2));
+      // What is left when the panel goes: the structure it was bolted to.
+      // Without it a shed door showed the painted hull behind it, so the car
+      // looked exactly as complete as before, one panel narrower.
+      if (!isGhost && id !== 'wing' && id !== 'exhaust' && !id.startsWith('mirror')) {
+        const { width, height, depth } = geometry.parameters;
+        const scar = new THREE.Mesh(
+          new THREE.BoxGeometry(width * 0.92, height * 0.9, depth * 0.92),
+          flat(SCAR, 0.95),
+        );
+        const lateral = Math.abs(position[0]) > 0.5;
+        scar.position.set(
+          position[0] * (lateral ? 0.96 : 1),
+          position[1] - (lateral ? 0 : 0.02),
+          position[2] * (lateral ? 1 : 0.97),
+        );
+        scar.visible = false;
+        this.chassis.add(scar);
+        this.scars.set(id, scar);
+      }
       if (!isGhost) this.keepRestGeometry(mesh, [component]);
       this.restPose.set(mesh, {
         position: mesh.position.clone(),
@@ -622,7 +736,12 @@ export class CarView {
    */
   private keepRestGeometry(mesh: THREE.Mesh, components: ComponentId[] = []): void {
     if (this.restGeometry.has(mesh)) return;
-    mesh.geometry = mesh.geometry.clone();
+    // Non-indexed, so every triangle owns its three vertices and can take its
+    // own colour. Indexed, a vertex is shared by the faces round it and its
+    // colour blends across all of them — which is why a scraped red panel came
+    // out pink rather than red with grey chips in it. The fold still moves a
+    // shared corner once: it is keyed off position, never off index.
+    mesh.geometry = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone();
     const position = mesh.geometry.getAttribute('position') as THREE.BufferAttribute;
     const rest = Float32Array.from(position.array as Float32Array);
     this.restGeometry.set(mesh, rest);
@@ -704,6 +823,16 @@ export class CarView {
       lamp.position.set(side * h.x * 0.55, h.y * 0.35, h.z * 0.99);
       this.chassis.add(lamp);
       this.lamps.push(lamp);
+
+      // The lens, on the nose's front face and carried by it, so a crumpled
+      // nose takes its lamps back with it rather than leaving them hanging.
+      const lens = new THREE.Mesh(
+        new THREE.BoxGeometry(0.3, 0.13, 0.03),
+        new THREE.MeshStandardMaterial({ color: LENS, roughness: 0.15, metalness: 0.1 }),
+      );
+      lens.position.set(side * h.x * 0.55, -h.y * 0.05, h.z * 0.17 + 0.012);
+      this.nose.add(lens);
+      this.lenses.push(lens);
     }
   }
 
@@ -774,6 +903,8 @@ export class CarView {
 
       const { axis, sign, half } = fold;
       const across: [number, number] = axis === 0 ? [1, 2] : axis === 1 ? [0, 2] : [0, 1];
+      // How hard each vertex was hit, 0..1+, for the paint pass after.
+      const marks = new Float32Array(array.length / 3);
 
       for (let i = 0; i < array.length; i += 3) {
         const local = [rest[i]!, rest[i + 1]!, rest[i + 2]!];
@@ -793,7 +924,10 @@ export class CarView {
           // already is from the mesh's own axis, so the panel splays rather
           // than inflating uniformly. Kept well under the squeeze: at parity
           // the panels splay into plates wider than the car they are on.
-          for (const b of across) move[b]! += local[b]! * squeeze * 0.32;
+          // Cut from 0.32 when damage went for realism: a car hit hard still
+          // has to be the shape of a car, and the splay was what turned a
+          // written-off one into a flat star of plates.
+          for (const b of across) move[b]! += local[b]! * squeeze * 0.2;
         }
 
         // --- 2. dents ------------------------------------------------------
@@ -802,6 +936,7 @@ export class CarView {
         const y = local[1]! + mesh.position.y;
         const z = local[2]! + mesh.position.z;
 
+        let influence = 0;
         for (const dent of damage.dents) {
           const ox = dent.at.x - x;
           const oy = dent.at.y - y;
@@ -813,6 +948,7 @@ export class CarView {
           // reach and pushing outward beyond it: the fold has a lip, the way a
           // real one does, and the panel keeps roughly the volume it had.
           const t = distance / dent.reach;
+          influence = Math.max(influence, (1 - t) ** 1.5 * Math.min(dent.depth / 0.12, 1));
           const shape = (1 - t) ** 2 * (1 - 3 * t);
           const push = (shape > 0 ? shape : shape * 2.4) * dent.depth * 0.9;
           const scale = distance > 1e-4 ? push / distance : 0;
@@ -836,7 +972,9 @@ export class CarView {
         // merely very bent.
         if (wear > 0.8) {
           const tear = (wear - 0.8) * 5;
-          const rip = (hash3(local[0]! * 7.3, local[1]! * 5.1, local[2]! * 3.7) - 0.45) * tear * 0.34;
+          // 0.1, from 0.34: at the old size every torn vertex was a spike, and
+          // a wreck read as a hedgehog rather than as torn sheet.
+          const rip = (hash3(local[0]! * 7.3, local[1]! * 5.1, local[2]! * 3.7) - 0.45) * tear * 0.1;
           for (const b of across) move[b]! += Math.sign(local[b]! || 1) * Math.max(rip, 0);
         }
 
@@ -860,25 +998,79 @@ export class CarView {
         array[i + 1] = local[1]! + move[1]!;
         array[i + 2] = local[2]! + move[2]!;
 
-        // --- bare metal along the folds ------------------------------------
-        if (colors) {
-          // Keyed to the crease correction rather than to total displacement.
-          // Paint cracks off a ridge, not off a panel that has been pushed
-          // bodily inward — driven off the whole move, a folded car went
-          // uniformly grey and lost its livery entirely. Capped short of bare,
-          // because even a wreck has paint left between its creases.
-          const exposed = Math.min(crease / 0.075, 1) ** 1.2 * 0.62;
-          const dull = 1 - wear * 0.3;
-          colors[i] = (paint.r * (1 - exposed) + BARE_METAL.r * exposed) * dull;
-          colors[i + 1] = (paint.g * (1 - exposed) + BARE_METAL.g * exposed) * dull;
-          colors[i + 2] = (paint.b * (1 - exposed) + BARE_METAL.b * exposed) * dull;
-        }
+        // Keyed to the crease correction and to the dents rather than to total
+        // displacement: paint cracks off a ridge and off the point of contact,
+        // not off a panel that has been pushed bodily inward — driven off the
+        // whole move, a folded car went uniformly grey and lost its livery.
+        // A crease counts for less than a hit: a whole buckled panel is
+        // creased, and scoring every ridge as a strike chipped it end to end.
+        marks[i / 3] = Math.max(Math.min(crease / 0.12, 1) * 0.55, influence);
       }
+
+      // --- the paint, one facet at a time ----------------------------------
+      if (colors) this.paintFacets(mesh, rest, colors, marks, paint, wear);
 
       attribute.needsUpdate = true;
       const colorAttribute = mesh.geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
       if (colorAttribute) colorAttribute.needsUpdate = true;
       mesh.geometry.computeVertexNormals();
+    }
+  }
+
+  /**
+   * Paint, chipped.
+   *
+   * Every triangle is one of five things — paint, scuffed paint, primer, bare
+   * steel or soot — chosen by how hard its three corners were hit, the panel's
+   * overall wear, and a hash of where the facet sits. Crisp per facet, never
+   * blended: a real scrape is a hard-edged patch of a different colour, and the
+   * blend of a red panel into grey is pink, which no crashed car has ever been.
+   *
+   * Even a wreck keeps most of its livery. Paint is what tells you whose car
+   * it was, and a written-off car that has gone uniformly grey reads as a
+   * primer mock-up rather than as the car you just crashed.
+   */
+  private paintFacets(
+    mesh: THREE.Mesh,
+    rest: Float32Array,
+    colors: Float32Array,
+    marks: Float32Array,
+    paint: THREE.Color,
+    wear: number,
+  ): void {
+    const tint = new THREE.Color();
+    const dull = 1 - wear * 0.22;
+    for (let f = 0; f < rest.length; f += 9) {
+      const v = f / 3;
+      const hit = (marks[v]! + marks[v + 1]! + marks[v + 2]!) / 3;
+      const cx = (rest[f]! + rest[f + 3]! + rest[f + 6]!) / 3 + mesh.position.x;
+      const cy = (rest[f + 1]! + rest[f + 4]! + rest[f + 7]!) / 3 + mesh.position.y;
+      const cz = (rest[f + 2]! + rest[f + 5]! + rest[f + 8]!) / 3 + mesh.position.z;
+      // Rolled per patch of car, not per facet. Per facet, the two triangles
+      // of every quad rolled apart and the chips came out as diagonal hazard
+      // stripes; paint comes off in patches, and inside a patch the primer
+      // wears through to steel in smaller ones.
+      const patch = hash3(Math.floor(cx / PATCH), Math.floor(cy / PATCH), Math.floor(cz / PATCH));
+      const fleck = hash3(Math.floor(cx / FLECK) * 1.3, Math.floor(cy / FLECK) * 1.7, Math.floor(cz / FLECK) * 1.1);
+      // How damaged this patch is. A panel's general wear only ever chips a
+      // little of it; the hits are where the paint actually comes off.
+      const level = hit * 0.85 + wear * 0.08;
+      if (level < 0.08 || patch > level * 1.1) {
+        tint.copy(paint).multiplyScalar(dull);
+      } else if (patch > level * 0.6) {
+        tint.copy(paint).lerp(SCUFF, 0.45).multiplyScalar(dull * 0.9);
+      } else if (wear > 0.8 && fleck < (wear - 0.8) * 1.5) {
+        tint.copy(SOOT);
+      } else if (fleck < 0.3 + hit * 0.3) {
+        tint.copy(BARE_METAL);
+      } else {
+        tint.copy(PRIMER);
+      }
+      for (let k = 0; k < 9; k += 3) {
+        colors[f + k] = tint.r;
+        colors[f + k + 1] = tint.g;
+        colors[f + k + 2] = tint.b;
+      }
     }
   }
 
@@ -926,7 +1118,10 @@ export class CarView {
         // ways rather than all leaning together. Halved when the panels stopped
         // shrinking: 39 degrees on a full-size door swings it clear of the car
         // and reads as a plate lying on the roof rather than as a folded skin.
-        const twist = hurt * 0.34;
+        // 0.12, from 0.34, when damage went for realism: a folded panel is
+        // still bolted on at its edges, and the old angle lifted doors and
+        // wings clear of the car as if they had already come off.
+        const twist = hurt * 0.12;
         mesh.rotation.set(
           lateral ? 0 : twist * Math.sign(rest.z || 1),
           twist * 0.6 * Math.sign(rest.x || 1),
@@ -946,6 +1141,15 @@ export class CarView {
     for (let i = 0; i < this.headlights.length; i++) {
       const sideAlive = i === 0 || lightsHealth > 0.5;
       const strength = sideAlive ? lightsHealth : 0;
+      // The lens tells the same story in daylight: clouding as the lamp is
+      // hurt, and a black hole where it has been broken out.
+      const lens = this.lenses[i];
+      if (lens) {
+        const mat = lens.material as THREE.MeshStandardMaterial;
+        if (strength <= 0.02) mat.color.copy(LENS_DEAD);
+        else mat.color.copy(LENS).lerp(PRIMER, (1 - strength) * 0.5);
+        mat.roughness = 0.15 + (1 - strength) * 0.6;
+      }
       const beam = this.headlights[i]!;
       beam.intensity = strength * this.headlightWeight * 30;
       beam.distance = 40 + strength * 65;
@@ -993,8 +1197,15 @@ export class CarView {
     const material = this.screen.material as THREE.MeshStandardMaterial;
     const cracked = 1 - health;
 
-    material.color.copy(rest.color).lerp(WINDSCREEN_CRAZED, cracked);
-    material.roughness = 0.2 + cracked * 0.7;
+    const level = Math.round(cracked * 6);
+    if (level !== this.crackAt) {
+      this.crackAt = level;
+      material.map?.dispose();
+      material.map = crackedGlass(level);
+      material.color.setHex(0xffffff);
+      material.needsUpdate = true;
+    }
+    material.roughness = 0.2 + cracked * 0.5;
 
     // Past a third gone the glass starts leaving the frame.
     const blown = Math.min(Math.max((0.35 - health) / 0.35, 0), 1);
@@ -1034,27 +1245,90 @@ export class CarView {
     for (const [id, mesh] of this.parts) {
       const state = debris.stateOf(id);
       mesh.visible = state !== 'gone';
+      const scar = this.scars.get(id);
+      if (scar) scar.visible = state === 'gone';
       const rest = this.partRest.get(id)!;
       // These poses are applied *after* the damage deformation and deliberately
       // override it: a part that is hanging off is no longer sitting where its
       // dents left it.
       if (state === 'dragging') {
-        // Hanging at one corner and flapping. A rigid dragging part reads as a
-        // panel that has simply been moved; the flap is what says it is only
-        // still attached by one bolt, and it is the last warning the player
-        // gets before it lets go.
+        // Hanging off the one fixing it still has, and flapping about it. The
+        // flap is what says it is only still attached by one bolt, and it is
+        // the last warning the player gets before it lets go.
         // On the caller's clock, not the wall's. The cinematic runs at a third
         // speed, and a panel flapping at full rate against a car falling apart
         // in slow motion is the one thing in the frame that is not slowed down.
         const beat = clock * 11 + rest.z;
-        mesh.position.set(rest.x - 0.12, rest.y - 0.2 + Math.sin(beat) * 0.035, rest.z);
-        mesh.rotation.set(Math.sin(beat * 1.3) * 0.16, 0, 0.5 + Math.sin(beat) * 0.12);
+        this.hinge(id, mesh, rest, 1, Math.sin(beat) * 0.08);
       } else if (debris.isLoose(id)) {
-        // Sitting proud and skewed: the tell that this one is about to go.
-        mesh.position.set(rest.x, rest.y + 0.07, rest.z);
-        mesh.rotation.set(-0.18, 0, 0.06);
+        // Sprung a little way open: the tell that this one is about to go.
+        this.hinge(id, mesh, rest, 0.18, 0);
       }
     }
+  }
+
+  /**
+   * Swing a panel about the edge it is still fixed by.
+   *
+   * Every hanging part used to take one pose — tilted 29° about the car's long
+   * axis and shifted toward the left whichever side it was on — so a car
+   * losing its panels grew slabs at odd angles, like plates stuck in it. Real
+   * ones hang from what holds them: a bonnet pops up from its hinges at the
+   * windscreen, a boot lid from the back of the roof, a door swings open from
+   * its front edge, a bumper drops one end to the road and hangs off the other.
+   *
+   * `open` is 0..1 of the way to fully hanging; `flap` is added to the angle.
+   */
+  private hinge(id: PartId, mesh: THREE.Mesh, rest: THREE.Vector3, open: number, flap: number): void {
+    const half = this.partHalf.get(id);
+    if (!half) return;
+    const side = Math.sign(rest.x) || 1;
+    // Pivot in the panel's own frame, and the rotation about it.
+    const pivot = new THREE.Vector3();
+    const euler = new THREE.Euler();
+    const a = open;
+    switch (id) {
+      case 'bonnet':
+        // Hinged at the windscreen end, front edge up.
+        pivot.set(0, 0, -half.z);
+        euler.set(-(0.75 * a + flap), 0, 0);
+        break;
+      case 'boot':
+        pivot.set(0, 0, half.z);
+        euler.set(0.8 * a + flap, 0, 0);
+        break;
+      case 'doorLeft':
+      case 'doorRight':
+      case 'wingFL':
+      case 'wingFR':
+        // Front edge held, back edge swung out from the car.
+        pivot.set(0, 0, half.z);
+        euler.set(0, -side * (0.85 * a + flap), 0.12 * a * side);
+        break;
+      case 'quarterRL':
+      case 'quarterRR':
+        pivot.set(0, 0, -half.z);
+        euler.set(0, side * (0.7 * a + flap), 0.12 * a * side);
+        break;
+      case 'mirrorL':
+      case 'mirrorR':
+        // Dangling off its cable.
+        pivot.set(0, half.y, 0);
+        euler.set(1.3 * a + flap, 0, 0);
+        break;
+      case 'exhaust':
+        pivot.set(0, 0, half.z);
+        euler.set(-(0.35 * a + flap), 0, 0);
+        break;
+      default:
+        // Bumpers and the rear wing: one end still fixed, the other dropped.
+        pivot.set(half.x, 0, 0);
+        euler.set(0, 0, 0.45 * a + flap);
+    }
+    const q = new THREE.Quaternion().setFromEuler(euler);
+    const swung = pivot.clone().applyQuaternion(q);
+    mesh.quaternion.copy(q);
+    mesh.position.copy(rest).add(pivot).sub(swung);
   }
 
   /** Where a dragging part touches the road, in world space, for sparks. */

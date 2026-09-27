@@ -28,6 +28,8 @@ const [CELL_W, CELL_H] = arg('size', '640x360').split('x').map(Number) as [numbe
 
 // A cell is `<stage-id>@<seconds>`, or `trace:<name>@<seconds>` for the
 // proving ground. Stage cells are driven by the AI so the frame is repeatable.
+/** `--look=rallye` shoots in that look; `look<id>:` does it per cell. */
+const lookArg = arg('look', '');
 const cellSpec = arg('cells', 'pine-loop@22,quarry-run@26,north-pass@30,pine-loop@44');
 /** Driver commitment for stage cells, so a frame can catch the car at real pace. */
 const grip = arg('grip', '0.6');
@@ -60,7 +62,12 @@ const awardArg = arg('award', '');
 const [gridCols, gridRows] = arg('grid', '2x2').split('x').map(Number) as [number, number];
 const outName = arg('out', 'composite');
 
-const cells = cellSpec.split(',').map((spec) => {
+const cells = cellSpec.split(',').map((whole) => {
+  // `look<id>:` in front of any cell shoots that cell in that look, so one
+  // composite can put the looks side by side.
+  const lookCell = /^look(\w+):(.+)$/.exec(whole);
+  const cellLook = lookCell?.[1] ?? lookArg;
+  const spec = lookCell?.[2] ?? whole;
   const [name, t] = spec.split('@');
   const seconds = Number(t ?? '3');
   const isTrace = name!.startsWith('trace:');
@@ -136,10 +143,10 @@ const cells = cellSpec.split(',').map((spec) => {
       }${crashFor ? `&crash=${crashFor}` : ''}${hotFor ? `&brakes=${hotFor}` : ''}${zoomArg ? `&zoom=${zoomArg}` : ''}${looseFor ? `&loosen=${looseFor}` : ''}${afterFor ? `&after=${afterFor}` : ''}${
         wreckMatch ? `&wreck=${wreckMatch[1]}` : ''
       }${glassMatch ? `&glass=${(Number(glassMatch[1]) / 100).toFixed(2)}` : ''
-      }${signArg ? `&sign=${signArg}` : ''}${visionFor ? `&vision=${visionFor}` : ''}${carsArg ? `&cars=${carsArg}` : ''}${boilArg ? `&boil=${boilArg}` : ''}${knockArg ? `&knock=${knockArg}` : ''}${lightsArg ? `&lights=${lightsArg}` : ''}${awardArg ? `&award=${awardArg}` : ''}${replayArg ? '&replay=1' : ''}`;
+      }${signArg ? `&sign=${signArg}` : ''}${visionFor ? `&vision=${visionFor}` : ''}${carsArg ? `&cars=${carsArg}` : ''}${boilArg ? `&boil=${boilArg}` : ''}${knockArg ? `&knock=${knockArg}` : ''}${lightsArg ? `&lights=${lightsArg}` : ''}${awardArg ? `&award=${awardArg}` : ''}${replayArg ? '&replay=1' : ''}${cellLook ? `&look=${cellLook}` : ''}`;
   return {
     url,
-    label: `${id}${useVariant ? ` ${useVariant}` : ''} @ ${seconds}s${glassMatch ? ` · glass ${glassMatch[1]}%` : ''}${withGhost ? ' + ghost' : ''}${
+    label: `${cellLook ? `[${cellLook}] ` : ''}${id}${useVariant ? ` ${useVariant}` : ''} @ ${seconds}s${glassMatch ? ` · glass ${glassMatch[1]}%` : ''}${withGhost ? ' + ghost' : ''}${
       crashFor ? ` + ${crashFor}s crash` : ''
     }${carsArg ? ` · ${carsArg} cars` : ''}${boilArg ? ` · boiling` : ''}${hotMatch ? ` · ${hotFor}°C` : ''}${
       looseMatch ? ` · ${looseFor} N·s +${afterFor}s` : ''

@@ -62,6 +62,7 @@ import {
 } from './render/scene.js';
 import { buildStageView, type StageView } from './render/stageMesh.js';
 import { Controls } from './ui/controls.js';
+import { GamepadInput, cleanBindings } from './ui/gamepad.js';
 import { Hud } from './ui/hud.js';
 import { RaceHud } from './ui/raceHud.js';
 import { DamagePanel } from './ui/damagePanel.js';
@@ -80,6 +81,7 @@ import type { VehicleState } from './sim/vehicle.js';
 import { Vision } from './sim/vision.js';
 import { VisionPass } from './render/vision.js';
 import { gradeFor } from './render/grade.js';
+import { lookById, withLook } from './render/look.js';
 import { TuningPanel } from './ui/tuningPanel.js';
 
 /**
@@ -295,6 +297,10 @@ const REPLAY_LEAD = 1.25;
 const REPLAY_LAG = 0.5;
 
 const params = new URLSearchParams(location.search);
+  // `?look=rallye|diorama|ink` lays a style over the whole picture. See
+  // render/look.ts. Declared here, above `loadStage`, which boot calls.
+  const look = lookById(params.get('look'));
+  visionPass.look = look.fx;
   // `?vision=0.6` scales the whole windscreen effect. It is the setting most
   // likely to need a human eye, so it is adjustable rather than baked in.
   const visionParam = params.get('vision');
@@ -629,7 +635,7 @@ const params = new URLSearchParams(location.search);
     // The colour of the light. Set with the conditions, not with the weather
     // effects: turning the windscreen effect off is asking not to be blinded,
     // not asking for dusk to look like midday.
-    visionPass.grade = gradeFor(variant.conditions);
+    visionPass.grade = withLook(gradeFor(variant.conditions), look);
     // And the sound of it: wind, surf, rain and birds, by biome and weather.
     mixer.setPlace(def.biome, variant.conditions);
     precipitation.setWeather(variant.conditions.weather);
@@ -1376,8 +1382,12 @@ const params = new URLSearchParams(location.search);
   controls.onGarage = () => {
     if (freeRoam) return;
     // Escape backs out of photo mode before it backs out of anything else.
+    // Through `onExit`, not `close`: this listener runs before the replay's
+    // own, and during the crash cinematic a bare `close` left the skid marks
+    // cut off at the crash, the debris and particles hidden and the race clock
+    // where the replay had it — `endCrashReplay` is what puts those back.
     if (replayUi.active) {
-      replayUi.close();
+      replayUi.onExit?.();
       return;
     }
     if (menu.isOpen) {
@@ -1401,6 +1411,35 @@ const params = new URLSearchParams(location.search);
   controls.onSelectStage = (index) => {
     if (freeRoam) return;
     if (garage.isOpen) void garage.enterByIndex(index);
+  };
+
+  /*
+   * The pad. Its actions go to the same handlers the keys do, so the career
+   * rules on restart and rescue, and the order Escape backs out of things in,
+   * are one set of rules rather than two.
+   */
+  const gamepad = new GamepadInput();
+  controls.gamepad = gamepad;
+  menu.gamepad = gamepad;
+  gamepad.setCustom(cleanBindings(career.profile.settings.pad));
+  menu.onPadBindings = (custom) => {
+    void save.update((profile) => {
+      profile.settings.pad = { ...custom };
+    });
+  };
+  gamepad.onRestart = () => controls.onReset?.();
+  gamepad.onRescue = () => controls.onRescue?.();
+  gamepad.onMenu = () => controls.onGarage?.();
+  gamepad.onBack = () => controls.onGarage?.();
+  gamepad.onSkip = () => {
+    if (!replayUi.state?.auto) return false;
+    replayUi.onExit?.();
+    return true;
+  };
+  gamepad.onConnect = () => {
+    // A pad means somebody is not using their thumbs on the glass.
+    touch.setVisible(false);
+    menu.padChanged();
   };
 
   /**

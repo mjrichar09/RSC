@@ -9,16 +9,13 @@
 import type { DriverInput } from '../sim/input.js';
 import { isTyping } from './typing.js';
 import { clamp, moveToward } from '../sim/math.js';
+import type { GamepadInput } from './gamepad.js';
 
 const KEY_STEER_RATE = 3.2;
 const KEY_STEER_RETURN = 5.5;
 /** Pedal travel per second on a keyboard: ~0.4 s to full, released twice as fast. */
 const KEY_BRAKE_RATE = 2.6;
 const KEY_BRAKE_RELEASE = 6.0;
-const DEADZONE = 0.12;
-
-const applyDeadzone = (v: number): number =>
-  Math.abs(v) < DEADZONE ? 0 : Math.sign(v) * ((Math.abs(v) - DEADZONE) / (1 - DEADZONE));
 
 export class Controls {
   private readonly held = new Set<string>();
@@ -43,6 +40,9 @@ export class Controls {
   onMultiplayer: (() => void) | null = null;
   /** Fires on the photo-mode key. */
   onPhoto: (() => void) | null = null;
+
+  /** The pad, when one is wired in. Its bindings and menu handling live there. */
+  gamepad: GamepadInput | null = null;
 
   constructor(target: EventTarget = window) {
     target.addEventListener('keydown', (e) => {
@@ -79,8 +79,6 @@ export class Controls {
   }
 
   sample(dt: number): DriverInput {
-    const pad = navigator.getGamepads?.().find((p) => p !== null) ?? null;
-
     let throttle = this.down('KeyW', 'ArrowUp') ? 1 : 0;
     // The brake ramps like the steering does, and for the same reason: with a
     // digital pedal every keyboard stop locks all four wheels, so threshold
@@ -101,14 +99,12 @@ export class Controls {
     this.keySteer = moveToward(this.keySteer, wanted, rate * dt);
     let steer = this.keySteer;
 
+    const pad = this.gamepad?.driving();
     if (pad) {
-      // Standard mapping: triggers on axes 6/7 for some pads, buttons 6/7 for others.
-      throttle = Math.max(throttle, pad.buttons[7]?.value ?? 0);
-      brake = Math.max(brake, pad.buttons[6]?.value ?? 0);
-      handbrake = Math.max(handbrake, pad.buttons[0]?.value ?? 0);
-      const stick = applyDeadzone(pad.axes[0] ?? 0);
-      if (stick !== 0) steer = stick;
-      if (pad.buttons[9]?.pressed) this.onReset?.();
+      throttle = Math.max(throttle, pad.throttle);
+      brake = Math.max(brake, pad.brake);
+      handbrake = Math.max(handbrake, pad.handbrake);
+      if (pad.steer !== 0) steer = pad.steer;
     }
 
     return {

@@ -110,6 +110,71 @@ await page.click('[data-action="back"]');
 await page.waitForSelector('[data-action="career"]');
 console.log(`help screen opens and closes (${helpText.trim().length} characters)`);
 
+/*
+ * A gamepad, in the menus and on the controller screen.
+ *
+ * Headless Chrome has no pads, so one is installed behind
+ * `navigator.getGamepads` and its numbers are set by hand. Every press waits on
+ * the page to show it happened rather than on a duration: the pad is polled
+ * once a frame, and frames here come five or six a second.
+ */
+await page.evaluate(`(() => {
+  const buttons = Array.from({ length: 17 }, () => ({ value: 0, pressed: false, touched: false }));
+  window.__pad = { id: 'uicheck pad', index: 0, connected: true, mapping: 'standard',
+    axes: [0, 0, 0, 0, 0, 0], buttons, timestamp: 0 };
+  navigator.getGamepads = () => [window.__pad];
+})()`);
+const padButton = async (index: number, until: string) => {
+  await page.evaluate(`(() => { const b = window.__pad.buttons[${index}]; b.value = 1; b.pressed = true; })()`);
+  await page.waitForFunction(until);
+  await page.evaluate(`(() => { const b = window.__pad.buttons[${index}]; b.value = 0; b.pressed = false; })()`);
+  // Released, and seen released, before the next press can count as one.
+  await page.waitForTimeout(400);
+};
+const focusedAction = () =>
+  page.evaluate(() => (document.querySelector('.pad-focus') as HTMLElement | null)?.dataset.action ?? '');
+
+// The first press only lights a button: A on a panel with nothing chosen
+// must not press whatever happens to be first, which here is Career.
+await padButton(0, `!!document.querySelector('.menu .pad-focus')`);
+if (!(await page.locator('.menu.is-open [data-action="career"]').count())) {
+  throw new Error('the first A press on the menu acted instead of only lighting a button');
+}
+// Down through the three modes to How to play, then right to Controller,
+// which sits beside it: spatial, so down means down and not "next in the DOM".
+const moved = (from: string) =>
+  `(document.querySelector('.pad-focus')?.dataset.action ?? '') !== ${JSON.stringify(from)}`;
+for (const want of ['arcade', 'multiplayer', 'help']) {
+  await padButton(13, moved(await focusedAction()));
+  const at = await focusedAction();
+  if (at !== want) throw new Error(`D-pad down went to "${at}", expected "${want}"`);
+}
+await padButton(15, moved('help'));
+if ((await focusedAction()) !== 'pad') throw new Error('D-pad right from How to play missed Controller');
+await padButton(0, `!!document.querySelector('.pad-list')`);
+
+// Bind the throttle to an axis by moving it, the way a trigger that the
+// browser reports as an axis would.
+await page.click('[data-action="pad-bind"][data-id="throttle"]');
+await page.waitForSelector('.pad-row.is-waiting');
+await page.evaluate(`window.__pad.axes[5] = 1`);
+await page.waitForFunction(`!document.querySelector('.pad-row.is-waiting')`);
+await page.evaluate(`window.__pad.axes[5] = 0`);
+const bound = (await page.locator('.pad-row').nth(1).textContent())?.replace(/\s+/g, ' ') ?? '';
+if (!bound.includes('Axis 5') || !bound.includes('custom')) {
+  throw new Error(`binding the throttle by moving axis 5 showed "${bound.trim()}"`);
+}
+await page.click('[data-action="pad-reset"]');
+await page.waitForFunction(`!document.querySelector('.pad-binding em')`);
+
+// B backs out through the screen's own Back button.
+await padButton(1, `!!document.querySelector('.menu.is-open [data-action="career"]')`);
+await page.evaluate(`(() => {
+  navigator.getGamepads = () => [];
+  document.querySelectorAll('.pad-focus').forEach((el) => el.classList.remove('pad-focus'));
+})()`);
+console.log('a gamepad moves through the menu, binds by moving a control, and backs out with B');
+
 // Career -> garage
 await page.click('[data-action="career"]');
 await page.waitForSelector('.garage.is-open');

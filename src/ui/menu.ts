@@ -21,13 +21,23 @@ import { stageVariants, variantKey, type StageDef, type StageVariant } from '../
 import { formatTime } from './raceHud.js';
 import type { BoardEntry, Leaderboard } from '../net/leaderboard.js';
 import { escapeHtml } from './escape.js';
+import {
+  PAD_ACTIONS,
+  describeBinding,
+  type GamepadInput,
+  type PadAction,
+  type PadBindings,
+} from './gamepad.js';
 
 export interface ArcadePick {
   def: StageDef;
   variant: StageVariant;
 }
 
-type Screen = 'main' | 'arcade' | 'name' | 'help';
+type Screen = 'main' | 'arcade' | 'name' | 'help' | 'pad';
+
+/** Seconds a binding waits for a control before giving up. */
+const CAPTURE_SECONDS = 8;
 
 export class StartMenu {
   onCareer: (() => void) | null = null;
@@ -57,6 +67,19 @@ export class StartMenu {
 
   /** Raised when a name is set here, so one identity is kept across the game. */
   onName: ((name: string) => void) | null = null;
+
+  /** The pad, for the controller screen. */
+  gamepad: GamepadInput | null = null;
+  /** Raised with the player's changed bindings whenever one is set or reset. */
+  onPadBindings: ((custom: Partial<PadBindings>) => void) | null = null;
+  /** The action waiting for a control, while one is. */
+  private binding: PadAction | null = null;
+  private bindingTimer = 0;
+
+  /** Redraw the controller screen when a pad arrives while it is up. */
+  padChanged(): void {
+    if (this.open && this.screen === 'pad') this.render();
+  }
 
   /** Put the slider where the saved setting says, without raising a change. */
   setVolume(value: number): void {
@@ -171,7 +194,22 @@ export class StartMenu {
       case 'help':
         this.screen = 'help';
         break;
+      case 'pad':
+        this.screen = 'pad';
+        break;
+      case 'pad-bind':
+        void this.bind(id as PadAction);
+        return;
+      case 'pad-cancel':
+        this.gamepad?.cancelCapture();
+        return;
+      case 'pad-reset':
+        this.gamepad?.cancelCapture();
+        this.gamepad?.setCustom({});
+        this.onPadBindings?.({});
+        break;
       case 'back':
+        this.gamepad?.cancelCapture();
         this.screen = 'main';
         break;
       case 'drive': {
@@ -230,7 +268,9 @@ export class StartMenu {
           ? this.nameScreen()
           : this.screen === 'help'
             ? this.helpScreen()
-            : this.arcadeScreen();
+            : this.screen === 'pad'
+              ? this.padScreen()
+              : this.arcadeScreen();
     if (this.screen === 'name') {
       const input = this.root.querySelector('[data-act="name"]') as HTMLInputElement | null;
       input?.focus();
@@ -290,21 +330,22 @@ export class StartMenu {
 
           <h2>Controls</h2>
           <table class="help-keys">
-            <tr><th></th><th>Keyboard</th><th>Touch</th></tr>
-            <tr><td>Steer</td><td><b>A</b> <b>D</b> or <b>&larr;</b> <b>&rarr;</b></td><td>Drag in the left third</td></tr>
-            <tr><td>Throttle</td><td><b>W</b> or <b>&uarr;</b></td><td>GO</td></tr>
-            <tr><td>Brake</td><td><b>S</b> or <b>&darr;</b></td><td>BRAKE</td></tr>
-            <tr><td>Handbrake</td><td><b>Space</b></td><td>HAND</td></tr>
-            <tr><td>Restart</td><td><b>R</b></td><td>&#8634; under the menu button</td></tr>
-            <tr><td>Rescue to road</td><td><b>Q</b></td><td>&mdash;</td></tr>
-            <tr><td>Menu</td><td><b>Esc</b></td><td>&#9776;</td></tr>
+            <tr><th></th><th>Keyboard</th><th>Gamepad</th><th>Touch</th></tr>
+            <tr><td>Steer</td><td><b>A</b> <b>D</b> or <b>&larr;</b> <b>&rarr;</b></td><td>Left stick</td><td>Drag in the left third</td></tr>
+            <tr><td>Throttle</td><td><b>W</b> or <b>&uarr;</b></td><td><b>RT</b></td><td>GO</td></tr>
+            <tr><td>Brake</td><td><b>S</b> or <b>&darr;</b></td><td><b>LT</b></td><td>BRAKE</td></tr>
+            <tr><td>Handbrake</td><td><b>Space</b></td><td><b>A</b></td><td>HAND</td></tr>
+            <tr><td>Restart</td><td><b>R</b></td><td><b>Y</b></td><td>&#8634; under the menu button</td></tr>
+            <tr><td>Rescue to road</td><td><b>Q</b></td><td><b>X</b></td><td>&mdash;</td></tr>
+            <tr><td>Menu</td><td><b>Esc</b></td><td><b>Menu</b></td><td>&#9776;</td></tr>
             <tr><td>Tuning panel</td><td><b>T</b></td><td>&mdash;</td></tr>
             <tr><td>Mute / visibility / slow-mo</td><td><b>M</b> <b>V</b> <b>K</b></td><td>&mdash;</td></tr>
           </table>
           <p>
-            Gamepads work if connected. Steering is analogue in both schemes &mdash;
-            key presses ramp, drag distance maps to lock angle. Restart and
-            rescue are disabled in career runs.
+            Gamepad buttons can be changed under <b>Controller</b> on the front
+            screen. Steering is analogue in every scheme &mdash; key presses
+            ramp, drag distance maps to lock angle. Restart and rescue are
+            disabled in career runs.
           </p>
           <p>The handbrake rotates the car; it does not stop it.</p>
 
@@ -395,10 +436,72 @@ export class StartMenu {
             <em>direct connection, no server</em>
           </button>
         </div>
-        <button class="menu-aux" data-action="help">How to play</button>
+        <div class="menu-aux-row">
+          <button class="menu-aux" data-action="help">How to play</button>
+          <button class="menu-aux" data-action="pad">Controller</button>
+        </div>
         ${this.volumeRow()}
         <div class="menu-foot">
           <span><b>Esc</b> menu · <b>R</b> restart · <b>Q</b> rescue · <b>T</b> tuning · <b>V</b> visibility · <b>K</b> slow-mo</span>
+        </div>
+      </div>`;
+  }
+
+  /**
+   * Wait for the player to press the control they want for an action.
+   *
+   * Pressing it is the only honest way to bind a pad: the numbers a browser
+   * reports for a button depend on the pad, the browser and the platform, so a
+   * list of names to pick from is a list of guesses.
+   */
+  private async bind(action: PadAction): Promise<void> {
+    const pad = this.gamepad;
+    if (!pad) return;
+    this.binding = action;
+    window.clearTimeout(this.bindingTimer);
+    this.bindingTimer = window.setTimeout(() => pad.cancelCapture(), CAPTURE_SECONDS * 1000);
+    const pending = pad.captureNext(action);
+    this.render();
+    const got = await pending;
+    window.clearTimeout(this.bindingTimer);
+    this.binding = null;
+    if (got) this.onPadBindings?.(pad.customBindings);
+    if (this.open && this.screen === 'pad') this.render();
+  }
+
+  private padScreen(): string {
+    const pad = this.gamepad;
+    const bindings = pad?.bindings();
+    const custom = pad?.customBindings ?? {};
+    const status = pad?.connected
+      ? `Using <b>${escapeHtml(pad.padName.slice(0, 60))}</b>`
+      : 'No controller found. Press any button on it to wake it up.';
+    const rows = PAD_ACTIONS.map(({ id, label, prompt }) => {
+      const waiting = this.binding === id;
+      const current = bindings ? describeBinding(bindings[id]) : '-';
+      const tag = custom[id] && !waiting ? ' <em>custom</em>' : '';
+      const control = waiting
+        ? '<button data-action="pad-cancel">Cancel</button>'
+        : `<button data-action="pad-bind" data-id="${id}"${pad?.connected ? '' : ' disabled'}>Change</button>`;
+      return `
+        <div class="pad-row${waiting ? ' is-waiting' : ''}">
+          <span class="pad-action">${label}</span>
+          <span class="pad-binding">${waiting ? `${prompt}&hellip;` : current}${tag}</span>
+          ${control}
+        </div>`;
+    }).join('');
+    return `
+      <div class="menu-inner">
+        <div class="menu-head">
+          <h1 class="menu-title small">CONTROLLER</h1>
+          <button data-action="back">Back</button>
+        </div>
+        <p class="pad-status">${status}</p>
+        <div class="menu-scroll pad-list">${rows}</div>
+        <div class="pad-foot">
+          <button data-action="pad-reset">Reset to defaults</button>
+          <span>In menus: stick or D-pad to move, <b>A</b> to choose, <b>B</b> to go back.
+          <b>A</b>, <b>B</b> or <b>Menu</b> skips a crash replay.</span>
         </div>
       </div>`;
   }
