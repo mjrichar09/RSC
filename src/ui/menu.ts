@@ -82,6 +82,15 @@ export class StartMenu {
   /** The look in force, so the picker can show it. */
   private look: LookId = 'standard';
 
+  /** Raised when a switch on the front screen is flipped. */
+  onToggle: ((id: 'codriver' | 'rumble', on: boolean) => void) | null = null;
+  private switches = { codriver: true, rumble: true };
+
+  /** Show the saved switches, without raising a change. */
+  setSwitches(values: { codriver: boolean; rumble: boolean }): void {
+    this.switches = { ...values };
+  }
+
   /** Show the saved look as picked, without raising a change. */
   setLook(id: LookId): void {
     this.look = id;
@@ -207,6 +216,12 @@ export class StartMenu {
         break;
       case 'pad':
         this.screen = 'pad';
+        break;
+      case 'switch':
+        if (id === 'codriver' || id === 'rumble') {
+          this.switches[id] = !this.switches[id];
+          this.onToggle?.(id, this.switches[id]);
+        }
         break;
       case 'look':
         if (id in LOOKS) {
@@ -458,6 +473,7 @@ export class StartMenu {
           <button class="menu-aux" data-action="pad">Controller</button>
         </div>
         ${this.lookRow()}
+        ${this.switchRow()}
         ${this.volumeRow()}
         <div class="menu-foot">
           <span><b>Esc</b> menu · <b>R</b> restart · <b>Q</b> rescue · <b>T</b> tuning · <b>V</b> visibility · <b>K</b> slow-mo</span>
@@ -521,6 +537,19 @@ export class StartMenu {
           <span>In menus: stick or D-pad to move, <b>A</b> to choose, <b>B</b> to go back.
           <b>A</b>, <b>B</b> or <b>Menu</b> skips a crash replay.</span>
         </div>
+      </div>`;
+  }
+
+  /** The co-driver and the rumble, each one tap from on to off. */
+  private switchRow(): string {
+    const button = (id: 'codriver' | 'rumble', label: string) =>
+      `<button class="look-choice${this.switches[id] ? ' is-on' : ''}" data-action="switch" data-id="${id}">${label} ${
+        this.switches[id] ? 'on' : 'off'
+      }</button>`;
+    return `
+      <div class="menu-look">
+        <span>Feel</span>
+        <div class="look-choices">${button('codriver', 'Co-driver')}${button('rumble', 'Rumble')}</div>
       </div>`;
   }
 

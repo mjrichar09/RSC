@@ -137,6 +137,10 @@ export interface Settings {
    * turns anything it does not know back into the standard look.
    */
   look: string;
+  /** Spoken pacenotes during a stage. */
+  codriver: boolean;
+  /** Gamepad rumble and phone vibration. */
+  rumble: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -149,6 +153,8 @@ export const DEFAULT_SETTINGS: Settings = {
   tilt: false,
   pad: {},
   look: 'standard',
+  codriver: true,
+  rumble: true,
 };
 
 /** Exposed for tests: bringing a stored profile up to date and making it safe. */
@@ -232,6 +238,12 @@ function migrate(stored: unknown): Profile {
             typeof stored.settings.look === 'string'
               ? stored.settings.look.slice(0, 24)
               : DEFAULT_SETTINGS.look,
+          codriver:
+            typeof stored.settings.codriver === 'boolean'
+              ? stored.settings.codriver
+              : DEFAULT_SETTINGS.codriver,
+          rumble:
+            typeof stored.settings.rumble === 'boolean' ? stored.settings.rumble : DEFAULT_SETTINGS.rumble,
         }
       : { ...DEFAULT_SETTINGS },
   };

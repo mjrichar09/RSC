@@ -209,6 +209,11 @@ export class GamepadInput {
     return this.pad !== null;
   }
 
+  /** The connected pad, for the rumble motors. */
+  get current(): Gamepad | null {
+    return this.pad;
+  }
+
   get padName(): string {
     return this.pad?.id ?? '';
   }

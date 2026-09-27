@@ -27,6 +27,45 @@ const SURFACE_VOICE: Record<SurfaceId, { frequency: number; q: number; gain: num
 };
 
 /**
+ * What a sliding tyre sounds like, by surface.
+ *
+ * One narrow band at 2.4 kHz used to be every skid, so a car sliding on gravel
+ * squealed like one on tarmac. Only rubber on a hard surface squeals: gravel
+ * and dirt scrabble, a low broad grinding of stones; snow hushes; mud squelches
+ * low; a ford makes no skid sound of its own because the water drowns it.
+ * `wobble` is how much the pitch wanders, which is most of what makes a squeal
+ * a squeal rather than a whistle.
+ */
+const SKID_VOICE: Record<SurfaceId, { frequency: number; q: number; gain: number; wobble: number }> = {
+  tarmac: { frequency: 1350, q: 11, gain: 1.0, wobble: 140 },
+  gravel: { frequency: 620, q: 1.1, gain: 1.35, wobble: 0 },
+  dirt: { frequency: 520, q: 1.0, gain: 1.2, wobble: 0 },
+  mud: { frequency: 300, q: 1.4, gain: 1.0, wobble: 0 },
+  snow: { frequency: 900, q: 0.7, gain: 0.7, wobble: 0 },
+  ice: { frequency: 2900, q: 6, gain: 0.35, wobble: 60 },
+  grass: { frequency: 480, q: 0.9, gain: 0.8, wobble: 0 },
+  water: { frequency: 400, q: 0.5, gain: 0, wobble: 0 },
+};
+
+/**
+ * One-shot texture, by surface: the things a tyre throws at the car.
+ *
+ * `rate` is events a second at 100 km/h, plus `slide` more per unit of slip;
+ * each is a burst of noise `length` seconds long through a band around
+ * `frequency`. Gravel pings off the underbody — short, bright, many; snow
+ * crunches under the tread — fewer, lower, longer; water sloshes against the
+ * sills. Tarmac and ice throw nothing.
+ */
+const TEXTURE: Partial<Record<SurfaceId, { rate: number; slide: number; frequency: number; spread: number; q: number; length: number; gain: number }>> = {
+  gravel: { rate: 22, slide: 40, frequency: 4200, spread: 0.45, q: 3, length: 0.022, gain: 0.07 },
+  dirt: { rate: 9, slide: 26, frequency: 3000, spread: 0.4, q: 2.5, length: 0.026, gain: 0.05 },
+  grass: { rate: 4, slide: 10, frequency: 1800, spread: 0.3, q: 1.5, length: 0.03, gain: 0.03 },
+  mud: { rate: 6, slide: 20, frequency: 380, spread: 0.3, q: 1.2, length: 0.07, gain: 0.07 },
+  snow: { rate: 10, slide: 18, frequency: 760, spread: 0.35, q: 1.4, length: 0.06, gain: 0.05 },
+  water: { rate: 7, slide: 0, frequency: 320, spread: 0.4, q: 0.8, length: 0.16, gain: 0.09 },
+};
+
+/**
  * Loudest the master gain goes, at a volume of 1.
  *
  * Below unity on purpose: the limiter after it has to have something to work
@@ -58,6 +97,13 @@ export class Mixer {
   private windGain: GainNode | null = null;
   private skidFilter: BiquadFilterNode | null = null;
   private skidGain: GainNode | null = null;
+  /** A quarter-second of noise the texture one-shots are cut from. */
+  private grit: AudioBuffer | null = null;
+  /** Texture events owed but not yet played, carried between frames. */
+  private owed = 0;
+  /** The surface under most of the car last frame, to hear it change. */
+  private underfoot: SurfaceId | null = null;
+  private clock = 0;
 
   private muted = false;
   /**
@@ -156,6 +202,8 @@ export class Mixer {
     skidSource.connect(this.skidFilter).connect(this.skidGain).connect(this.master);
     skidSource.start();
 
+    this.grit = whiteNoise(ctx, 0.25);
+
     void ctx.resume();
   }
 
@@ -235,8 +283,25 @@ export class Mixer {
     // The world under the car, which gets quieter as the car gets louder.
     this.ambience?.update(options.dt, speed);
     const grounded = state.wheels.filter((w) => w.grounded);
-    const surface = grounded[0]?.surface.id ?? 'tarmac';
+    // The surface under most of the car, not under whichever wheel was first
+    // in the list: with one wheel on the verge the car sounded as if it had
+    // left the road.
+    const count = new Map<SurfaceId, number>();
+    for (const w of grounded) count.set(w.surface.id, (count.get(w.surface.id) ?? 0) + 1);
+    let surface: SurfaceId = 'tarmac';
+    let most = 0;
+    for (const [id, n] of count) {
+      if (n > most) {
+        most = n;
+        surface = id;
+      }
+    }
     const voice = SURFACE_VOICE[surface];
+    // Onto a new surface: one crunch as the tyres cross the edge, at speed.
+    if (grounded.length > 0 && this.underfoot && surface !== this.underfoot && speed > 6) {
+      this.grain(TEXTURE[surface] ?? TEXTURE.gravel!, Math.min(speed / 25, 1.4) * 2.2, now);
+    }
+    if (grounded.length > 0) this.underfoot = surface;
 
     // Roll noise rises with speed and disappears entirely in the air, which is
     // the clearest possible cue that the car has left the ground.
@@ -255,11 +320,56 @@ export class Mixer {
       this.windFilter.frequency.setTargetAtTime(420 + speed * 26, now, 0.12);
     }
 
-    // Skid is driven by how far past the grip limit the worst tyre is.
+    // Skid is driven by how far past the grip limit the worst tyre is, and
+    // sounds like whatever that tyre is sliding on.
     const slip = Math.max(0, Math.max(...state.wheels.map((w) => w.saturation)) - 1);
-    const skidLevel = airborne ? 0 : Math.min(slip * 1.4, 1) * 0.1 * Math.min(speed / 12, 1);
+    const skid = SKID_VOICE[surface];
+    const skidLevel = airborne ? 0 : Math.min(slip * 1.4, 1) * 0.1 * Math.min(speed / 12, 1) * skid.gain;
+    this.clock += options.dt;
+    const wander = skid.wobble * (Math.sin(this.clock * 23) * 0.6 + Math.sin(this.clock * 9.7) * 0.4);
     this.skidGain?.gain.setTargetAtTime(skidLevel, now, 0.05);
-    this.skidFilter?.frequency.setTargetAtTime(1700 + slip * 900, now, 0.08);
+    this.skidFilter?.frequency.setTargetAtTime(skid.frequency + slip * skid.frequency * 0.35 + wander, now, 0.04);
+    this.skidFilter?.Q.setTargetAtTime(skid.q, now, 0.1);
+
+    // The texture: stones, crunch and slosh, at a rate set by speed and slide.
+    const texture = TEXTURE[surface];
+    if (texture && !airborne && speed > 2) {
+      this.owed += (texture.rate * (speed / 28) + texture.slide * Math.min(slip, 1.5)) * options.dt;
+      // Never more than a handful in one frame: a stall that hands this a
+      // second of owed events would fire them all at once.
+      let fire = Math.min(Math.floor(this.owed), 6);
+      this.owed -= Math.floor(this.owed);
+      for (; fire > 0; fire--) this.grain(texture, 1, now + Math.random() * options.dt);
+    } else {
+      this.owed = 0;
+    }
+  }
+
+  /**
+   * One grain of surface texture: a short burst of noise through a band,
+   * each a little different in pitch and level so a stream of them reads as
+   * stones rather than as a clock ticking.
+   */
+  private grain(
+    texture: { frequency: number; spread: number; q: number; length: number; gain: number },
+    weight: number,
+    at: number,
+  ): void {
+    if (!this.ctx || !this.master || !this.grit) return;
+    const ctx = this.ctx;
+    const source = ctx.createBufferSource();
+    source.buffer = this.grit;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = texture.frequency * (1 + (Math.random() - 0.5) * 2 * texture.spread);
+    filter.Q.value = texture.q;
+    const gain = ctx.createGain();
+    const level = texture.gain * weight * (0.5 + Math.random() * 0.7);
+    gain.gain.setValueAtTime(0, at);
+    gain.gain.linearRampToValueAtTime(level, at + 0.002);
+    gain.gain.exponentialRampToValueAtTime(0.0001, at + texture.length);
+    source.connect(filter).connect(gain).connect(this.master);
+    source.start(at, Math.random() * 0.2, texture.length + 0.01);
   }
 
   /**
@@ -413,6 +523,9 @@ export class Mixer {
    */
   quiet(): void {
     this.engine?.silence();
+    // Forget the road, so coming back from a menu is not a crunch.
+    this.owed = 0;
+    this.underfoot = null;
     if (!this.ctx) return;
     this.rollGain?.gain.setTargetAtTime(0, this.ctx.currentTime, 0.1);
     this.skidGain?.gain.setTargetAtTime(0, this.ctx.currentTime, 0.1);

@@ -265,12 +265,25 @@ await page.waitForFunction(
 );
 console.log('start lights count down and go green');
 
+// The co-driver speaks through speechSynthesis, which headless Chrome has but
+// cannot be heard through — so what reaches `speak` is recorded instead.
+await page.evaluate(`(() => {
+  window.__calls = [];
+  const speak = speechSynthesis.speak.bind(speechSynthesis);
+  speechSynthesis.speak = (line) => { window.__calls.push(line.text); speak(line); };
+})()`);
+
 // Drive it, and check the run banks nothing.
 await page.keyboard.down('w');
 await page.waitForTimeout(5000);
 await page.keyboard.up('w');
 const driving = await status();
 console.log('arcade run:', JSON.stringify({ stage: driving.stage, phase: driving.phase, money: driving.money, time: driving.time, recorded: driving.recorded }));
+// The start straight is short on every arcade stage, so five seconds of
+// throttle is always inside the first call's lead.
+const calls = (await page.evaluate(`window.__calls`)) as string[];
+if (calls.length === 0) throw new Error('the co-driver said nothing in five seconds of a stage');
+console.log(`co-driver called: ${calls.map((c) => `"${c}"`).join(', ')}`);
 if (driving.phase !== 'running') throw new Error('the arcade race never started');
 if (driving.money !== 1500) throw new Error('arcade charged an entry fee');
 

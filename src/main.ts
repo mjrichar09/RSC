@@ -64,6 +64,9 @@ import { buildStageView, type StageView } from './render/stageMesh.js';
 import { Controls } from './ui/controls.js';
 import { SURFACES, type SurfaceId } from './sim/surfaces.js';
 import { GamepadInput, cleanBindings } from './ui/gamepad.js';
+import { Rumble } from './ui/rumble.js';
+import { CoDriver } from './audio/codriver.js';
+import { buildPacenotes } from './game/pacenotes.js';
 import { Hud } from './ui/hud.js';
 import { RaceHud } from './ui/raceHud.js';
 import { DamagePanel } from './ui/damagePanel.js';
@@ -187,6 +190,12 @@ async function main(): Promise<void> {
     });
   };
   const visionPass = new VisionPass(renderer);
+  // Up here with the other things a stage load touches: `loadStage` runs
+  // during boot, and a `const` below it would be in its temporal dead zone.
+  const codriver = new CoDriver();
+  /** The notes for whatever stage is loaded, from the top. */
+  const loadNotes = (on: Stage) =>
+    codriver.load(buildPacenotes(on.corners, { water: on.def.water, spills: on.spills }));
   /** Reused for the screen-space projection each frame. */
   const SCRATCH = new THREE.Vector3();
   const wildlifeView = new WildlifeView(scene);
@@ -674,6 +683,7 @@ const params = new URLSearchParams(location.search);
     scene.add(stageView.group);
     applyCarCondition();
     race = new Race(stage, variant.medals);
+    loadNotes(stage);
     settled = false;
     terminal = null;
     lights.arm();
@@ -795,6 +805,7 @@ const params = new URLSearchParams(location.search);
       }
       world.vehicle.reset(stage.start.position, stage.start.heading);
       race.reset();
+      loadNotes(stage);
       raceHud.setStage(stage, variant?.name, variant?.medals);
       refreshFinishActions();
       /*
@@ -1271,6 +1282,7 @@ const params = new URLSearchParams(location.search);
       zoom: 12,
     });
     mixer.quiet();
+    codriver.silence();
   };
 
   /**
@@ -1325,6 +1337,7 @@ const params = new URLSearchParams(location.search);
     // and a crash that gave you two free seconds would be worth having.
     crashReplayFrom = race.time;
     mixer.quiet();
+    codriver.silence();
   };
 
   /** Race time when the crash replay started, so the clock can be made whole. */
@@ -1455,6 +1468,23 @@ const params = new URLSearchParams(location.search);
     if (!replayUi.state?.auto) return false;
     replayUi.onExit?.();
     return true;
+  };
+  const rumble = new Rumble(gamepad);
+  codriver.enabled = career.profile.settings.codriver;
+  rumble.enabled = career.profile.settings.rumble;
+  menu.setSwitches({ codriver: codriver.enabled, rumble: rumble.enabled });
+  menu.onToggle = (id, on) => {
+    if (id === 'codriver') {
+      codriver.enabled = on;
+      if (!on) codriver.silence();
+    } else {
+      rumble.enabled = on;
+      // A buzz, so turning it on is felt as well as read.
+      if (on) rumble.impact(0.5);
+    }
+    void save.update((profile) => {
+      profile.settings[id] = on;
+    });
   };
   gamepad.onConnect = () => {
     // A pad means somebody is not using their thumbs on the glass.
@@ -1916,6 +1946,7 @@ const params = new URLSearchParams(location.search);
     shakenFor = world.lastImpact;
     camera.shake(severity);
     mixer.impact(severity);
+    rumble.impact(severity);
     throwCrashFx(state, severity);
     return severity;
   };
@@ -2748,6 +2779,7 @@ const params = new URLSearchParams(location.search);
     if (covered && !session && race?.phase !== 'running') {
       // Or the engine note hangs on the last frame before the panel opened.
       mixer.quiet();
+      codriver.silence();
       /*
        * Still a finished frame, as far as anything waiting on one is concerned.
        *
@@ -2976,8 +3008,19 @@ const params = new URLSearchParams(location.search);
         misfiring: world.damage?.effects().misfiring ?? false,
         dt,
       });
+      // The co-driver reads the road ahead while there is a race to read it
+      // for, at the master volume; the pad and the phone feel it.
+      codriver.volume = mixer.isMuted ? 0 : mixer.currentVolume;
+      if (race?.phase === 'running' && !replayUi.active) {
+        codriver.update(race.furthest, state.speed);
+        rumble.phone = touch.shown;
+        rumble.update(state, dt);
+      } else {
+        codriver.silence();
+      }
     } else {
       mixer.quiet();
+      codriver.silence();
     }
     particles.update(dt);
     impacts.update(dt);
