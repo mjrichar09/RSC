@@ -169,7 +169,7 @@ float sGrain(vec2 w) {
  * is precisely the thing a contour map is read by. Flat ground produces no
  * lines whatsoever, so most of every stage is untouched.
  */
-function addContours(material: THREE.MeshStandardMaterial): void {
+function addContours(material: THREE.MeshStandardMaterial, seed: number): void {
   // Without this the lines simply do not appear, and nothing anywhere errors.
   // three's default program cache key is built from the material's *defines* —
   // and `roughness` and `metalness` are uniforms, not defines. So this material
@@ -181,16 +181,23 @@ function addContours(material: THREE.MeshStandardMaterial): void {
   material.customProgramCacheKey = () => 'stage-road-contours';
 
   material.onBeforeCompile = (shader) => {
+    shader.uniforms.uSeed = { value: seed };
     shader.vertexShader = `attribute float aRoad;
 attribute float aGrade;
 attribute float aAcross;
 attribute vec4 aKind;
+attribute float aAlong;
+attribute vec2 aSpill;
+attribute float aRubber;
 varying float vHeight;
 varying float vRoad;
 varying float vGrade;
 varying float vAcross;
 varying vec4 vKind;
 varying vec2 vWorldXZ;
+varying float vAlong;
+varying vec2 vSpill;
+varying float vRubber;
 ${shader.vertexShader}`.replace(
       '#include <begin_vertex>',
       `#include <begin_vertex>
@@ -200,7 +207,10 @@ ${shader.vertexShader}`.replace(
   vRoad = aRoad;
   vGrade = aGrade;
   vAcross = aAcross;
-  vKind = aKind;`,
+  vKind = aKind;
+  vAlong = aAlong;
+  vSpill = aSpill;
+  vRubber = aRubber;`,
     );
 
     shader.fragmentShader = `varying float vHeight;
@@ -209,6 +219,10 @@ varying float vGrade;
 varying float vAcross;
 varying vec4 vKind;
 varying vec2 vWorldXZ;
+varying float vAlong;
+varying vec2 vSpill;
+varying float vRubber;
+uniform float uSeed;
 ${SURFACE_NOISE}
 ${shader.fragmentShader}`.replace(
       '#include <color_fragment>',
@@ -236,9 +250,67 @@ ${shader.fragmentShader}`.replace(
                         + stone * (roll > 0.9 ? 0.32 : -0.26) - track * 0.26);
     shade += vKind.z * ((grain - 0.5) * 0.09 + (blot - 0.5) * 0.1 + stone * 0.08 - track * 0.14);
     shade += vKind.w * ((grain - 0.5) * 0.16 + (blot - 0.5) * 0.16);
+    // --- features, in sections -----------------------------------------
+    // The road is cut into 160 m sections and each rolls, from the stage's own
+    // seed, whether it has markings or ruts. A stage that had them everywhere
+    // would read as a texture; in stretches, they read as places.
+    float block = floor(vAlong / 160.0);
+    float roll1 = sHash(vec2(block, uSeed));
+    float roll2 = sHash(vec2(block + 7.3, uSeed * 1.7));
+    float a = abs(vAcross);
+    float aw = max(fwidth(vAcross), 1e-4);
+
+    // Ruts, on about half of the loose sections: a deep groove down each
+    // wheel line with the displaced dirt heaped either side of it, which is
+    // the shading a real rut makes under a high sun.
+    float groove = exp(-pow((a - 0.42) / 0.07, 2.0));
+    float heap = exp(-pow((a - 0.42) / 0.17, 2.0)) - groove;
+    float rutty = step(roll1, 0.5) * (0.55 + 0.45 * sNoise(vec2(vAlong * 0.07, a * 3.0)));
+    shade += vKind.y * vRoad * rutty * (heap * 0.16 - groove * 0.42);
+
+    // Rubber, laid in the braking zones before tarmac corners: broken dark
+    // streaks along each wheel line, heaviest right before the turn-in.
+    float lane = exp(-pow((a - 0.42) / 0.06, 2.0));
+    float streak = smoothstep(0.35, 0.75, sNoise(vec2(vAlong * 0.3, floor(vAcross * 16.0) + 0.5)));
+    shade -= vKind.x * vRubber * lane * streak * 0.85;
+
     diffuseColor.rgb *= shade;
     // Packed snow goes grey-blue where the tyres have been.
     diffuseColor.rgb *= mix(vec3(1.0), vec3(0.85, 0.9, 1.0), track * vKind.z);
+
+    // Painted lines, on about three tarmac sections in five: solid edge lines
+    // and a dashed centre, worn through in patches. Widths come from the
+    // fragment's own across-the-road rate so they stay crisp at any zoom.
+    float marked = vKind.x * vRoad * step(roll2, 0.6);
+    float worn = smoothstep(0.2, 0.5, sNoise(w * 1.3 + 3.0));
+    float edgeLine = 1.0 - smoothstep(0.018 - aw, 0.018 + aw, abs(a - 0.9));
+    float dashes = step(fract(vAlong / 9.0), 0.45);
+    float centreLine = (1.0 - smoothstep(0.014 - aw, 0.014 + aw, a)) * dashes;
+    vec3 white = vec3(0.78, 0.78, 0.74);
+    // One section in four gets a yellow centre instead.
+    vec3 centreInk = roll2 < 0.15 ? vec3(0.8, 0.55, 0.08) : white;
+    diffuseColor.rgb = mix(diffuseColor.rgb, white, marked * worn * edgeLine);
+    diffuseColor.rgb = mix(diffuseColor.rgb, centreInk, marked * worn * centreLine);
+
+    // Sand spills, drawn exactly where the simulation has them: this side of
+    // the road, from 1 - reach to the edge, over the rows that are inside one.
+    // Interpolation between a row in a spill and one outside it scales both
+    // components down together, so the reach is recovered by dividing.
+    float inSpill = abs(vSpill.x);
+    if (inSpill > 0.01) {
+      float side = sign(vSpill.x);
+      float reach = vSpill.y / inSpill;
+      float into = -side * vAcross + (sNoise(w * 0.9) - 0.5) * 0.14;
+      float cover = smoothstep(1.0 - reach - 0.05, 1.0 - reach + 0.05, into)
+                  * (1.0 - smoothstep(1.2, 1.45, into))
+                  * smoothstep(0.15, 0.85, inSpill);
+      // Pale and rippled on purpose: steep tarmac is already tinted warm by
+      // the grade shading, and a sand the colour of an uphill road is a patch
+      // of grip nobody can see.
+      float ripple = sin(dot(w, vec2(2.3, 1.1)) * 5.0 + sNoise(w * 0.7) * 6.0) * 0.09;
+      vec3 sand = vec3(0.66, 0.56, 0.37) * (0.9 + 0.2 * grain + ripple);
+      diffuseColor.rgb = mix(diffuseColor.rgb, sand, cover * (0.7 + 0.3 * sNoise(w * 2.6)));
+    }
   }
   {
     // Where this pixel sits between one contour and the next.
@@ -338,6 +410,34 @@ export function buildStageView(stage: Stage, markers: Markers): StageView {
   }
   geometry.setAttribute('aAcross', new THREE.BufferAttribute(across, 1));
   geometry.setAttribute('aKind', new THREE.BufferAttribute(kind, 4));
+
+  // Distance along, and the two things decided per row from it: whether the
+  // row is in one of the stage's sand spills (side and reach, for the shader
+  // to draw the patch at its exact size), and how much braking rubber lies
+  // there — up to fifty metres before a corner's turn-in, heavier for a
+  // tighter corner.
+  const { vertexAlong } = stage.geometry;
+  const spill = new Float32Array(vertexAlong.length * 2);
+  const rubber = new Float32Array(vertexAlong.length);
+  for (let i = 0; i < vertexAlong.length; i++) {
+    const d = vertexAlong[i]!;
+    for (const s of stage.spills) {
+      if (d >= s.from && d <= s.to) {
+        spill[i * 2] = s.side;
+        spill[i * 2 + 1] = s.reach;
+      }
+    }
+    for (const c of stage.corners) {
+      if (c.severity > 4) continue;
+      const before = c.entry - d;
+      if (before < -4 || before > 50) continue;
+      const build = before < 0 ? 1 : 1 - before / 50;
+      rubber[i] = Math.max(rubber[i]!, build * ((5 - c.severity) / 4));
+    }
+  }
+  geometry.setAttribute('aAlong', new THREE.BufferAttribute(vertexAlong, 1));
+  geometry.setAttribute('aSpill', new THREE.BufferAttribute(spill, 2));
+  geometry.setAttribute('aRubber', new THREE.BufferAttribute(rubber, 1));
   geometry.computeVertexNormals();
 
   // Smooth-shaded: the corridor is a coarse ribbon, and with a normal per face
@@ -348,7 +448,10 @@ export function buildStageView(stage: Stage, markers: Markers): StageView {
     roughness: 0.95,
     metalness: 0,
   });
-  addContours(roadMaterial);
+  // A stage's own number for its sections, so two stages mark differently.
+  let seed = 0;
+  for (const ch of stage.def.id) seed = (seed * 31 + ch.charCodeAt(0)) % 997;
+  addContours(roadMaterial, seed / 10);
 
   const road = new THREE.Mesh(geometry, roadMaterial);
   road.receiveShadow = true;

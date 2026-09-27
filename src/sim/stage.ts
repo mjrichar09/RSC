@@ -386,6 +386,11 @@ export interface StageGeometry {
    * renderer's business; what it measures is the stage's.
    */
   vertexGrade: Float32Array;
+  /**
+   * How far along the stage each vertex's row is, metres. The renderer lays
+   * road markings, rubber and ruts in sections, and a section is a distance.
+   */
+  vertexAlong: Float32Array;
 }
 
 export interface Checkpoint {
@@ -469,6 +474,17 @@ export class Stage {
   private readonly seed: string;
   readonly spline: Spline;
   readonly geometry: StageGeometry;
+  /**
+   * Sand and loose gravel dragged across the tarmac, on the inside of tight
+   * corners where cars cut the apex and pull the verge onto the road.
+   *
+   * Generated, not authored, and fixed per stage: seeded by the stage id alone
+   * — never the per-run seed — so every medal run and every ghost drives the
+   * same road. Real, not painted: `surfaceAt` reports gravel inside one, so the
+   * car loses grip there and throws gravel spray. A patch that looked loose and
+   * gripped like tarmac would be the renderer lying about the road.
+   */
+  readonly spills: readonly WetPatch[];
   readonly checkpoints: Checkpoint[];
   readonly props: StageProp[];
   /**
@@ -530,6 +546,7 @@ export class Stage {
     this.checkpoints = this.buildCheckpoints(def.checkpoints ?? 3);
     this.cameraZones = this.buildCameraZones();
     this.corners = findCorners(this.spline, this.length);
+    this.spills = this.buildSpills();
     // Before the props, which take a collider for each of these boards and a
     // pier for each end of every bridge.
     this.signs = this.buildSigns();
@@ -601,6 +618,7 @@ export class Stage {
     const vertexSurfaces: SurfaceId[] = [];
     const vertexShade = new Float32Array(samples.length * columns);
     const vertexGrade = new Float32Array(samples.length * columns);
+    const vertexAlong = new Float32Array(samples.length * columns);
     const indices = new Uint32Array((samples.length - 1) * (columns - 1) * 6);
 
     let v = 0;
@@ -622,6 +640,7 @@ export class Stage {
         );
         vertexShade[v] = this.shadeForOffset(Math.abs(p.offset), s.width);
         vertexGrade[v] = grade;
+        vertexAlong[v] = s.distance;
         v++;
       }
     }
@@ -642,7 +661,7 @@ export class Stage {
       }
     }
 
-    return { vertices, indices, vertexSurfaces, vertexShade, vertexGrade };
+    return { vertices, indices, vertexSurfaces, vertexShade, vertexGrade, vertexAlong };
   }
 
   /** Brightness multiplier for a lateral offset, darkening away from the road. */
@@ -671,6 +690,56 @@ export class Stage {
       if (across <= 1.02 && across >= 1 - w.reach) return true;
     }
     return false;
+  }
+
+  /** Whether a point on the road is in one of the sand spills. See `spills`. */
+  private spillAt(distance: number, lateral: number, width: number): boolean {
+    for (const s of this.spills) {
+      if (distance < s.from || distance > s.to) continue;
+      if (lateral === 0 || Math.sign(lateral) !== -s.side) continue;
+      const across = Math.abs(lateral) / Math.max(width, 0.01);
+      if (across <= 1.02 && across >= 1 - s.reach) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Where the spills go: the insides of the tighter tarmac corners, clear of
+   * the start, the finish and any water, at least 400 m apart, about one per
+   * kilometre and never more than three.
+   */
+  private buildSpills(): WetPatch[] {
+    const random = seededRandom(hashString(`${this.def.id}:spill`));
+    const water = this.def.water ?? [];
+    const candidates = this.corners.filter(
+      (c) =>
+        c.severity <= 4 &&
+        c.apex > 250 &&
+        c.apex < this.length - 250 &&
+        this.spline.at(c.apex).surface === 'tarmac' &&
+        !water.some((w) => c.apex > w.from - 80 && c.apex < w.to + 80),
+    );
+    // A seeded shuffle, so which corners get one is arbitrary but fixed.
+    for (let i = candidates.length - 1; i > 0; i--) {
+      const j = Math.floor(random() * (i + 1));
+      [candidates[i], candidates[j]] = [candidates[j]!, candidates[i]!];
+    }
+    const wanted = Math.min(3, Math.floor(this.length / 1000) + 1);
+    const out: WetPatch[] = [];
+    for (const c of candidates) {
+      if (out.length >= wanted) break;
+      if (out.some((s) => Math.abs((s.from + s.to) / 2 - c.apex) < 400)) continue;
+      const length = 18 + random() * 14;
+      out.push({
+        from: c.apex - length * 0.55,
+        to: c.apex + length * 0.45,
+        // The inside: a left-hander's inside is the car's left, and the patch
+        // convention is -1 for the left.
+        side: c.direction === 'left' ? -1 : 1,
+        reach: 0.4 + random() * 0.2,
+      });
+    }
+    return out.sort((a, b) => a.from - b.from);
   }
 
   private surfaceForOffset(absOffset: number, width: number, road: SurfaceId): SurfaceId {
@@ -1236,6 +1305,9 @@ export class Stage {
     const loc = this.spline.locate(point, hint);
     if (this.wetAt(loc.distance, loc.lateral, loc.sample.width)) {
       return { surface: 'water', index: loc.index };
+    }
+    if (this.spillAt(loc.distance, loc.lateral, loc.sample.width)) {
+      return { surface: 'gravel', index: loc.index };
     }
     return {
       surface: this.surfaceForOffset(Math.abs(loc.lateral), loc.sample.width, loc.sample.surface),
