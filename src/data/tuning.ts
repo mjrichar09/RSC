@@ -89,6 +89,14 @@ export interface VehicleTuning {
   downshiftAt: number;
   /** Seconds of torque interruption during a shift. */
   shiftTime: number;
+  /**
+   * Engine rpm the clutch holds at full throttle while it slips, scaled
+   * between idle and this by the throttle. Below it the clutch slips and the
+   * engine revs on its own; once the wheel side reaches it, the clutch locks.
+   */
+  launchRpm: number;
+  /** How fast the engine revs up or falls back while the clutch slips, rpm/s. */
+  engineRevRate: number;
 
   /** Max brake torque at the wheel, Nm, split front/rear by `brakeBias`. */
   brakeTorque: number;
@@ -218,6 +226,8 @@ export const CAR: VehicleTuning = {
   upshiftAt: 0.93,
   downshiftAt: 0.45,
   shiftTime: 0.12,
+  launchRpm: 4000,
+  engineRevRate: 12000,
 
   // 2400 rather than 3200: measured against the locked-wheel floor, anything
   // above about 2600 Nm locks all four wheels from half pedal, which left the

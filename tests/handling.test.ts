@@ -50,6 +50,35 @@ describe('straight-line performance', () => {
     expect(last.speed).toBeLessThan(-1);
   });
 
+  it('spends almost no grip rolling straight at a steady town speed', async () => {
+    // The explicit wheel step was unstable below about 70 km/h: at a steady
+    // 36 km/h one rear wheel drove at +15% slip while its neighbour braked at
+    // -8%, and every tyre spent 70-99% of its grip on the fight. Nothing
+    // failed; the car simply had little left to corner with.
+    const world = await createWorld();
+    for (let i = 0; i < 60; i++) world.step({ throttle: 0, brake: 0, steer: 0, handbrake: 0 });
+    const wheels = world.cars[0]!.vehicle.wheels;
+    let throttle = 0;
+    let saturation = 0;
+    let samples = 0;
+    let disagreement = 0;
+    for (let s = 0; s < 120 * 14; s++) {
+      throttle = Math.min(1, Math.max(0, throttle + (10 - world.state().speed) * 0.01));
+      world.step({ throttle, brake: 0, steer: 0, handbrake: 0 });
+      if (s < 120 * 10) continue;
+      for (const w of wheels) saturation += w.saturation;
+      samples += 4;
+      disagreement = Math.max(
+        disagreement,
+        Math.abs(wheels[0]!.slipRatio - wheels[1]!.slipRatio),
+        Math.abs(wheels[2]!.slipRatio - wheels[3]!.slipRatio),
+      );
+    }
+    expect(world.state().speed).toBeGreaterThan(9);
+    expect(saturation / samples).toBeLessThan(0.2);
+    expect(disagreement).toBeLessThan(0.02);
+  });
+
   it('does not snap into reverse the instant the car stops', async () => {
     const { recorder } = await runTrace(TRACES.brake!);
     // Find the moment the car first stops, and check it stays stopped briefly

@@ -1,8 +1,14 @@
 # Plan: a stable wheel step, and the clutch it turns out to need
 
-Status: **not started**. Written 2026-09-26 at the end of the session that
-found the problem. The fix is in `docs/wheel-integration.patch`; applying it
-alone is a regression (see "Why it was not landed").
+Status: **steps 2-3 landed, 4-6 open.** The patch is applied, with a clutch,
+a rev limiter, and the body taking the same end-of-step tyre force the wheel
+was solved against (without that, 0-100 stayed 0.2 s slow and half pedal
+braked worse than a stamp). Pushed untuned to be driven. Still red: the
+handbrake spins 180°, and the building crash in `props.test.ts` now arrives at
+69 km/h instead of 78 because the limiter stops the car accelerating on
+wheelspin past the crest. `sweep` shows power oversteer at 0.15 lock (15 m
+radius, 44 km/h); `--set=tireGripBalance=1.06` restores mild understeer.
+`npm run stages` has not been run against it.
 
 ## The report
 

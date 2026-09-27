@@ -5,9 +5,10 @@
  * suspension force along the body's up axis and a tire force in the contact
  * plane; the chassis itself never touches the ground in normal driving.
  *
- * Wheel angular velocity is integrated explicitly so that wheelspin and lockup
- * emerge from the model rather than being faked — that matters because P4 hangs
- * per-corner brake and tire damage off exactly these numbers.
+ * Wheel angular velocity is its own state, integrated rather than derived, so
+ * that wheelspin and lockup emerge from the model rather than being faked —
+ * that matters because P4 hangs per-corner brake and tire damage off exactly
+ * these numbers. (The step itself is semi-implicit; see the tire pass.)
  */
 
 import type RAPIER from '@dimforge/rapier3d-compat';
@@ -53,6 +54,12 @@ const REVERSE_FADE_MPS = 3.5;
 
 /** Rotational inertia of one wheel+hub assembly, kg·m². */
 const WHEEL_INERTIA = 1.2;
+/**
+ * How far the wheel speed is nudged to measure the tyre's longitudinal
+ * stiffness, rad/s. A few ten-thousandths of slip at 10 m/s: deep inside the
+ * linear part of the curve, which peaks at `peakSlipRatio`.
+ */
+const SPIN_PROBE = 0.05;
 /**
  * Closing speed below which bottoming out is just a hard bump, m/s.
  *
@@ -194,6 +201,8 @@ export class Vehicle {
   /** Seconds spent stationary under braking, before reverse engages. */
   private reverseHold = 0;
   private engineRpm: number;
+  /** Driven-wheel rpm at the crank, unclamped: what the rev limiter reads. */
+  private wheelSideRpm = 0;
   /** Fraction of available torque being delivered; negative on the overrun. */
   private engineLoad = 0;
 
@@ -561,7 +570,7 @@ export class Vehicle {
       const weather = gripMultiplier(this.conditions, w.surface);
       const mu = t.tireGrip * w.surface.grip * weather * balance * handbrakeLoss * fx.wheelGrip[i]!;
 
-      const f = tireForces({
+      const tyre = {
         load: susp[i]!,
         mu,
         slipAngle: sa,
@@ -571,26 +580,70 @@ export class Vehicle {
         slideFloor: t.slideGripFloor,
         lockedFloor: t.lockedGripFloor,
         driveScale: 1,
-      });
+      };
+      const f = tireForces(tyre);
 
       w.slipAngle = sa;
       w.slipRatio = sr;
       w.saturation = f.saturation;
 
-      const rolling =
-        -Math.sign(vForward) * (w.surface.rollingResistance + fx.wheelDrag[i]!) * susp[i]!;
-      const tireForce = add(scale(forward, f.longitudinal + rolling), scale(right, f.lateral));
-      body.addForceAtPoint(tireForce, h.point, true);
-
       // Wheel spin responds to drive torque minus the tire's reaction, then the
       // brake is applied as a clamped impulse so it can never spin the wheel
       // backwards within a single step.
+      //
+      // Semi-implicitly: the step divides by the wheel's inertia *plus* how
+      // hard the tyre will push back on it before the step is over. Slip ratio
+      // is divided by road speed, so the tyre's grip on the wheel stiffens as
+      // the car slows, and below about 70 km/h the wheel's own time constant
+      // (~2 ms at 36 km/h) is shorter than a 120 Hz step. Explicit Euler then
+      // overshoots the balance point every step and settles into a limit cycle
+      // instead of on it. Measured cruising straight at a steady 36 km/h, one
+      // rear wheel was driving at +15% slip while its neighbour braked at -8%,
+      // and every tyre was spending 70-99% of its grip on the fight. What was
+      // left over for cornering was a fraction of the car's grip, and on
+      // Coldwater Pass's descent, where the rear is already light, it was the
+      // margin a slide gets caught with. It was reported as the car
+      // fishtailing downhill at low speed. With the pushback folded in, the same cruise uses 2-10% of grip
+      // on the flat and 12-15% on the descent, with both wheels on an axle
+      // agreeing — what a car rolling in a straight line should be using.
+      //
+      // Past the peak the curve falls away and the pushback is zero, so a
+      // wheel that is genuinely locking or spinning up is left to do it.
       const reaction = f.longitudinal * t.wheelRadius;
-      w.spin += ((driveTorque - reaction) / WHEEL_INERTIA) * dt;
-
-      const brakeDelta = (brakeTorque / WHEEL_INERTIA) * dt;
+      const nudged = tireForces({
+        ...tyre,
+        slipRatio: slipRatio((w.spin + SPIN_PROBE) * t.wheelRadius, vForward),
+      });
+      const pushback = Math.max(
+        0,
+        ((nudged.longitudinal - f.longitudinal) / SPIN_PROBE) * t.wheelRadius,
+      );
+      const inertia = WHEEL_INERTIA + pushback * dt;
+      const before = w.spin;
+      w.spin += ((driveTorque - reaction) / inertia) * dt;
+      const brakeDelta = (brakeTorque / inertia) * dt;
       w.spin = moveToward(w.spin, 0, brakeDelta);
       w.rotation += w.spin * dt;
+
+      // The body gets the force the wheel was solved against — the tyre's
+      // pushback at the *end* of the step, drive and brake both — not the one
+      // it started with. Handing it the start-of-step force while the wheel
+      // took the end-of-step one made the step dissipative: under power the
+      // difference was a steady drag, measured at 850 N of an 8 100 N drive in
+      // second gear, and under a steady half pedal it was braking the body
+      // lighter than the wheel, so modulating stopped the car at 0.63 g against
+      // 0.88 g for stamping. Capped at what the friction circle leaves beside
+      // the lateral force.
+      const room = Math.sqrt(Math.max(0, (Math.max(susp[i]!, 0) * mu) ** 2 - f.lateral ** 2));
+      const longitudinal = clamp(
+        f.longitudinal + (pushback * (w.spin - before)) / t.wheelRadius,
+        -room,
+        room,
+      );
+      const rolling =
+        -Math.sign(vForward) * (w.surface.rollingResistance + fx.wheelDrag[i]!) * susp[i]!;
+      const tireForce = add(scale(forward, longitudinal + rolling), scale(right, f.lateral));
+      body.addForceAtPoint(tireForce, h.point, true);
     }
 
     // --- Body forces ---------------------------------------------------------
@@ -726,7 +779,14 @@ export class Vehicle {
     const t = this.tuning;
     const rpm = clamp(this.engineRpm, t.idleRpm, t.maxRpm);
     const peak = sampleCurve(t.torqueCurve, rpm);
-    const th = clamp(throttle, 0, 1);
+    // The rev limiter. The rev counter is clamped at maxRpm, but the engine
+    // went on making its full torque there, so nothing bounded a driven wheel
+    // with no grip under it. Once the stable wheel step let the car corner
+    // hard enough to lift its inside front, that wheel took the diff's torque
+    // and spun to 840 km/h at the tread on a 58 km/h circle, pinning the car
+    // in first on the limiter and leaving it flywheel energy to coast on after
+    // a stall. Past maxRpm the fuel is cut and only engine braking remains.
+    const th = this.wheelSideRpm >= t.maxRpm ? 0 : clamp(throttle, 0, 1);
 
     // Engine braking scales with revs and fades out as the throttle opens. It
     // is what makes lifting mid-corner shift weight forward and tuck the nose
@@ -746,11 +806,36 @@ export class Vehicle {
 
     const ratio = t.gearRatios[this.gearIndex] ?? 1;
     const rawRpm = Math.abs(avgSpin * ratio * t.finalDrive) * RPM_PER_RAD_S;
+    this.wheelSideRpm = rawRpm;
+    const wheelRpm = clamp(Math.max(rawRpm, t.idleRpm), t.idleRpm, t.maxRpm);
+    /*
+     * The clutch. Engine rpm used to be the wheels' rpm floored at idle, which
+     * only launched the car because the old explicit wheel step spun the tyres
+     * past their peak and dragged the engine up into its torque band with them.
+     * With a stable wheel step the tyres grip, the engine sat at 1 000 rpm and
+     * 0-100 went from 4.27 s to 5.27 s. A slipping clutch lets the engine rev
+     * toward a throttle-scaled launch rpm and drive from there; once the wheel
+     * side reaches that, it locks and the engine follows the wheels exactly as
+     * it did before.
+     */
     // A stalled engine is not idling: it is stopped, and the rev counter says
     // so. Without this the HUD keeps a dead car ticking over at idle.
-    this.engineRpm = this.effects.stalled
-      ? 0
-      : clamp(Math.max(rawRpm, t.idleRpm), t.idleRpm, t.maxRpm);
+    if (this.effects.stalled) {
+      this.engineRpm = 0;
+    } else {
+      const drive = clamp(this.gearIndex === 0 ? input.brake : input.throttle, 0, 1);
+      const launch = t.idleRpm + (t.launchRpm - t.idleRpm) * drive;
+      const revs = Math.max(this.engineRpm, t.idleRpm);
+      const step = t.engineRevRate * dt;
+      this.engineRpm =
+        wheelRpm >= launch
+          ? // Locked. Falling to meet the wheels rather than snapping, so
+            // lifting mid-launch does not drop the revs in one step.
+            wheelRpm >= revs
+            ? wheelRpm
+            : moveToward(revs, wheelRpm, step)
+          : moveToward(revs, launch, step);
+    }
 
     // Reverse engages from a near-stop when braking with no throttle, and is
     // left again by applying throttle once the car has stopped rolling back.
@@ -822,6 +907,7 @@ export class Vehicle {
     this.shiftTimer = 0;
     this.reverseHold = 0;
     this.engineRpm = this.tuning.idleRpm;
+    this.wheelSideRpm = 0;
     this.effects = this.damage ? this.damage.effects() : PRISTINE;
     for (const w of this.wheels) {
       w.spin = 0;
