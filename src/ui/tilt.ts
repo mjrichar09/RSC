@@ -150,8 +150,17 @@ export function steerFromRoll(roll: number, reference: number): number {
   const offset = shortestTurn(reference, roll);
   const past = Math.abs(offset) - DEAD_ZONE;
   if (past <= 0) return 0;
-  return clamp((Math.sign(offset) * past) / (FULL_LOCK - DEAD_ZONE), -1, 1);
+  const linear = clamp(past / (FULL_LOCK - DEAD_ZONE), 0, 1);
+  // A curve, not a line: gentle near centre, where every slide is caught, and
+  // still full lock at the end. Linear, a phone is at its least precise exactly
+  // where precision matters — a wrist wobble of a degree was 3% of lock, and a
+  // tilt has no centre to spring back to. Reported as the thing that made tilt
+  // hard: slides that could not be recovered. Thumb and pad are unchanged.
+  return Math.sign(offset) * linear ** RESPONSE;
 }
+
+/** The exponent of that curve. At 1.5, half the tilt is 35% of the lock. */
+export const RESPONSE = 1.5;
 
 /**
  * How long to wait for the sensor to say anything, ms.

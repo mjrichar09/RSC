@@ -11,6 +11,7 @@
  */
 
 import * as THREE from 'three';
+import { ball, capsule, merge, place } from './shapes.js';
 import { type PropKind, type Stage } from '../sim/stage.js';
 import { CORRIDOR } from '../sim/corridor.js';
 import { DRESSING, type SceneryItem, type SceneryKind } from '../sim/scenery.js';
@@ -968,7 +969,11 @@ export class CrowdView {
 
   private readonly people: Person[];
   private readonly bodies: THREE.InstancedMesh;
+  private readonly legs: THREE.InstancedMesh;
   private readonly heads: THREE.InstancedMesh;
+  private readonly hats: THREE.InstancedMesh;
+  /** Which spectators wear a hat, fixed per person. */
+  private readonly hatted: boolean[];
   private readonly matrix = new THREE.Matrix4();
   private readonly quaternion = new THREE.Quaternion();
   private readonly position = new THREE.Vector3();
@@ -979,27 +984,63 @@ export class CrowdView {
     this.people = people;
     const count = Math.max(people.length, 1);
 
-    // A body and a head. Two instanced meshes and no animation beyond a bob: at
-    // this distance a standing figure is a silhouette, and a walk cycle would
-    // cost more than every other thing in this file put together.
-    this.bodies = new THREE.InstancedMesh(
-      new THREE.CylinderGeometry(0.17, 0.22, 1.25, 5),
-      new THREE.MeshStandardMaterial({ roughness: 0.9, flatShading: true }),
+    // A coat, trousers, a head and — on about half of them — a hat. Four
+    // instanced meshes and no animation beyond a bob: at this distance a
+    // standing figure is a silhouette, and a walk cycle would cost more than
+    // every other thing in this file put together. It used to be a five-sided
+    // cylinder with a twenty-sided ball on it, which read as a bollard; arms,
+    // legs and shoulders are what read as a person.
+    //
+    // Authored for a figure one unit tall with its feet at the origin: the
+    // coat and trousers stretch with the person's height, the head and hat
+    // are placed at it, so a tall spectator is not a big-headed one.
+    const coat = merge([
+      place(capsule(0.16, 0.34), { at: [0, 0.95, 0], size: [1.15, 1, 0.78] }),
+      place(capsule(0.052, 0.4), { at: [0.215, 0.9, 0], turn: [0, 0, 0.1] }),
+      place(capsule(0.052, 0.4), { at: [-0.215, 0.9, 0], turn: [0, 0, -0.1] }),
+    ]);
+    const trousers = merge([
+      place(capsule(0.075, 0.5), { at: [0.085, 0.36, 0] }),
+      place(capsule(0.075, 0.5), { at: [-0.085, 0.36, 0] }),
+    ]);
+    this.bodies = new THREE.InstancedMesh(coat, new THREE.MeshStandardMaterial({ roughness: 0.9 }), count);
+    this.legs = new THREE.InstancedMesh(trousers, new THREE.MeshStandardMaterial({ roughness: 0.92 }), count);
+    this.heads = new THREE.InstancedMesh(
+      place(ball(0.115), { size: [0.92, 1.05, 0.95] }),
+      new THREE.MeshStandardMaterial({ color: 0xc9a68a, roughness: 0.95 }),
       count,
     );
-    this.heads = new THREE.InstancedMesh(
-      new THREE.IcosahedronGeometry(0.13, 0),
-      new THREE.MeshStandardMaterial({ color: 0xc9a68a, roughness: 0.95, flatShading: true }),
+    // A beanie: the top of a ball, a little bigger than the head it sits on.
+    this.hats = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(0.125, 10, 6, 0, Math.PI * 2, 0, Math.PI * 0.55),
+      new THREE.MeshStandardMaterial({ roughness: 0.95 }),
       count,
     );
     this.bodies.castShadow = true;
+    this.legs.castShadow = true;
     this.heads.castShadow = false;
-    this.bodies.count = people.length;
-    this.heads.count = people.length;
+    this.hats.castShadow = false;
+    for (const mesh of [this.bodies, this.legs, this.heads, this.hats]) mesh.count = people.length;
 
-    people.forEach((person, i) => this.bodies.setColorAt(i, person.coat));
-    if (this.bodies.instanceColor) this.bodies.instanceColor.needsUpdate = true;
-    this.group.add(this.bodies, this.heads);
+    // Trousers and hats from a hash of the person's place in the crowd, so a
+    // stage's crowd is dressed the same way on every load.
+    const TROUSERS = [0x2b3140, 0x1f2227, 0x4a3a2c, 0x3c4a5c, 0x55504a];
+    const HATS = [0xc0392b, 0x2e5a8a, 0xe0b340, 0x2f6b3a, 0x222222, 0xd9d4c7];
+    const pick = (i: number, salt: number) => {
+      const n = Math.sin(i * 12.9898 + salt * 78.233) * 43758.5453;
+      return n - Math.floor(n);
+    };
+    const tint = new THREE.Color();
+    this.hatted = people.map((_, i) => pick(i, 1) < 0.5);
+    people.forEach((person, i) => {
+      this.bodies.setColorAt(i, person.coat);
+      this.legs.setColorAt(i, tint.setHex(TROUSERS[Math.floor(pick(i, 2) * TROUSERS.length)]!));
+      this.hats.setColorAt(i, tint.setHex(HATS[Math.floor(pick(i, 3) * HATS.length)]!));
+    });
+    for (const mesh of [this.bodies, this.legs, this.hats]) {
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    }
+    this.group.add(this.bodies, this.legs, this.heads, this.hats);
     this.write();
   }
 
@@ -1063,18 +1104,24 @@ export class CrowdView {
       this.quaternion.setFromAxisAngle(this.up, person.facing);
       const hop = person.alarm > 0.15 ? Math.abs(Math.sin(person.bob)) * 0.12 * person.alarm : 0;
 
+      // Coat and trousers from the feet, stretched to the person's height.
       this.scale.set(1, person.height, 1);
-      this.position.set(person.at.x, person.at.y + 0.62 * person.height + hop, person.at.z);
+      this.position.set(person.at.x, person.at.y + hop, person.at.z);
       this.matrix.compose(this.position, this.quaternion, this.scale);
       this.bodies.setMatrixAt(i, this.matrix);
+      this.legs.setMatrixAt(i, this.matrix);
 
+      // Head and hat at full size, on top of whatever height that is.
       this.scale.set(1, 1, 1);
-      this.position.set(person.at.x, person.at.y + 1.32 * person.height + hop, person.at.z);
+      this.position.set(person.at.x, person.at.y + 1.3 * person.height + hop, person.at.z);
       this.matrix.compose(this.position, this.quaternion, this.scale);
       this.heads.setMatrixAt(i, this.matrix);
+      if (!this.hatted[i]) this.scale.set(0, 0, 0);
+      this.position.y += 0.035;
+      this.matrix.compose(this.position, this.quaternion, this.scale);
+      this.hats.setMatrixAt(i, this.matrix);
     });
-    this.bodies.instanceMatrix.needsUpdate = true;
-    this.heads.instanceMatrix.needsUpdate = true;
+    for (const mesh of [this.bodies, this.legs, this.heads, this.hats]) mesh.instanceMatrix.needsUpdate = true;
   }
 }
 

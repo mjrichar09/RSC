@@ -20,6 +20,7 @@ import {
   gravityRoll,
   shortestTurn,
   steerFromRoll,
+  RESPONSE,
 } from '../src/ui/tilt.js';
 
 const deg = (radians: number) => (radians * 180) / Math.PI;
@@ -120,10 +121,11 @@ describe('roll to lock', () => {
     expect(steerFromRoll(rad(35), 0)).toBeCloseTo(1, 2);
     expect(steerFromRoll(rad(90), 0)).toBe(1);
     expect(steerFromRoll(rad(-90), 0)).toBe(-1);
-    // Half the roll is not far off half the lock, which is the property that
-    // makes a tilt input predictable: it is linear between the dead zone and
-    // the stop, not eased.
-    expect(steerFromRoll(rad(18.6), 0)).toBeCloseTo(0.5, 1);
+    // Half the roll is about a third of the lock: a curve between the dead
+    // zone and the stop, gentle near centre where slides are caught (see
+    // `RESPONSE`). Linear, a wrist wobble of a degree was 3% of lock, and tilt
+    // slides were reported as unrecoverable.
+    expect(steerFromRoll(rad(18.6), 0)).toBeCloseTo(0.5 ** RESPONSE, 1);
   });
 
   it('is measured from the reference, not from level', () => {
@@ -140,8 +142,8 @@ describe('roll to lock', () => {
     // the right-hand one as -340°, which is full *left* lock in the middle of
     // a right-hand corner. The assertion is the sign.
     const near = rad(170);
-    expect(steerFromRoll(rad(-170), near)).toBeCloseTo(0.54, 2);
-    expect(steerFromRoll(rad(150), near)).toBeCloseTo(-0.54, 2);
+    expect(steerFromRoll(rad(-170), near)).toBeCloseTo(0.54 ** RESPONSE, 2);
+    expect(steerFromRoll(rad(150), near)).toBeCloseTo(-(0.54 ** RESPONSE), 2);
     expect(deg(shortestTurn(rad(170), rad(-170)))).toBeCloseTo(20, 6);
     expect(deg(shortestTurn(rad(-170), rad(170)))).toBeCloseTo(-20, 6);
   });
@@ -178,9 +180,9 @@ describe('the input as the game reads it', () => {
     tilt.feed(HOLD_B.level, HOLD_B.gamma);
     expect(tilt.steer).toBe(0);
     tilt.feed(HOLD_B.rightDown, HOLD_B.gamma);
-    expect(tilt.steer!).toBeGreaterThan(0.5);
+    expect(tilt.steer!).toBeGreaterThan(0.5 ** RESPONSE);
     tilt.feed(HOLD_B.leftDown, HOLD_B.gamma);
-    expect(tilt.steer!).toBeLessThan(-0.5);
+    expect(tilt.steer!).toBeLessThan(-(0.5 ** RESPONSE));
   });
 
   it('holds the last reading through a phone laid flat', () => {
@@ -188,7 +190,7 @@ describe('the input as the game reads it', () => {
     tilt.feed(20, -90);
     tilt.feed(33, -90);
     const held = tilt.steer!;
-    expect(held).toBeGreaterThan(0.3);
+    expect(held).toBeGreaterThan(0.3 ** RESPONSE);
     // Face up on a table: no answer, and the wheel stays where it was rather
     // than snapping straight in the middle of a corner.
     tilt.feed(0, 0);

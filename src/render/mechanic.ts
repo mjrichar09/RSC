@@ -25,18 +25,23 @@
  * the metal being seen to straighten over a second must not mean the player is
  * owed money for a second.
  *
- * ## Why it is boxes
+ * ## Why it is primitives
  *
- * Every part of this is a box or a sphere, posed from one clock. A rigged mesh
- * would be a modelling pipeline, an animation format and a loader for a figure
- * that is forty pixels tall on a phone, and the game's own car is flat-shaded
- * boxes for the same reason. Chunky proportions — big head, short legs, a cap
- * — read at that size in a way a realistic figure does not.
+ * Every part of this is a capsule or a sphere, posed from one clock. A rigged
+ * mesh would be a modelling pipeline, an animation format and a loader for a
+ * figure that is forty pixels tall on a phone. Chunky proportions — big head,
+ * short legs, a cap — read at that size in a way a realistic figure does not.
+ *
+ * He was flat-shaded boxes until the rest of the scene stopped being: rounded
+ * limbs, hands and boots are what make him a person working on the car rather
+ * than a stack of blocks near it, and the skeleton — a group per joint — is
+ * exactly what it was, so every animation below is untouched.
  */
 
 import * as THREE from 'three';
 import { CAR } from '../data/tuning.js';
 import { COMPONENT_BY_ID, type ComponentId } from '../sim/damage.js';
+import { ball, capsule, merge, place } from './shapes.js';
 
 /** Ground level in the garage scene: the floor the car's wheels sit on. */
 const FLOOR = -CAR.wheelRadius - CAR.suspensionRestLength * 0.45;
@@ -238,25 +243,37 @@ type Phase = 'idle' | 'walking' | 'working' | 'cheering';
 const SPARKS = 20;
 
 /**
- * A stubby limb, pivoting from one end.
+ * A stubby limb, pivoting from one end, with something on the end of it.
  *
- * Three.js rotates about an object's origin and a box's origin is its middle,
- * so an arm built as a plain mesh swings from its elbow. The mesh is offset
- * inside a group and the group is what is rotated — which is the whole of what
- * a bone is here.
+ * Three.js rotates about an object's origin and a shape's origin is its
+ * middle, so an arm built as a plain mesh swings from its elbow. The mesh is
+ * offset inside a group and the group is what is rotated — which is the whole
+ * of what a bone is here. `end` is a hand or a boot, in its own material,
+ * placed at the far end.
  */
 function limb(
   parent: THREE.Object3D,
   at: THREE.Vector3,
   size: { x: number; y: number; z: number },
   material: THREE.Material,
+  end?: { geometry: THREE.BufferGeometry; material: THREE.Material },
 ): THREE.Group {
   const pivot = new THREE.Group();
   pivot.position.copy(at);
-  const mesh = new THREE.Mesh(new THREE.BoxGeometry(size.x, size.y, size.z), material);
+  const r = Math.min(size.x, size.z) / 2;
+  const mesh = new THREE.Mesh(
+    place(capsule(r, size.y - 2 * r), { size: [size.x / (2 * r), 1, size.z / (2 * r)] }),
+    material,
+  );
   mesh.position.y = -size.y / 2;
   mesh.castShadow = true;
   pivot.add(mesh);
+  if (end) {
+    const tip = new THREE.Mesh(end.geometry, end.material);
+    tip.position.y = -size.y;
+    tip.castShadow = true;
+    pivot.add(tip);
+  }
   parent.add(pivot);
   return pivot;
 }
@@ -296,27 +313,16 @@ export class Mechanic {
   private readonly sparkLife: number[] = [];
 
   constructor(parent: THREE.Object3D) {
-    const overalls = new THREE.MeshStandardMaterial({
-      color: 0x2f6fb5,
-      roughness: 0.85,
-      flatShading: true,
-    });
-    const skin = new THREE.MeshStandardMaterial({
-      color: 0xe0a578,
-      roughness: 0.9,
-      flatShading: true,
-    });
-    const cap = new THREE.MeshStandardMaterial({
-      color: 0xe8552f,
-      roughness: 0.8,
-      flatShading: true,
-    });
-    const steel = new THREE.MeshStandardMaterial({
-      color: 0xb9c0c9,
-      roughness: 0.35,
-      metalness: 0.5,
-      flatShading: true,
-    });
+    const overalls = new THREE.MeshStandardMaterial({ color: 0x2f6fb5, roughness: 0.85 });
+    const skin = new THREE.MeshStandardMaterial({ color: 0xe0a578, roughness: 0.9 });
+    const cap = new THREE.MeshStandardMaterial({ color: 0xe8552f, roughness: 0.8 });
+    const steel = new THREE.MeshStandardMaterial({ color: 0xb9c0c9, roughness: 0.35, metalness: 0.5 });
+    const leather = new THREE.MeshStandardMaterial({ color: 0x2a2420, roughness: 0.7 });
+    const hand = { geometry: ball(0.065 * S), material: skin };
+    const boot = {
+      geometry: place(ball(0.09 * S), { at: [0, 0.01 * S, 0.04 * S], size: [0.95, 0.7, 1.45] }),
+      material: leather,
+    };
 
     this.group.position.set(HOME.x, FLOOR, HOME.z);
     this.group.add(this.body);
@@ -325,20 +331,44 @@ export class Mechanic {
     // Legs hang from the hips, which is the thing that bobs when he walks.
     this.hips.position.y = HIP_HEIGHT;
     const legSize = { x: 0.15 * S, y: 0.56 * S, z: 0.17 * S };
-    this.legL = limb(this.hips, new THREE.Vector3(0.11 * S, 0, 0), legSize, overalls);
-    this.legR = limb(this.hips, new THREE.Vector3(-0.11 * S, 0, 0), legSize, overalls);
+    this.legL = limb(this.hips, new THREE.Vector3(0.11 * S, 0, 0), legSize, overalls, boot);
+    this.legR = limb(this.hips, new THREE.Vector3(-0.11 * S, 0, 0), legSize, overalls, boot);
 
-    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.44 * S, 0.5 * S, 0.3 * S), overalls);
-    torso.position.y = 0.25 * S;
+    // A rounded trunk with shoulders, and a belt where the overalls gather.
+    const torso = new THREE.Mesh(
+      merge([
+        place(capsule(0.17 * S, 0.22 * S), { at: [0, 0.25 * S, 0], size: [1.3, 1, 0.9] }),
+        place(ball(0.1 * S), { at: [0.2 * S, 0.43 * S, 0] }),
+        place(ball(0.1 * S), { at: [-0.2 * S, 0.43 * S, 0] }),
+      ]),
+      overalls,
+    );
     torso.castShadow = true;
     this.hips.add(torso);
+    const belt = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.2 * S, 0.2 * S, 0.05 * S, 12),
+      leather,
+    );
+    belt.position.y = 0.05 * S;
+    belt.scale.set(1.12, 1, 0.8);
+    this.hips.add(belt);
 
     const armSize = { x: 0.12 * S, y: 0.44 * S, z: 0.14 * S };
-    this.armL = limb(this.hips, new THREE.Vector3(0.28 * S, 0.42 * S, 0), armSize, overalls);
-    this.armR = limb(this.hips, new THREE.Vector3(-0.28 * S, 0.42 * S, 0), armSize, overalls);
+    this.armL = limb(this.hips, new THREE.Vector3(0.28 * S, 0.42 * S, 0), armSize, overalls, hand);
+    this.armR = limb(this.hips, new THREE.Vector3(-0.28 * S, 0.42 * S, 0), armSize, overalls, hand);
 
     // The spanner, in the right hand, pointing the way the arm does.
-    const spanner = new THREE.Mesh(new THREE.BoxGeometry(0.06 * S, 0.34 * S, 0.06 * S), steel);
+    const spanner = new THREE.Mesh(
+      merge([
+        place(new THREE.CylinderGeometry(0.022 * S, 0.022 * S, 0.3 * S, 8), {}),
+        // The jaw, which is what makes it a spanner rather than a stick.
+        place(new THREE.TorusGeometry(0.04 * S, 0.016 * S, 6, 10, Math.PI * 1.4), {
+          at: [0, -0.17 * S, 0],
+          turn: [0, Math.PI / 2, Math.PI * 0.8],
+        }),
+      ]),
+      steel,
+    );
     spanner.position.set(0, -0.52 * S, 0.06 * S);
     spanner.castShadow = true;
     this.armR.add(spanner);

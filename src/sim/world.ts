@@ -234,6 +234,17 @@ export class SimWorld {
   steps = 0;
 
   private accumulator = 0;
+  /**
+   * Called after every fixed step, for anything that has to see each one.
+   *
+   * The frame loop sees only the last step of however many a frame ran, and
+   * that is a problem for exactly one thing so far: the ghost recorder, which
+   * is meant to sample at 60 Hz and was being called once per *rendered
+   * frame*. On a device drawing 30 frames a second that is a 30 Hz lap — half
+   * the recording the board requires of a record — so every world record set
+   * on a phone was refused, and the player was shown only their personal best.
+   */
+  onStep: (() => void) | null = null;
   /** Transform at the start of the last fixed step, per car, for interpolation. */
   private previousTransforms: { position: Vec3; rotation: Quat }[] = [];
   /**
@@ -850,6 +861,7 @@ export class SimWorld {
     this.updateWorldEvents();
     this.time += this.dt;
     this.steps++;
+    this.onStep?.();
   }
 
   /**

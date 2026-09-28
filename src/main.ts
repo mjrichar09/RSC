@@ -80,7 +80,7 @@ import { ReplayUi } from './ui/replay.js';
 import { MultiplayerSession } from './game/multiplayer.js';
 import { LiveStageMap } from './ui/stageMap.js';
 import * as THREE from 'three';
-import { rotate, type Vec3 } from './sim/math.js';
+import { rotate, rotateInverse, type Quat, type Vec3 } from './sim/math.js';
 import type { VehicleState } from './sim/vehicle.js';
 import { Vision } from './sim/vision.js';
 import { VisionPass } from './render/vision.js';
@@ -196,6 +196,28 @@ async function main(): Promise<void> {
   /** The notes for whatever stage is loaded, from the top. */
   const loadNotes = (on: Stage) =>
     codriver.load(buildPacenotes(on.corners, { water: on.def.water, spills: on.spills }));
+
+  /**
+   * Counter-steer, added for tilt only.
+   *
+   * A tilted phone has no centre to spring back to and moves at the speed of a
+   * wrist, and slides steered by it were reported as unrecoverable where the
+   * same car on a pad or a thumb was not. This steers into a slide by a third
+   * of lock at 35 degrees of drift, starting at 6 so it never touches ordinary
+   * cornering. Measured in a closed-loop harness with a tilt-like lag and swing
+   * rate, it turned one of sixteen provoked slides from a spin into a catch —
+   * a nudge, not an autopilot, and the player still has to steer out.
+   */
+  const withTiltAssist = (input: DriverInput): DriverInput => {
+    const state = world.state();
+    if (Math.abs(state.speed) < 5) return input;
+    const local = rotateInverse(world.vehicle.body.rotation() as Quat, state.velocity);
+    const drift = (Math.atan2(local.x, Math.max(Math.abs(local.z), 0.5)) * 180) / Math.PI;
+    const past = Math.max(Math.abs(drift) - 6, 0);
+    if (past === 0) return input;
+    const assist = Math.sign(drift) * Math.min(past / 29, 1) * 0.35;
+    return { ...input, steer: Math.min(Math.max(input.steer + assist, -1), 1) };
+  };
   /** Reused for the screen-space projection each frame. */
   const SCRATCH = new THREE.Vector3();
   const wildlifeView = new WildlifeView(scene);
@@ -2804,10 +2826,11 @@ const params = new URLSearchParams(location.search);
 
     // The start. While the lamps are lit the car is held on the line: the
     // handbrake is on and nothing the player does reaches the wheels.
-    const driving =
+    const merged =
       garage.isOpen || multiplayer.isOpen || menu.isOpen
         ? NEUTRAL_INPUT
         : touch.merge(controls.sample(dt), wallDt);
+    const driving = touch.tilting ? withTiltAssist(merged) : merged;
     const lit = lights.update(wallDt, driving.throttle);
     if (lit) mixer.startLight(lit === 'go');
     // The clock starts with the green, not with the throttle: the car is
@@ -2861,9 +2884,23 @@ const params = new URLSearchParams(location.search);
       }
     }
 
+    // The lap is recorded on the world's own steps, not on this frame: see
+    // `SimWorld.onStep`. Each sample's race time is where that step falls
+    // inside the frame, since the race clock itself only moves once per frame.
+    if (race && race.phase === 'running') {
+      const raceAt = race.time;
+      const worldAt = world.time;
+      const running = race;
+      const recording = world;
+      world.onStep = () =>
+        recorder.capture(raceAt + (recording.time - worldAt), running.furthest, recording.state());
+    } else {
+      world.onStep = null;
+    }
     // In a network race every fixed step goes through the host or the guest:
     // that is what puts inputs on the wire and takes snapshots off it.
     const alpha = session ? session.advance(dt, input) : world.advance(simDt, input);
+    world.onStep = null;
 
     const state = world.state();
     if (race && stage) {
@@ -2908,8 +2945,6 @@ const params = new URLSearchParams(location.search);
       }
 
       if (race.phase === 'running') {
-        recorder.capture(race.time, race.furthest, state);
-
         // Live delta: when did the ghost reach the point we have reached?
         const ghostTime = ghost?.timeAtDistance(race.furthest) ?? null;
         raceHud.setDelta(ghostTime === null ? null : race.time - ghostTime);

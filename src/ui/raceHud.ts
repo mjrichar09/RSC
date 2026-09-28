@@ -519,7 +519,15 @@ export class RaceHud {
         ? 'No times yet — this is the first'
         : 'Fastest here';
 
-    section.innerHTML = `<h4>${heading}</h4>${rows}${yours}${best}${rivals}`;
+    // Said, not implied. A record refused by the board used to leave this
+    // panel reading "Your time" and nothing else, which looked exactly like a
+    // lap that was simply not fast enough — and hid a bug that refused every
+    // record set on a phone.
+    const unposted = reached
+      ? ''
+      : '<div class="board-note">Not posted to the world board — kept as your own time</div>';
+
+    section.innerHTML = `<h4>${heading}</h4>${rows}${yours}${best}${unposted}${rivals}`;
 
     // Before the buttons, so the way out stays the last thing on the panel.
     const actions = this.panel.querySelector('.finish-actions');

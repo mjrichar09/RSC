@@ -70,6 +70,8 @@ export class TouchControls {
   onVisible: ((on: boolean) => void) | null = null;
 
   private steer = 0;
+  /** True when the last merge steered from the phone's tilt, for the tilt-only aids. */
+  tilting = false;
   private throttle = 0;
   private brake = 0;
   private handbrake = 0;
@@ -306,6 +308,7 @@ export class TouchControls {
     // it is let go, with no re-centring ramp in between — the tilt reading is
     // absolute, so there is nothing to return *to*.
     const tilted = this.stick === null ? this.tilt.steer : null;
+    this.tilting = tilted !== null;
     if (tilted !== null) this.steer = tilted;
     else if (this.stick === null) {
       this.steer += clamp(-this.steer, -STEER_RETURN * dt, STEER_RETURN * dt);

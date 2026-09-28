@@ -170,7 +170,7 @@ const MAX_TIME = 3600;
  * more than the whole ghost of six of the fourteen stages, including Pine
  * Loop, which is the free one everybody plays.
  */
-const GHOST_BYTES_PER_SECOND = 3130;
+export const GHOST_BYTES_PER_SECOND = 3130;
 
 /**
  * And an absolute floor, whatever the arithmetic says.
