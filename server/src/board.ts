@@ -123,14 +123,16 @@ export const MAX_NAME = 16;
 /**
  * The largest ghost accepted, in base64 characters.
  *
- * Grand Traverse is the longest stage in the game and records at 277 KB, which
- * is 370 000 characters encoded. Half a megabyte of raw frames — 700 000
- * characters — is comfortably above anything this game can produce and
- * comfortably under the Durable Object's 2 MiB value limit, which is the
- * ceiling that actually exists. A stage long enough to need more than this
- * wants the limit re-measured, not raised on a guess.
+ * Sized from the slowest lap anybody will want to hold a record with, not the
+ * fastest the AI can drive. At 4 480 characters a second a 156 s lap is
+ * 700 000, which was the old cap — reasoned from Grand Traverse as the longest
+ * stage — and Coldwater Pass's AI lap alone is 126 s. Its board record is a
+ * human's 227 s, a 1.02 million character ghost, so no record could ever have
+ * been set there. 1.9 million is a 424 s lap and sits under the Durable
+ * Object's 2 MiB value limit, which is the ceiling that actually exists; a
+ * record slower than that is refused for want of room for its lap.
  */
-export const MAX_GHOST = 700_000;
+export const MAX_GHOST = 1_900_000;
 
 /**
  * Bounds a real lap falls inside.

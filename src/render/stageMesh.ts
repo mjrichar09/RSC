@@ -11,6 +11,7 @@
  */
 
 import * as THREE from 'three';
+import { CAR } from '../data/tuning.js';
 import { ball, capsule, merge, place } from './shapes.js';
 import { type PropKind, type Stage } from '../sim/stage.js';
 import { CORRIDOR } from '../sim/corridor.js';
@@ -170,6 +171,9 @@ float sGrain(vec2 w) {
  * is precisely the thing a contour map is read by. Flat ground produces no
  * lines whatsoever, so most of every stage is untouched.
  */
+/** Metres from a car's centre to its wheels: where every wheel line on the road is drawn. */
+const WHEEL_LINE = Math.abs(CAR.wheelPositions[0]!.x);
+
 function addContours(material: THREE.MeshStandardMaterial, seed: number): void {
   // Without this the lines simply do not appear, and nothing anywhere errors.
   // three's default program cache key is built from the material's *defines* —
@@ -190,6 +194,7 @@ attribute vec4 aKind;
 attribute float aAlong;
 attribute vec2 aSpill;
 attribute float aRubber;
+attribute float aHalf;
 varying float vHeight;
 varying float vRoad;
 varying float vGrade;
@@ -199,6 +204,7 @@ varying vec2 vWorldXZ;
 varying float vAlong;
 varying vec2 vSpill;
 varying float vRubber;
+varying float vHalf;
 ${shader.vertexShader}`.replace(
       '#include <begin_vertex>',
       `#include <begin_vertex>
@@ -211,7 +217,8 @@ ${shader.vertexShader}`.replace(
   vKind = aKind;
   vAlong = aAlong;
   vSpill = aSpill;
-  vRubber = aRubber;`,
+  vRubber = aRubber;
+  vHalf = aHalf;`,
     );
 
     shader.fragmentShader = `varying float vHeight;
@@ -223,6 +230,7 @@ varying vec2 vWorldXZ;
 varying float vAlong;
 varying vec2 vSpill;
 varying float vRubber;
+varying float vHalf;
 uniform float uSeed;
 ${SURFACE_NOISE}
 ${shader.fragmentShader}`.replace(
@@ -241,9 +249,14 @@ ${shader.fragmentShader}`.replace(
     float roll = sHash(cell);
     vec2 inCell = fract(w * 5.0) - 0.5 - (vec2(sHash(cell + 3.1), sHash(cell + 7.7)) - 0.5) * 0.35;
     float stone = step(0.8, roll) * (1.0 - smoothstep(0.12, 0.26, length(inCell)));
-    // The two lines every car drives, a little under half a road-width either
-    // side of the centre: polished on tarmac, packed on gravel, grey in snow.
-    float track = vRoad * exp(-pow((abs(vAcross) - 0.42) / 0.12, 2.0));
+    // Metres from the centreline, which is what a wheel line is spaced in.
+    // They were in fractions of the road's width at first — 0.42 of it either
+    // side — which on a nine-metre road put the two lines nearly four metres
+    // apart: a lane, not a car. A car's wheels are WHEEL_LINE either side.
+    float lat = abs(vAcross) * vHalf;
+    // The two lines every car drives: polished on tarmac, packed on gravel,
+    // grey in snow.
+    float track = vRoad * exp(-pow((lat - ${WHEEL_LINE.toFixed(2)}) / 0.24, 2.0));
     float shade = 1.0;
     shade += vKind.x * ((grain - 0.5) * 0.2 + (blot - 0.5) * 0.22 + stone * 0.15
                         - track * 0.18 - step(0.74, blot) * 0.08);
@@ -264,15 +277,16 @@ ${shader.fragmentShader}`.replace(
     // Ruts, on about half of the loose sections: a deep groove down each
     // wheel line with the displaced dirt heaped either side of it, which is
     // the shading a real rut makes under a high sun.
-    float groove = exp(-pow((a - 0.42) / 0.07, 2.0));
-    float heap = exp(-pow((a - 0.42) / 0.17, 2.0)) - groove;
-    float rutty = step(roll1, 0.5) * (0.55 + 0.45 * sNoise(vec2(vAlong * 0.07, a * 3.0)));
+    float groove = exp(-pow((lat - ${WHEEL_LINE.toFixed(2)}) / 0.14, 2.0));
+    float heap = exp(-pow((lat - ${WHEEL_LINE.toFixed(2)}) / 0.34, 2.0)) - groove;
+    float rutty = step(roll1, 0.5) * (0.55 + 0.45 * sNoise(vec2(vAlong * 0.07, lat * 1.5)));
     shade += vKind.y * vRoad * rutty * (heap * 0.16 - groove * 0.42);
 
     // Rubber, laid in the braking zones before tarmac corners: broken dark
     // streaks along each wheel line, heaviest right before the turn-in.
-    float lane = exp(-pow((a - 0.42) / 0.06, 2.0));
-    float streak = smoothstep(0.35, 0.75, sNoise(vec2(vAlong * 0.3, floor(vAcross * 16.0) + 0.5)));
+    // A tyre's width either side of each wheel line: rubber is laid by tyres.
+    float lane = exp(-pow((lat - ${WHEEL_LINE.toFixed(2)}) / 0.13, 2.0));
+    float streak = smoothstep(0.35, 0.75, sNoise(vec2(vAlong * 0.3, floor(vAcross * vHalf * 8.0) + 0.5)));
     shade -= vKind.x * vRubber * lane * streak * 0.85;
 
     diffuseColor.rgb *= shade;
@@ -437,6 +451,13 @@ export function buildStageView(stage: Stage, markers: Markers): StageView {
     }
   }
   geometry.setAttribute('aAlong', new THREE.BufferAttribute(vertexAlong, 1));
+  // The road's half-width at each row, so the shader can work in metres.
+  const half = new Float32Array(vertexAlong.length);
+  for (let i = 0; i < vertexAlong.length; i += 9) {
+    const width = stage.spline.at(Math.min(Math.max(vertexAlong[i]!, 0), stage.length)).width;
+    half.fill(width, i, i + 9);
+  }
+  geometry.setAttribute('aHalf', new THREE.BufferAttribute(half, 1));
   geometry.setAttribute('aSpill', new THREE.BufferAttribute(spill, 2));
   geometry.setAttribute('aRubber', new THREE.BufferAttribute(rubber, 1));
   geometry.computeVertexNormals();

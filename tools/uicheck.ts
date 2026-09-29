@@ -16,6 +16,7 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { chromium } from '@playwright/test';
 import { createServer } from 'vite';
+import { guardBoard } from './boardGuard.js';
 
 /** The same preinstalled-Chromium lookup the other browser tools use. */
 function findChromium(): string | undefined {
@@ -64,6 +65,8 @@ const browser = await chromium.launch({
   args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--no-sandbox'],
 });
 const page = await browser.newPage({ viewport: { width: 900, height: 600 } });
+// Never the live board: see boardGuard.ts for the time this posted to it.
+const liveBoard = await guardBoard(page, WORLD_RECORD);
 page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 const status = async () => (await page.evaluate(() => window.RSC!.status())) as Record<string, unknown>;
 
@@ -337,6 +340,9 @@ const pb = (await page.textContent('#race-best'))?.trim() ?? '';
 if (pb === 'no time set') throw new Error('an arcade record was set and the next run forgot it');
 if (!remembered.ghost) throw new Error('an arcade record was set and left no ghost to chase');
 console.log(`arcade remembers the run: ${pb}, ghost on the road`);
+// The finish tried to post, and the guard kept it off the live board.
+if (liveBoard.writes === 0) throw new Error("an arcade finish posted nothing - is the board guard still catching it?");
+console.log(`board guard caught ${liveBoard.writes} write(s) to the live board`);
 
 /*
  * And the gold one beside it.

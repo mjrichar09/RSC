@@ -125,8 +125,14 @@ export class Leaderboard {
         ...init,
         signal: AbortSignal.timeout(timeout),
       });
-      if (!response.ok) return null;
-      return await response.json();
+      // The body of a refusal as well as of a success. A record's handshake
+      // *is* a refusal — a 400 saying the lap is needed, answered by posting
+      // again with it — and this used to return null for anything that was
+      // not a 2xx, so the client never saw that answer, never sent the lap,
+      // and not one world record was accepted from the day the board began
+      // asking for one. Every caller checks the shape of what comes back, so
+      // an error body is not mistaken for a board.
+      return await response.json().catch(() => null);
     } catch {
       return null;
     }

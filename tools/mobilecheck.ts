@@ -17,6 +17,7 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { chromium, devices } from '@playwright/test';
 import { createServer } from 'vite';
+import { guardBoard } from './boardGuard.js';
 
 function findChromium(): string | undefined {
   const root = process.env.PLAYWRIGHT_BROWSERS_PATH;
@@ -44,6 +45,8 @@ const context = await browser.newContext({
   isMobile: true,
   hasTouch: true,
 });
+// Never the live board: see boardGuard.ts.
+await guardBoard(context);
 const page = await context.newPage();
 page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 
