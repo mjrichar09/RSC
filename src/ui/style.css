@@ -2865,3 +2865,453 @@ textarea, input { -webkit-user-select: text; user-select: text; }
 }
 .look-choice:hover { color: var(--ink); background: rgb(238 242 247 / 0.11); }
 .look-choice.is-on { color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+
+/* ==========================================================================
+ * The roadbook.
+ *
+ * Every menu is a page of a co-driver's roadbook: paper, a stencil for what
+ * is shouted and a typewriter for what is read, a highlighter for where you
+ * are, and rubber stamps for what you have earned. The front page is torn off
+ * at the right-hand edge and the stage is being driven beside it; every
+ * other page covers the road.
+ *
+ * Last in the file on purpose, so it takes precedence over the dark panel
+ * styles above it without editing each of them — those still style the
+ * garage, the lobby and the HUD.
+ * ======================================================================== */
+:root {
+  --paper-ink: #1e1b17;
+  --paper-faded: #6a6152;
+  --paper-red: #b8342a;
+  --paper-tab: #e2d6bb;
+  --paper-hi: rgba(241, 194, 74, 0.6);
+  --font-stencil: 'Big Shoulders Stencil Display', Impact, 'Arial Narrow', sans-serif;
+  --font-type: 'Special Elite', 'Courier New', ui-monospace, monospace;
+  --paper:
+    repeating-linear-gradient(0deg, transparent 0 31px, rgba(150, 125, 80, 0.16) 31px 32px),
+    radial-gradient(ellipse at 30% 15%, rgba(255, 255, 255, 0.35), transparent 60%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/%3E%3CfeColorMatrix values='0 0 0 0 0.35 0 0 0 0 0.28 0 0 0 0 0.18 0 0 0 0.09 0'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)'/%3E%3C/svg%3E"),
+    #ece3cf;
+}
+
+.menu { background: var(--paper); color: var(--paper-ink); }
+/* The front page leaves the road showing beside it. */
+.menu[data-screen='main'] { background: transparent; overflow: hidden; }
+
+.menu .menu-inner.book {
+  position: relative;
+  max-width: 980px;
+  min-height: 100%;
+  margin: 0 auto;
+  padding: 34px 44px 48px 96px;
+  background: var(--paper);
+  color: var(--paper-ink);
+}
+.menu[data-screen='main'] .menu-inner.book {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: min(600px, 58vw);
+  max-width: none;
+  margin: 0;
+  overflow-y: auto;
+  padding: 34px 44px 56px 90px;
+  clip-path: polygon(0 0, 100% 0, 97% 100%, 0 100%);
+  box-shadow: 18px 0 40px rgba(0, 0, 0, 0.45);
+}
+
+.book-holes {
+  position: absolute;
+  left: 24px;
+  top: 0;
+  height: max(100%, 100vh);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-around;
+  pointer-events: none;
+}
+.book-holes i {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #1a1612;
+  box-shadow: inset 2px 2px 3px rgba(0, 0, 0, 0.8);
+}
+.book-margin {
+  position: absolute;
+  left: 66px;
+  top: 0;
+  height: max(100%, 100vh);
+  width: 2px;
+  background: rgba(184, 52, 42, 0.45);
+  pointer-events: none;
+}
+.book-stamp {
+  position: absolute;
+  right: 40px;
+  top: 40px;
+  transform: rotate(-11deg);
+  border: 3px double var(--paper-red);
+  color: var(--paper-red);
+  font: 700 17px/1 var(--font-stencil);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 6px 10px 4px;
+  opacity: 0.8;
+  pointer-events: none;
+}
+
+.menu .menu-title {
+  font: 900 64px/0.9 var(--font-stencil);
+  color: var(--paper-ink);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  margin: 0;
+}
+.menu .menu-title small {
+  display: block;
+  margin-top: 6px;
+  font: 700 26px/1 var(--font-stencil);
+  color: var(--paper-red);
+  letter-spacing: 0.14em;
+}
+.menu .menu-title.small { font-size: 46px; }
+.menu .menu-head { border-bottom: 3px solid var(--paper-ink); padding-bottom: 8px; margin-bottom: 14px; }
+.menu .menu-strap { font: 15px/1.55 var(--font-type); color: var(--paper-faded); margin: 12px 0 20px; }
+.menu .dim { color: var(--paper-faded); }
+
+/* The three ways in: numbered entries on the page, highlighted when chosen. */
+.menu .menu-choices { gap: 0; }
+.menu .menu-choice {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: 58px 1fr;
+  column-gap: 8px;
+  padding: 12px 6px 13px;
+  text-align: left;
+  color: var(--paper-ink);
+  background: none;
+  border: 0;
+  border-bottom: 1.5px dashed rgba(30, 27, 23, 0.35);
+  border-radius: 0;
+}
+.menu .menu-choice u {
+  grid-row: 1 / span 3;
+  font: 900 42px/1 var(--font-stencil);
+  color: var(--paper-faded);
+  text-decoration: none;
+}
+.menu .menu-choice b {
+  font: 900 34px/1 var(--font-stencil);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--paper-ink);
+}
+.menu .menu-choice span { margin-top: 4px; font: 14px/1.4 var(--font-type); color: var(--paper-faded); }
+.menu .menu-choice em {
+  justify-self: start;
+  margin-top: 7px;
+  padding: 3px 7px;
+  font: 12px/1.3 var(--font-ui);
+  font-style: normal;
+  letter-spacing: 0.02em;
+  color: var(--paper-ink);
+  border: 1.5px solid var(--paper-ink);
+}
+/* A highlighter swipe, slightly off true, behind whatever is chosen. */
+.menu .menu-choice::before,
+.menu .menu-row::before {
+  content: '';
+  position: absolute;
+  inset: 8px -8px;
+  z-index: -1;
+  background: var(--paper-hi);
+  border-radius: 3px 8px 4px 9px;
+  transform: rotate(-0.6deg);
+  opacity: 0;
+  transition: opacity 0.12s ease-out;
+}
+.menu .menu-choice:hover::before,
+.menu .menu-choice.pad-focus::before,
+.menu .menu-row:hover::before,
+.menu .menu-row.pad-focus::before { opacity: 1; }
+.menu .menu-choice:hover,
+.menu .menu-row:hover { background: none; }
+.menu .menu-choice:hover u,
+.menu .menu-choice.pad-focus u { color: var(--paper-red); }
+.menu .pad-focus { outline: none; }
+
+/* Settings, as a form filled in by hand. */
+.menu .menu-look,
+.menu .menu-volume {
+  font: 14px/1.4 var(--font-type);
+  color: var(--paper-faded);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.menu .menu-look > span,
+.menu .menu-volume > span { min-width: 64px; }
+.menu .look-choice {
+  flex: 0 0 auto;
+  padding: 4px 8px 4px 2px;
+  font: 14px/1.2 var(--font-type);
+  color: var(--paper-ink);
+  background: none;
+  border: 0;
+  box-shadow: none;
+  letter-spacing: 0;
+}
+.menu .look-choice::before { content: '\2610\00a0'; font-size: 16px; }
+.menu .look-choice.is-on { color: var(--paper-ink); box-shadow: none; }
+.menu .look-choice.is-on::before { content: '\2612\00a0'; color: var(--paper-red); }
+.menu .look-choice.pad-focus { background: var(--paper-hi); }
+.menu .menu-volume input[type='range'] { accent-color: var(--paper-red); }
+.menu .menu-volume b { color: var(--paper-ink); font-family: var(--font-ui); }
+
+/* Help and Controller: index tabs. */
+.menu .menu-aux-row { margin-top: 18px; }
+.menu .menu-aux {
+  flex: 0 0 auto;
+  padding: 8px 16px 9px;
+  font: 14px/1 var(--font-type);
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--paper-ink);
+  background: var(--paper-tab);
+  border-radius: 7px 7px 0 0;
+  box-shadow: 0 -2px 5px rgba(0, 0, 0, 0.16), inset 0 -1px 0 rgba(30, 27, 23, 0.2);
+}
+.menu .menu-aux:hover,
+.menu .menu-aux.pad-focus { background: var(--paper-hi); }
+.menu .menu-foot { font: 12px/1.5 var(--font-type); color: var(--paper-faded); border: 0; }
+.menu .menu-foot b { color: var(--paper-ink); }
+
+.menu button[data-action='back'],
+.menu .pad-foot button,
+.menu .pad-row button {
+  font: 14px/1 var(--font-type);
+  color: var(--paper-ink);
+  background: none;
+  border: 1.5px solid var(--paper-ink);
+  border-radius: 2px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.menu button[data-action='back']:hover,
+.menu button.pad-focus { background: var(--paper-hi); }
+
+/* The stage list: numbered roadbook rows with a stamp for the medal. */
+.menu .menu-rows { gap: 0; }
+.menu .menu-row {
+  position: relative;
+  isolation: isolate;
+  padding: 10px 8px;
+  color: var(--paper-ink);
+  background: none;
+  border: 0;
+  border-bottom: 1px solid rgba(30, 27, 23, 0.28);
+  border-radius: 0;
+  text-align: left;
+}
+.menu .menu-row-head { align-items: center; gap: 12px; }
+.menu .menu-row-head u {
+  min-width: 40px;
+  font: 900 28px/1 var(--font-stencil);
+  color: var(--paper-faded);
+  text-decoration: none;
+}
+.menu .menu-row b { min-width: 200px; font: 900 22px/1 var(--font-stencil); text-transform: uppercase; }
+.menu .menu-row .dim { font: 12px/1.3 var(--font-type); }
+.menu .menu-board { font-family: var(--font-ui); color: var(--paper-faded); padding-left: 52px; }
+.menu .menu-board b { color: var(--paper-ink); font: 12px var(--font-ui); text-transform: none; min-width: 0; }
+.menu .menu-board u { color: var(--paper-red); }
+.menu .menu-strap .link { font-family: var(--font-type); color: var(--paper-ink); }
+
+.menu .stamp {
+  display: inline-grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  font: 9px/1.1 var(--font-ui);
+  text-transform: uppercase;
+  text-align: center;
+  transform: rotate(-8deg);
+  opacity: 0.85;
+}
+.menu .stamp.medal-author { color: #6a3d9a; }
+.menu .stamp.medal-gold { color: #9a7412; }
+.menu .stamp.medal-silver { color: #666b72; }
+.menu .stamp.medal-bronze { color: #8a5a32; }
+.menu .stamp.medal-finish { color: var(--paper-faded); }
+.menu .stamp.empty { color: rgba(30, 27, 23, 0.3); border-style: dashed; }
+
+/* Reading pages: help, the name, the controller. */
+.menu .help-doc { font: 15px/1.6 var(--font-type); color: var(--paper-ink); }
+.menu .help-doc h2 { font: 900 26px/1 var(--font-stencil); text-transform: uppercase; color: var(--paper-ink); margin-top: 22px; }
+.menu .help-doc b,
+.menu .help-doc dt { color: var(--paper-ink); }
+.menu .help-doc th,
+.menu .help-doc td { border-bottom: 1px solid rgba(30, 27, 23, 0.25); color: var(--paper-ink); }
+.menu .name-entry input {
+  font: 24px/1.2 var(--font-type);
+  color: var(--paper-ink);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid var(--paper-ink);
+  border-radius: 0;
+}
+.menu .name-entry button.wide {
+  font: 900 26px/1 var(--font-stencil);
+  text-transform: uppercase;
+  color: var(--paper-red);
+  background: none;
+  border: 3px solid var(--paper-red);
+  transform: rotate(-2deg);
+}
+.menu .pad-row { background: rgba(255, 255, 255, 0.2); border-bottom: 1px solid rgba(30, 27, 23, 0.2); }
+.menu .pad-status,
+.menu .pad-foot,
+.menu .pad-binding { font-family: var(--font-type); color: var(--paper-faded); }
+
+/* The front page on an ordinary screen: everything above the fold at 720. */
+.menu[data-screen='main'] .menu-title { font-size: 54px; }
+.menu[data-screen='main'] .menu-title small { font-size: 22px; }
+.menu[data-screen='main'] .menu-strap { margin: 8px 0 8px; font-size: 14px; }
+.menu[data-screen='main'] .menu-choice { padding: 8px 6px 9px; }
+.menu[data-screen='main'] .menu-choice b { font-size: 30px; }
+.menu[data-screen='main'] .menu-choice em { margin-top: 4px; }
+.menu .menu-aux-row { justify-content: flex-start; margin: 12px 0 6px; }
+.menu .menu-aux-row .menu-aux { flex: 0 0 auto; width: auto; margin-top: 0; }
+.menu[data-screen='main'] .menu-look,
+.menu[data-screen='main'] .menu-volume { margin-top: 4px; }
+
+/* A landscape phone: the same book, printed smaller. */
+@media (max-height: 500px) {
+  .menu .menu-inner.book { padding: 14px 18px 24px 58px; }
+  .menu[data-screen='main'] .menu-inner.book { width: min(520px, 64vw); padding: 14px 24px 28px 56px; }
+  .book-holes { left: 12px; }
+  .book-holes i { width: 12px; height: 12px; }
+  .book-margin { left: 40px; }
+  .book-stamp { display: none; }
+  .menu .menu-title { font-size: 30px; }
+  .menu .menu-title small { font-size: 14px; margin-top: 2px; }
+  .menu .menu-title.small { font-size: 26px; }
+  .menu .menu-strap { font-size: 11px; margin: 6px 0 8px; }
+  .menu .menu-choice { grid-template-columns: 36px 1fr; padding: 6px 4px 7px; }
+  .menu .menu-choice u { font-size: 26px; }
+  .menu .menu-choice b { font-size: 20px; }
+  .menu .menu-choice span { font-size: 10px; margin-top: 1px; }
+  .menu .menu-choice em { font-size: 9px; margin-top: 3px; padding: 1px 5px; }
+  .menu .menu-look,
+  .menu .menu-volume,
+  .menu .look-choice { font-size: 11px; }
+  .menu .menu-aux { padding: 6px 10px 7px; font-size: 11px; }
+  .menu .menu-row b { min-width: 130px; font-size: 16px; }
+  .menu .menu-row-head u { min-width: 26px; font-size: 20px; }
+  .menu .stamp { width: 36px; height: 36px; font-size: 7px; }
+  .menu .menu-board { padding-left: 38px; }
+
+  /* The front page's own sizes, restated: the desktop front-page rules above
+     are more specific than the phone ones, so without these the phone kept
+     the desktop title and Multiplayer fell off the bottom of the page. */
+  .menu[data-screen='main'] .menu-title { font-size: 28px; }
+  .menu[data-screen='main'] .menu-title small { font-size: 13px; }
+  .menu[data-screen='main'] .menu-strap { font-size: 10px; margin: 4px 0 4px; }
+  .menu[data-screen='main'] .menu-choice { padding: 5px 4px 6px; }
+  .menu[data-screen='main'] .menu-choice b { font-size: 18px; }
+  .menu[data-screen='main'] .menu-choice em { margin-top: 2px; }
+  /* A thumb, not a pointer: tabs at least 36 px tall. */
+  .menu .menu-aux { min-height: 36px; padding: 10px 14px; }
+}
+
+/* ---- The garage, as a page of the same book ---------------------------------
+ *
+ * Mostly by redefining the palette inside it: every garage rule above is
+ * written against `--ink`, `--dim`, `--accent`, `--hot` and `--panel`, so
+ * pointing those at paper and ink turns the whole screen over without
+ * touching them one by one. What is left below is the type and the handful of
+ * places the dark theme wrote a colour in directly.
+ */
+.garage {
+  --ink: var(--paper-ink);
+  --dim: var(--paper-faded);
+  --accent: var(--paper-red);
+  --hot: var(--paper-red);
+  --panel: rgba(255, 255, 255, 0.28);
+  background: var(--paper);
+  color: var(--paper-ink);
+}
+.garage .garage-inner { position: relative; }
+.garage .garage-title {
+  font: 900 52px/0.9 var(--font-stencil);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--paper-ink);
+}
+.garage .garage-sub,
+.garage .dim,
+.garage .hint,
+.garage .stage-meta,
+.garage .upgrade-desc,
+.garage .locked-note { font-family: var(--font-type); color: var(--paper-faded); }
+.garage h3 {
+  font: 900 22px/1 var(--font-stencil);
+  letter-spacing: 0.08em;
+  color: var(--paper-red);
+  border-bottom: 2px solid var(--paper-ink);
+  padding-bottom: 4px;
+}
+.garage .garage-money { font-family: var(--font-stencil); font-weight: 900; color: var(--paper-ink); }
+.garage .stage-name { font: 900 22px/1 var(--font-stencil); text-transform: uppercase; color: var(--paper-ink); }
+.garage .stage-row,
+.garage .repair-row,
+.garage .upgrade-row {
+  background: rgba(255, 255, 255, 0.22);
+  border: 0;
+  border-bottom: 1px solid rgba(30, 27, 23, 0.25);
+  border-radius: 0;
+  box-shadow: none;
+}
+.garage .stage-row:hover,
+.garage .stage-row.pad-focus { background: var(--paper-hi); }
+.garage button {
+  font-family: var(--font-type);
+  color: var(--paper-ink);
+  background: rgba(255, 255, 255, 0.3);
+  border: 1.5px solid var(--paper-ink);
+  border-radius: 2px;
+  box-shadow: none;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.garage button:hover,
+.garage button.pad-focus { background: var(--paper-hi); }
+.garage button.warn,
+.garage .garage-tabs button.is-on {
+  color: var(--paper-red);
+  border-color: var(--paper-red);
+  background: rgba(184, 52, 42, 0.07);
+}
+.garage button:disabled { opacity: 0.45; }
+.garage .garage-warnings {
+  font-family: var(--font-type);
+  color: var(--paper-red);
+  background: rgba(184, 52, 42, 0.07);
+  border: 2px dashed var(--paper-red);
+}
+.garage .stage-name { font-size: 18px; white-space: nowrap; }
+/* The gold payout is tinted inline from the medal table, in a yellow made for
+   a dark panel that all but vanishes on paper — the stamp gold instead, and
+   `!important` because nothing else outranks an inline style. */
+.garage .stage-pay b { color: #9a7412 !important; }
+/* The turntable keeps its dark stage: it is a window onto the workshop. */
+.garage .garage-car-slot { box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35); }
+@media (max-height: 500px) {
+  .garage .garage-title { font-size: 30px; }
+  .garage h3 { font-size: 16px; }
+  .garage .stage-name { font-size: 16px; }
+}

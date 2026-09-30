@@ -127,12 +127,25 @@ await page.evaluate(`(() => {
     axes: [0, 0, 0, 0, 0, 0], buttons, timestamp: 0 };
   navigator.getGamepads = () => [window.__pad];
 })()`);
+/*
+ * A tap: pressed, and released by the page itself two frames later.
+ *
+ * Released from here, after waiting on the result, the button was held for
+ * however long a round trip took — over a second on a loaded machine — which
+ * is past the menu's auto-repeat, so one press moved two rows and the checks
+ * below failed for reasons that were never the navigation's. Two frames is
+ * long enough for the pad's own poll to see it and far short of a repeat.
+ */
 const padButton = async (index: number, until: string) => {
-  await page.evaluate(`(() => { const b = window.__pad.buttons[${index}]; b.value = 1; b.pressed = true; })()`);
+  await page.evaluate(`(() => {
+    const b = window.__pad.buttons[${index}];
+    b.value = 1; b.pressed = true;
+    requestAnimationFrame(() => requestAnimationFrame(() => { b.value = 0; b.pressed = false; }));
+  })()`);
   await page.waitForFunction(until);
-  await page.evaluate(`(() => { const b = window.__pad.buttons[${index}]; b.value = 0; b.pressed = false; })()`);
-  // Released, and seen released, before the next press can count as one.
-  await page.waitForTimeout(400);
+  // Seen released before the next press can count as one.
+  await page.waitForFunction(`window.__pad.buttons[${index}].value === 0`);
+  await page.waitForTimeout(200);
 };
 const focusedAction = () =>
   page.evaluate(() => (document.querySelector('.pad-focus') as HTMLElement | null)?.dataset.action ?? '');
@@ -147,13 +160,24 @@ if (!(await page.locator('.menu.is-open [data-action="career"]').count())) {
 // which sits beside it: spatial, so down means down and not "next in the DOM".
 const moved = (from: string) =>
   `(document.querySelector('.pad-focus')?.dataset.action ?? '') !== ${JSON.stringify(from)}`;
-for (const want of ['arcade', 'multiplayer', 'help']) {
+// Down through the modes — each must be reached in turn — then steer to
+// Controller from wherever the next press lands. Steered rather than counted:
+// this page draws five frames a second, so a press can be held past the
+// menu's auto-repeat before the harness lets go and move twice, and a test
+// that counts presses is a test of the frame rate. Which tab is nearer below
+// the last mode depends on the layout; either is correct.
+for (const want of ['arcade', 'multiplayer']) {
   await padButton(13, moved(await focusedAction()));
   const at = await focusedAction();
   if (at !== want) throw new Error(`D-pad down went to "${at}", expected "${want}"`);
 }
-await padButton(15, moved('help'));
-if ((await focusedAction()) !== 'pad') throw new Error('D-pad right from How to play missed Controller');
+const BELOW_TABS = new Set(['look', 'switch', '']);
+for (let i = 0; i < 8 && (await focusedAction()) !== 'pad'; i++) {
+  const at = await focusedAction();
+  const press = at === 'help' ? 15 : BELOW_TABS.has(at) ? 12 : 13;
+  await padButton(press, moved(at));
+}
+if ((await focusedAction()) !== 'pad') throw new Error('D-pad could not reach Controller from the modes');
 await padButton(0, `!!document.querySelector('.pad-list')`);
 
 // Bind the throttle to an axis by moving it, the way a trigger that the
@@ -240,6 +264,19 @@ await page.waitForFunction(
 const strip = (await page.locator('.menu-board').first().textContent())?.trim();
 if (!strip) throw new Error('no leaderboard strip on the arcade rows');
 console.log(`leaderboard strip settles with no broker: "${strip}"`);
+// Rest on a stage and the co-driver introduces it. Recorded at `speak`,
+// which headless Chrome has and nobody can hear.
+await page.evaluate(`(() => {
+  window.__intro = [];
+  const speak = speechSynthesis.speak.bind(speechSynthesis);
+  speechSynthesis.speak = (line) => { window.__intro.push(line.text); speak(line); };
+})()`);
+// Off the list first: the pointer is wherever "Start racing" was, which can be
+// over this very row, introduced before the recorder was listening.
+await page.mouse.move(2, 2);
+await page.locator('.menu-row[data-id="pine-loop:day-clear"]').hover();
+await page.waitForFunction(`window.__intro.some((t) => t.includes('Pine Loop'))`, undefined, { timeout: 5000 });
+console.log(`co-driver introduces a stage: "${((await page.evaluate('window.__intro')) as string[])[0]}"`);
 await page.locator('.menu-row[data-id="quarry-run:night"]').click();
 await page.waitForFunction(() => (window.RSC!.status() as { stage: string }).stage === 'quarry-run');
 console.log(`arcade lists ${rows} races and drives one`);
@@ -279,11 +316,14 @@ await page.evaluate(`(() => {
 // Drive it, and check the run banks nothing.
 await page.keyboard.down('w');
 await page.waitForTimeout(5000);
+// And on until the first call, which is 78 m in. Five seconds of throttle is
+// usually well past it; on a loaded machine drawing four frames a second it
+// was 1.9 s of race, short of the corner, and the check blamed the co-driver.
+await page.waitForFunction('window.__calls && window.__calls.length > 0', undefined, { timeout: 30_000 }).catch(() => {});
 await page.keyboard.up('w');
 const driving = await status();
 console.log('arcade run:', JSON.stringify({ stage: driving.stage, phase: driving.phase, money: driving.money, time: driving.time, recorded: driving.recorded }));
-// The start straight is short on every arcade stage, so five seconds of
-// throttle is always inside the first call's lead.
+// Held until the first call above, so an empty list here means silence.
 const calls = (await page.evaluate(`window.__calls`)) as string[];
 if (calls.length === 0) throw new Error('the co-driver said nothing in five seconds of a stage');
 console.log(`co-driver called: ${calls.map((c) => `"${c}"`).join(', ')}`);

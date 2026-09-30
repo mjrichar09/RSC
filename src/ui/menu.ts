@@ -21,6 +21,7 @@ import { stageVariants, variantKey, type StageDef, type StageVariant } from '../
 import { formatTime } from './raceHud.js';
 import type { BoardEntry, Leaderboard } from '../net/leaderboard.js';
 import { escapeHtml } from './escape.js';
+import { Spline } from '../sim/spline.js';
 import {
   PAD_ACTIONS,
   describeBinding,
@@ -37,8 +38,39 @@ export interface ArcadePick {
 
 type Screen = 'main' | 'arcade' | 'name' | 'help' | 'pad';
 
+/**
+ * The binding of the roadbook every screen is a page of: three punched holes
+ * and a red margin rule. Decoration, drawn in CSS, and never a thing to click.
+ */
+const BOOK = '<div class="book-holes" aria-hidden="true"><i></i><i></i><i></i></div><div class="book-margin" aria-hidden="true"></div>';
+
 /** Seconds a binding waits for a control before giving up. */
 const CAPTURE_SECONDS = 8;
+
+/**
+ * A stage's length in kilometres to one place, measured along its road.
+ *
+ * The spline rather than straight lines between the control points, because
+ * it is the length `Stage` itself reports (Pine Loop 0.74 km, Coldwater Pass
+ * 3.26) — a label that can disagree with the stage is a label to distrust.
+ * Built once per stage and kept: thirteen splines the first time the list
+ * opens, and never again.
+ */
+const lengths = new Map<string, string>();
+function lengthOf(def: StageDef): string {
+  let known = lengths.get(def.id);
+  if (!known) {
+    known = (new Spline(def.controlPoints).length / 1000).toFixed(1);
+    lengths.set(def.id, known);
+  }
+  return known;
+}
+
+/** What the co-driver says about a stage: its number, name, conditions and length. */
+function introduce(pick: ArcadePick): string {
+  const number = STAGES.indexOf(pick.def) + 1;
+  return `Stage ${number}. ${pick.def.name}. ${pick.variant.name}. ${lengthOf(pick.def)} kilometres, ${pick.def.biome}.`;
+}
 
 export class StartMenu {
   onCareer: (() => void) | null = null;
@@ -81,6 +113,14 @@ export class StartMenu {
   onLook: ((id: LookId) => void) | null = null;
   /** The look in force, so the picker can show it. */
   private look: LookId = 'standard';
+
+  /**
+   * Raised with a line for the co-driver when a stage has been rested on in
+   * the list — by the pointer or by the pad — for long enough to mean it.
+   */
+  onPreview: ((line: string) => void) | null = null;
+  private previewTimer = 0;
+  private previewed = '';
 
   /** Raised when a switch on the front screen is flipped. */
   onToggle: ((id: 'codriver' | 'rumble', on: boolean) => void) | null = null;
@@ -131,6 +171,23 @@ export class StartMenu {
       this.onVolume?.(this.volume);
     });
 
+    // Rest on a stage and the co-driver reads it out. Half a second first, so
+    // sweeping the pointer down the list is not a stream of half-said names.
+    const preview = (event: Event) => {
+      const row = (event.target as HTMLElement).closest('[data-action="drive"]') as HTMLElement | null;
+      const id = row?.dataset.id ?? '';
+      if (id === this.previewed) return;
+      this.previewed = id;
+      window.clearTimeout(this.previewTimer);
+      if (!id) return;
+      this.previewTimer = window.setTimeout(() => {
+        const pick = this.arcadePicks().find((p) => `${p.def.id}:${p.variant.id}` === id);
+        if (pick) this.onPreview?.(introduce(pick));
+      }, 500);
+    };
+    this.root.addEventListener('mouseover', preview);
+    this.root.addEventListener('focusin', preview);
+
     this.root.addEventListener('click', (event) => {
       const target = (event.target as HTMLElement).closest('[data-action]') as HTMLElement | null;
       if (target) this.handle(target.dataset.action!, target.dataset.id ?? '');
@@ -141,6 +198,11 @@ export class StartMenu {
 
   get isOpen(): boolean {
     return this.open;
+  }
+
+  /** True while the front screen is up: the one screen that shows the road beside it. */
+  get showsStage(): boolean {
+    return this.open && this.screen === 'main';
   }
 
   setOpen(open: boolean, screen: Screen = 'main'): void {
@@ -293,6 +355,9 @@ export class StartMenu {
   }
 
   private render(): void {
+    // Which page is open, for the stylesheet: the front page sits beside the
+    // road and leaves it showing, every other page covers it.
+    this.root.dataset.screen = this.screen;
     this.root.innerHTML =
       this.screen === 'main'
         ? this.mainScreen()
@@ -326,7 +391,7 @@ export class StartMenu {
    */
   private helpScreen(): string {
     return `
-      <div class="menu-inner">
+      <div class="menu-inner book">${BOOK}
         <div class="menu-head">
           <h1 class="menu-title small">HOW TO PLAY</h1>
           <button data-action="back">Back</button>
@@ -422,7 +487,7 @@ export class StartMenu {
   private nameScreen(): string {
     const current = escapeHtml(this.career.driverName);
     return `
-      <div class="menu-inner">
+      <div class="menu-inner book">${BOOK}
         <div class="menu-head">
           <h1 class="menu-title small">DRIVER</h1>
           <button data-action="back">Back</button>
@@ -447,23 +512,23 @@ export class StartMenu {
     const medals = this.career.medalsHeld;
     const money = this.career.money.toLocaleString('en-US');
     return `
-      <div class="menu-inner">
-        <div class="menu-mark">RSC</div>
-        <h1 class="menu-title">RALLY STAGE CHALLENGE</h1>
+      <div class="menu-inner book">${BOOK}
+        <div class="book-stamp" aria-hidden="true">Season 1 · passed</div>
+        <h1 class="menu-title">Rally stage<br>challenge<small>— Roadbook —</small></h1>
         <p class="menu-strap">Point to point, one car at a time, and everything you break stays broken.</p>
         <div class="menu-choices">
           <button class="menu-choice" data-action="career">
-            <b>Career</b>
+            <u>01</u><b>Career</b>
             <span>Earn, repair, upgrade, unlock. The car carries its damage between races.</span>
             <em>${money} in hand · ${medals} medal${medals === 1 ? '' : 's'}</em>
           </button>
           <button class="menu-choice" data-action="arcade">
-            <b>Arcade</b>
+            <u>02</u><b>Arcade</b>
             <span>Every stage and every condition, open from the start. Free entry, fresh car, no consequences.</span>
             <em>${this.arcadePicks().length} races</em>
           </button>
           <button class="menu-choice" data-action="multiplayer">
-            <b>Multiplayer</b>
+            <u>03</u><b>Multiplayer</b>
             <span>Up to four cars in one world, contact and all. Host a race or join one with an invite code.</span>
             <em>direct connection, no server</em>
           </button>
@@ -525,7 +590,7 @@ export class StartMenu {
         </div>`;
     }).join('');
     return `
-      <div class="menu-inner">
+      <div class="menu-inner book">${BOOK}
         <div class="menu-head">
           <h1 class="menu-title small">CONTROLLER</h1>
           <button data-action="back">Back</button>
@@ -612,14 +677,18 @@ export class StartMenu {
     const rows = this.arcadePicks()
       .map((pick) => {
         const record = this.career.recordFor(pick);
+        // A medal is a rubber stamp on the page; no time yet is a dashed ring
+        // where the stamp will go.
         const best = record
-          ? `${formatTime(record.time)} · ${record.medal}`
-          : '<span class="dim">no time set</span>';
+          ? `<span class="stamp medal-${record.medal}">${record.medal}<br>${formatTime(record.time)}</span>`
+          : '<span class="stamp empty">no time</span>';
+        const number = String(STAGES.indexOf(pick.def) + 1).padStart(2, '0');
         return `
           <button class="menu-row has-board" data-action="drive" data-id="${pick.def.id}:${pick.variant.id}">
             <span class="menu-row-head">
+              <u>${number}</u>
               <b>${pick.def.name}</b>
-              <span class="dim">${pick.variant.name}</span>
+              <span class="dim">${pick.variant.name} · ${lengthOf(pick.def)} km · ${pick.def.biome}</span>
               <span class="menu-row-best">${best}</span>
             </span>
             ${this.boardStrip(variantKey(pick.def.id, pick.variant.id))}
@@ -628,7 +697,7 @@ export class StartMenu {
       .join('');
 
     return `
-      <div class="menu-inner">
+      <div class="menu-inner book">${BOOK}
         <div class="menu-head">
           <h1 class="menu-title small">ARCADE</h1>
           <button data-action="back">Back</button>

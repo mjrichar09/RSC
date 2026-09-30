@@ -64,6 +64,7 @@ import { buildStageView, type StageView } from './render/stageMesh.js';
 import { Controls } from './ui/controls.js';
 import { SURFACES, type SurfaceId } from './sim/surfaces.js';
 import { GamepadInput, cleanBindings } from './ui/gamepad.js';
+import { CAR } from './data/tuning.js';
 import { Rumble } from './ui/rumble.js';
 import { CoDriver } from './audio/codriver.js';
 import { buildPacenotes } from './game/pacenotes.js';
@@ -447,6 +448,22 @@ const params = new URLSearchParams(location.search);
    */
   const replayUi = new ReplayUi(hudRoot);
   let ghost: GhostPlayer | null = null;
+  /**
+   * The stage behind the front screen: seconds into a lap nobody is driving.
+   *
+   * The menu used to cover the world at 97% and stop drawing it, which was
+   * right for a panel that hides everything and wrong for a roadbook page that
+   * sits beside the road. While the front screen is up the camera follows the
+   * player's own car down the loaded stage — along their best lap where there
+   * is one, along the centreline where there is not. Nothing is simulated:
+   * the car is posed from a recording or from the road, the same way a replay
+   * poses it. Declared up here because `drawOnce` reads it, and boot draws.
+   */
+  let attract: { t: number } | null = null;
+  /** Seconds since the attract lap was last drawn, for the phone's frame cap. */
+  let attractWait = 0;
+  /** Whether a panel covered the world last frame, to silence the co-driver once. */
+  let menuCovering = false;
   /** The board's record lap for this track, or null. Arcade only. */
   let wrGhost: GhostPlayer | null = null;
   /**
@@ -1495,6 +1512,10 @@ const params = new URLSearchParams(location.search);
   codriver.enabled = career.profile.settings.codriver;
   rumble.enabled = career.profile.settings.rumble;
   menu.setSwitches({ codriver: codriver.enabled, rumble: rumble.enabled });
+  menu.onPreview = (line) => {
+    codriver.volume = mixer.isMuted ? 0 : mixer.currentVolume;
+    codriver.announce(line);
+  };
   menu.onToggle = (id, on) => {
     if (id === 'codriver') {
       codriver.enabled = on;
@@ -1709,6 +1730,44 @@ const params = new URLSearchParams(location.search);
     );
   };
 
+  /**
+   * Where the attract car is `t` seconds into its lap.
+   *
+   * From the stored best lap when there is one, looping; otherwise from the
+   * road itself at a steady 80 km/h, pointing the way the road goes. The
+   * velocity is what the camera leads with, so it has to be the car's real
+   * direction of travel, not zero.
+   */
+  const attractSample = (t: number) => {
+    const s = stage!;
+    if (ghost && ghost.duration > 1) {
+      const at = t % ghost.duration;
+      const pose = ghost.sampleAt(at)!;
+      const next = ghost.sampleAt(Math.min(at + 0.1, ghost.duration)) ?? pose;
+      const velocity = {
+        x: (next.position.x - pose.position.x) * 10,
+        y: 0,
+        z: (next.position.z - pose.position.z) * 10,
+      };
+      return { pose, velocity, along: s.progressAt(pose.position).distance };
+    }
+    const speed = 22;
+    const along = (t * speed) % Math.max(s.length - 1, 1);
+    const road = s.spline.at(along);
+    const yaw = Math.atan2(road.forward.x, road.forward.z);
+    const spin = (t * speed) / CAR.wheelRadius;
+    return {
+      pose: {
+        position: { x: road.position.x, y: road.position.y + 0.9, z: road.position.z },
+        rotation: { x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) },
+        steer: 0,
+        wheelRotation: [spin, spin, spin, spin],
+      },
+      velocity: { x: road.forward.x * speed, y: 0, z: road.forward.z * speed },
+      along,
+    };
+  };
+
   const drawOnce = (alpha: number, dt: number) => {
     const state = world.state();
     const transform = world.renderTransform(alpha);
@@ -1749,7 +1808,19 @@ const params = new URLSearchParams(location.search);
     stageView?.crowd.update(dt, transform.position);
     wildlifeView.update(world.wildlife?.animals ?? []);
 
-    if (ghost && race) {
+    // The attract lap: the player's own car, posed rather than simulated.
+    let focus = transform.position;
+    let focusVelocity = state.velocity;
+    let focusAlong = race?.furthest ?? 0;
+    if (attract && stage) {
+      const sample = attractSample(attract.t);
+      carView.updateFromGhost(sample.pose);
+      focus = sample.pose.position;
+      focusVelocity = sample.velocity;
+      focusAlong = sample.along;
+      ghostView.visible = false;
+      wrView.visible = false;
+    } else if (ghost && race) {
       const sample = ghost.sampleAt(race.time);
       if (sample) ghostView.updateFromGhost(sample);
       // Hide it once its run has ended rather than freezing a car on the road.
@@ -1762,7 +1833,7 @@ const params = new URLSearchParams(location.search);
     }
 
     camera.advanceShake(dt);
-    if (stage && race) camera.applyZones(stage.cameraZones, race.furthest);
+    if (stage && race) camera.applyZones(stage.cameraZones, focusAlong);
     if (cameraLock) {
       camera.jumpTo(cameraLock.at);
       // After the jump, because `jumpTo` takes its view size from the zone the
@@ -1770,19 +1841,15 @@ const params = new URLSearchParams(location.search);
       // stage's own zoom rather than the one asked for.
       if (cameraLock.zoom !== null) camera.setViewSize(cameraLock.zoom);
     } else {
-      camera.follow(dt, transform.position, state.velocity);
+      camera.follow(dt, focus, focusVelocity);
     }
 
     // The shadow frustum is far too tight to cover a whole stage, so it rides
     // along with the car — and its azimuth tracks the camera, so the shadow
     // never ends up hidden behind the car whatever a zone's yaw is.
     const sun = keyLightOffset(camera.yaw);
-    key.position.set(
-      transform.position.x + sun.x,
-      transform.position.y + sun.y,
-      transform.position.z + sun.z,
-    );
-    key.target.position.set(transform.position.x, transform.position.y, transform.position.z);
+    key.position.set(focus.x + sun.x, focus.y + sun.y, focus.z + sun.z);
+    key.target.position.set(focus.x, focus.y, focus.z);
     key.target.updateMatrixWorld();
 
     // Through the windscreen. The cone is anchored to the car *on screen* and
@@ -2801,7 +2868,26 @@ const params = new URLSearchParams(location.search);
     if (covered && !session && race?.phase !== 'running') {
       // Or the engine note hangs on the last frame before the panel opened.
       mixer.quiet();
-      codriver.silence();
+      // The race's calls stop the moment a panel covers it — once, not every
+      // frame, because the stage list has the co-driver read stages out while
+      // it is open, and silencing him each frame cut every one of those off.
+      if (!menuCovering) codriver.silence();
+      menuCovering = true;
+      // The front screen is a page beside the road, so the road is drawn —
+      // posed, never stepped. At most twenty frames a second on a phone, where
+      // this is heat and battery for a background. Every other panel still
+      // covers the world and still draws nothing behind it.
+      if (menu.showsStage && stage && !freeRoam) {
+        attract ??= { t: 0 };
+        attract.t += wallDt;
+        attractWait += wallDt;
+        if (!touch.shown || attractWait >= 1 / 20) {
+          attractWait = 0;
+          drawOnce(1, wallDt);
+        }
+      } else {
+        attract = null;
+      }
       /*
        * Still a finished frame, as far as anything waiting on one is concerned.
        *
@@ -2824,6 +2910,12 @@ const params = new URLSearchParams(location.search);
       return;
     }
 
+    menuCovering = false;
+    // Nothing covers the world, so nothing is attracting: the car is driven
+    // again. Cleared here and not only when another panel opens, or closing
+    // the front page straight into a race left the camera following a lap
+    // nobody was driving.
+    attract = null;
     // The start. While the lamps are lit the car is held on the line: the
     // handbrake is on and nothing the player does reaches the wheels.
     const merged =

@@ -64,6 +64,17 @@ export class CoDriver {
     this.say(this.calls[due]!.text);
   }
 
+  /**
+   * Read something out now, outside a stage: the co-driver introducing the
+   * stage a player is resting on in the list. Replaces whatever he was saying,
+   * because the newest thing looked at is the one that matters.
+   */
+  announce(text: string): void {
+    if (!this.enabled || this.volume <= 0) return;
+    this.silence();
+    this.say(text);
+  }
+
   private say(text: string): void {
     const speech = this.speech;
     if (!speech) return;
