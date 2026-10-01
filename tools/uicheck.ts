@@ -366,11 +366,41 @@ await page.keyboard.press('r');
 await page.waitForFunction(() => (window.RSC!.status() as { phase: string }).phase === 'staging', {
   timeout: 20_000,
 });
+// Every award that reaches the screen, latched inside the page: each one is up
+// for a couple of seconds on a page drawing five frames a second.
+await page.evaluate(`(() => {
+  window.__awards = [];
+  const tick = () => {
+    for (const a of document.querySelectorAll('.award-title')) {
+      const t = a.textContent.trim();
+      if (!window.__awards.includes(t)) window.__awards.push(t);
+    }
+    requestAnimationFrame(tick);
+  };
+  tick();
+})()`);
 const finished = (await page.evaluate(() => window.RSC!.finishWithAi())) as {
   phase?: string;
+  medal?: string;
   time?: string;
 };
 if (finished.phase !== 'finished') throw new Error(`the AI did not finish: ${finished.phase}`);
+/*
+ * And it was celebrated. Arcade marked a run only through the board, so a
+ * medal was never announced and nothing here noticed: this check finished an
+ * arcade race and pressed R straight past whatever was or was not on screen.
+ */
+const medalWord = finished.medal === 'author' ? 'AUTHOR TIME' : finished.medal === 'finish' ? 'FINISHED' : finished.medal?.toUpperCase();
+await page
+  .waitForFunction((word) => (window as unknown as { __awards: string[] }).__awards.includes(word!), medalWord, {
+    timeout: 20_000,
+  })
+  .catch(async () => {
+    throw new Error(
+      `an arcade ${finished.medal} was not celebrated; awards seen: ${JSON.stringify(await page.evaluate('window.__awards'))}`,
+    );
+  });
+console.log(`arcade celebrates its medal: ${JSON.stringify(await page.evaluate('window.__awards'))}`);
 await page.keyboard.press('r');
 await page.waitForFunction(() => (window.RSC!.status() as { phase: string }).phase === 'staging', {
   timeout: 20_000,

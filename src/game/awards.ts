@@ -142,11 +142,12 @@ export function awardsFor(input: AwardInput): Award[] {
 }
 
 /**
- * What an arcade or multiplayer run was worth.
+ * What an arcade or multiplayer run was worth to the world.
  *
  * A different question from the career one above, and a much smaller set of
- * answers: there are no medals here, no money and no sweep — just your own
- * best, and everyone else's.
+ * answers: your own best, and everyone else's. Arcade's medals, personal bests
+ * and sweeps go through `awardsFor` like a career's do — `main.ts` passes no
+ * `beat` here for that reason, so the personal best is not announced twice.
  *
  * Three tiers, because they are three genuinely different things and running
  * them together would be the same mistake as one fanfare for every medal:

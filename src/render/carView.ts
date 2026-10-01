@@ -161,6 +161,92 @@ function hash3(x: number, y: number, z: number): number {
  * different one — which is a texture generated in four lines rather than an
  * atlas and a pipeline.
  */
+/*
+ * The shape of the car, in profile.
+ *
+ * Everything below was boxes, so from the side the car was a rectangle with a
+ * smaller rectangle on top: no line to it anywhere, and the wheels hidden
+ * behind a flat flank. Rather than new meshes it is a warp of chassis space —
+ * one function, applied to the body, the nose and every side panel — so the
+ * panels bend exactly as the hull under them does and stay flush with it, and
+ * the damage model, which keys off rest vertices, dents the sculpted shape
+ * instead of the box. The boxes were already segmented for denting, so the
+ * vertices to bend were there.
+ */
+const HULL_BOTTOM = -0.34;
+const HULL_TOP = 0.29;
+/** Where an arch's squeeze stops: everything below it is pushed up over the wheel. */
+const ARCH_LINE = 0.2;
+/** The highest point of an arch, chassis y. The tyre's top stays under the flare. */
+const ARCH_PEAK = 0.06;
+const ARCH_RADIUS = 0.5;
+
+function warpHull(p: THREE.Vector3): void {
+  const h = CAR.halfExtents;
+  const u = p.z / h.z;
+  const t = Math.min(Math.max((p.y - HULL_BOTTOM) / (HULL_TOP - HULL_BOTTOM), 0), 1);
+  // A wedge: the beltline rises toward the tail.
+  p.y += t * 0.035 * -u;
+  // The nose rakes down and back, and the chin lifts.
+  if (u > 0.7) {
+    const k = Math.min((u - 0.7) / 0.3, 1);
+    p.y -= t * Math.pow(k, 1.5) * 0.15;
+    p.y += (1 - t) * k * k * 0.07;
+    p.z -= t * k * 0.12;
+  }
+  // The tail tucks: a little off the top edge, more off the bottom.
+  if (u < -0.8) {
+    const k = Math.min((-u - 0.8) / 0.2, 1);
+    p.y -= t * k * 0.04;
+    p.y += (1 - t) * k * k * 0.08;
+    p.z += t * k * 0.05;
+  }
+  // Tumblehome above, and the sills tucked under below.
+  p.x *= 1 - 0.09 * t * t - 0.06 * Math.pow(1 - t, 4);
+  // Arches: under each axle the flank is squeezed up over the wheel, so the
+  // tyre shows from the side instead of hiding behind a slab.
+  for (const mount of [CAR.wheelPositions[0]!, CAR.wheelPositions[2]!]) {
+    const d = Math.abs(p.z - mount.z) / ARCH_RADIUS;
+    if (d >= 1 || p.y >= ARCH_LINE) continue;
+    const lift = Math.sqrt(1 - d * d) * (ARCH_PEAK - HULL_BOTTOM);
+    p.y = ARCH_LINE - (ARCH_LINE - p.y) * (1 - lift / (ARCH_LINE - HULL_BOTTOM));
+  }
+}
+
+/** Apply `warp` in chassis space to a geometry sitting at `at`. */
+function sculpt(geometry: THREE.BufferGeometry, at: THREE.Vector3, warp: (p: THREE.Vector3) => void): void {
+  const position = geometry.getAttribute('position') as THREE.BufferAttribute;
+  const p = new THREE.Vector3();
+  for (let i = 0; i < position.count; i++) {
+    p.fromBufferAttribute(position, i).add(at);
+    warp(p);
+    p.sub(at);
+    position.setXYZ(i, p.x, p.y, p.z);
+  }
+  position.needsUpdate = true;
+  geometry.computeVertexNormals();
+}
+
+/** How far back the windscreen leans, metres over the cabin's height. */
+const SCREEN_RAKE = 0.4;
+
+/**
+ * The glasshouse: narrower at the roof than at the waist, the windscreen laid
+ * back and the rear glass sloping into the tail. In the cabin's own space,
+ * proportional to distance from its middle so no row can cross another.
+ */
+function glasshouse(cabin: THREE.BufferGeometry): void {
+  const params = (cabin as THREE.BoxGeometry).parameters;
+  const hy = params.height / 2;
+  const hz = params.depth / 2;
+  sculpt(cabin, new THREE.Vector3(), (p) => {
+    const t = (p.y + hy) / (2 * hy);
+    p.x *= 1 - 0.2 * t;
+    const u = p.z / hz;
+    p.z -= t * (u > 0 ? SCREEN_RAKE : 0.24) * u;
+  });
+}
+
 function decalTexture(value: string, ink: number, ground: number): THREE.CanvasTexture {
   const size = 128;
   const canvas = document.createElement('canvas');
@@ -401,10 +487,13 @@ export class CarView {
     // corners cannot be dented: crumple is vertices moving, and a face with no
     // vertices in the middle of it can only ever be scaled.
     const body = new THREE.Mesh(
-      new THREE.BoxGeometry(h.x * 2, h.y * 1.3, h.z * 2, 8, 5, 11),
+      // Long-axis segments for the arches: a curve over a wheel needs several
+      // vertices across it, and eleven down the whole car gave it two.
+      new THREE.BoxGeometry(h.x * 2, h.y * 1.3, h.z * 2, 8, 5, 26),
       flat(bodyColor, 0.6, tint),
     );
     body.position.y = -0.05;
+    sculpt(body.geometry, body.position, warpHull);
     body.castShadow = !isGhost;
     this.chassis.add(body);
 
@@ -415,6 +504,7 @@ export class CarView {
       flat(trimColor, 0.4, tint),
     );
     cabin.position.set(0, h.y * 1.05, -0.16);
+    glasshouse(cabin.geometry);
     cabin.castShadow = !isGhost;
     this.chassis.add(cabin);
 
@@ -426,6 +516,7 @@ export class CarView {
       flat(accentColor, 0.5, tint),
     );
     nose.position.set(0, h.y * 0.42, h.z * 0.86);
+    sculpt(nose.geometry, nose.position, warpHull);
     nose.castShadow = !isGhost;
     this.chassis.add(nose);
 
@@ -438,6 +529,17 @@ export class CarView {
     wing.position.set(0, h.y * 1.55, -h.z * 0.92);
     wing.castShadow = !isGhost;
     this.chassis.add(wing);
+    // Two struts down to the boot. The wing used to sit on the cabin's back
+    // edge; with the rear glass sloping away under it, it floated. Children of
+    // the wing, so they leave with it.
+    const struts: THREE.Mesh[] = [];
+    for (const side of [-1, 1]) {
+      const strut = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.42, 0.12), flat(trimColor, 0.5, tint));
+      strut.position.set(side * h.x * 0.55, -0.24, 0.02);
+      strut.castShadow = !isGhost;
+      wing.add(strut);
+      struts.push(strut);
+    }
 
     // Bolt-on panels, each its own mesh.
     //
@@ -487,6 +589,8 @@ export class CarView {
       // The rear wing was built above so the nose/cabin block could reference
       // it; everything else is created here.
       const mesh = id === 'wing' ? wing : new THREE.Mesh(geometry, material);
+      const shaped = id !== 'wing' && id !== 'exhaust' && !id.startsWith('mirror');
+      if (shaped) sculpt(geometry, new THREE.Vector3(...position), warpHull);
       if (id !== 'wing') {
         mesh.position.set(position[0], position[1], position[2]);
         this.chassis.add(mesh);
@@ -513,6 +617,7 @@ export class CarView {
           position[1] - (lateral ? 0 : 0.02),
           position[2] * (lateral ? 1 : 0.97),
         );
+        sculpt(scar.geometry, scar.position, warpHull);
         scar.visible = false;
         this.chassis.add(scar);
         this.scars.set(id, scar);
@@ -527,11 +632,21 @@ export class CarView {
 
     // The windscreen is not detachable, but it does crack and darken, and it is
     // the one panel whose damage is read from inside the silhouette.
+    // Laid on the cabin's raked front face rather than standing upright in
+    // front of it, and long enough to cover the slope it now lies on.
+    const cabinHalf = (cabin.geometry as THREE.BoxGeometry).parameters;
+    const lean = Math.atan2(SCREEN_RAKE, cabinHalf.height);
     const screen = new THREE.Mesh(
-      box(h.x * 1.4, h.y * 0.5, h.z * 0.06),
+      box(h.x * 1.3, (h.y * 0.5) / Math.cos(lean), h.z * 0.04),
       flat(0x9fb6c4, 0.2, tint),
     );
-    screen.position.set(0, h.y * 1.0, h.z * 0.36);
+    {
+      const t = (h.y * 1.0 - (cabin.position.y - cabinHalf.height / 2)) / cabinHalf.height;
+      // `glasshouse` pulls the front face back by SCREEN_RAKE times the height fraction.
+      const face = cabin.position.z + cabinHalf.depth / 2 - t * SCREEN_RAKE;
+      screen.position.set(0, h.y * 1.0, face + 0.015);
+    }
+    screen.rotation.x = -lean;
     screen.castShadow = false;
     this.chassis.add(screen);
     this.screen = screen;
@@ -584,7 +699,7 @@ export class CarView {
     this.cabin = cabin;
     this.nose = nose;
     this.bodyMeshes.push(body);
-    this.trimMeshes.push(cabin, wing);
+    this.trimMeshes.push(cabin, wing, ...struts);
     this.accentMesh = nose;
     // Registered before the paint pass, not after it: `keepRestGeometry` moves
     // a mesh's paint into its vertex colours, and `setLivery` has to already

@@ -3129,7 +3129,8 @@ textarea, input { -webkit-user-select: text; user-select: text; }
 .menu .menu-board u { color: var(--paper-red); }
 .menu .menu-strap .link { font-family: var(--font-type); color: var(--paper-ink); }
 
-.menu .stamp {
+.menu .stamp,
+.garage .stamp {
   display: inline-grid;
   place-items: center;
   width: 48px;
@@ -3142,12 +3143,18 @@ textarea, input { -webkit-user-select: text; user-select: text; }
   transform: rotate(-8deg);
   opacity: 0.85;
 }
-.menu .stamp.medal-author { color: #6a3d9a; }
-.menu .stamp.medal-gold { color: #9a7412; }
-.menu .stamp.medal-silver { color: #666b72; }
-.menu .stamp.medal-bronze { color: #8a5a32; }
-.menu .stamp.medal-finish { color: var(--paper-faded); }
-.menu .stamp.empty { color: rgba(30, 27, 23, 0.3); border-style: dashed; }
+.menu .stamp.medal-author,
+.garage .stamp.medal-author { color: #6a3d9a; }
+.menu .stamp.medal-gold,
+.garage .stamp.medal-gold { color: #9a7412; }
+.menu .stamp.medal-silver,
+.garage .stamp.medal-silver { color: #666b72; }
+.menu .stamp.medal-bronze,
+.garage .stamp.medal-bronze { color: #8a5a32; }
+.menu .stamp.medal-finish,
+.garage .stamp.medal-finish { color: var(--paper-faded); }
+.menu .stamp.empty,
+.garage .stamp.empty { color: rgba(30, 27, 23, 0.3); border-style: dashed; }
 
 /* Reading pages: help, the name, the controller. */
 .menu .help-doc { font: 15px/1.6 var(--font-type); color: var(--paper-ink); }
@@ -3212,7 +3219,8 @@ textarea, input { -webkit-user-select: text; user-select: text; }
   .menu .menu-aux { padding: 6px 10px 7px; font-size: 11px; }
   .menu .menu-row b { min-width: 130px; font-size: 16px; }
   .menu .menu-row-head u { min-width: 26px; font-size: 20px; }
-  .menu .stamp { width: 36px; height: 36px; font-size: 7px; }
+  .menu .stamp,
+  .garage .stamp { width: 36px; height: 36px; font-size: 7px; }
   .menu .menu-board { padding-left: 38px; }
 
   /* The front page's own sizes, restated: the desktop front-page rules above
@@ -3246,6 +3254,28 @@ textarea, input { -webkit-user-select: text; user-select: text; }
   color: var(--paper-ink);
 }
 .garage .garage-inner { position: relative; }
+/* A stage's medal, stamped beside its name as it is on the arcade list. */
+.garage .stage-body .stamp { float: right; margin: 0 2px 4px 8px; }
+/*
+ * The way back to the front page, at the top and staying there.
+ *
+ * It was only in the footer, which on the long career page is several screens
+ * of scrolling away — and on a phone, under whichever tab happened to be open.
+ */
+.garage-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  justify-content: flex-start;
+  /* Lined up with the page under it, which is centred at 1180 px. */
+  padding: 8px max(32px, calc((100% - 1180px) / 2 + 32px));
+  background: var(--paper);
+  border-bottom: 1px solid rgba(30, 27, 23, 0.18);
+}
+@media (max-height: 500px) {
+  .garage-topbar { padding: 6px 16px; }
+}
 .garage .garage-title {
   font: 900 52px/0.9 var(--font-stencil);
   letter-spacing: 0.04em;

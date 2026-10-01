@@ -8,8 +8,8 @@
 
 import { type EntryCheck, type RunLedger, canEnter, ledger, payout } from './economy.js';
 import { type UpgradeId, type UpgradeLevels, levelOf, nextCost, rollcageMitigation, tuneFor } from './garage.js';
-import type { Medal } from './race.js';
-import type { Profile, SaveStore } from './save.js';
+import { type Medal, medalFor } from './race.js';
+import type { Profile, SaveStore, StageRecord } from './save.js';
 import { COMPONENTS, type ComponentId, DamageModel, dentsAfterRepair } from '../sim/damage.js';
 import type { VehicleTuning } from '../data/tuning.js';
 import { type Livery, liveryById } from '../data/liveries.js';
@@ -185,6 +185,24 @@ export class Career {
   /** Best time and medal for a target, or null if never completed. */
   recordFor(target: RaceTarget) {
     return this.save.recordFor(this.keyFor(target));
+  }
+
+  /**
+   * Arcade bests in the career's shape, medals included.
+   *
+   * Arcade stores only a time: the medal is *derived* from it against that
+   * variant's table, so a retuned medal table re-grades every stored time
+   * instead of leaving stamps that disagree with the finish panel. In the
+   * career's shape so `awardsFor` and the stage list read both modes alike.
+   */
+  arcadeRecords(): Record<string, StageRecord> {
+    const out: Record<string, StageRecord> = {};
+    for (const target of this.targets()) {
+      const key = this.keyFor(target);
+      const best = this.save.arcadeRecordFor(key);
+      if (best) out[key] = { time: best.time, medal: medalFor(best.time, target.variant.medals), setAt: best.at };
+    }
+    return out;
   }
 
   /**

@@ -459,7 +459,7 @@ const params = new URLSearchParams(location.search);
    * the car is posed from a recording or from the road, the same way a replay
    * poses it. Declared up here because `drawOnce` reads it, and boot draws.
    */
-  let attract: { t: number } | null = null;
+  let attract: { t: number; at?: { x: number; y: number; z: number } } | null = null;
   /** Seconds since the attract lap was last drawn, for the phone's frame cap. */
   let attractWait = 0;
   /** Whether a panel covered the world last frame, to silence the co-driver once. */
@@ -1569,8 +1569,24 @@ const params = new URLSearchParams(location.search);
       // cannot fail, does not need a network, and is true whether or not the
       // time went anywhere near the board. Arcade and multiplayer share the
       // table because they share the car.
+      const before = career.arcadeRecords();
       const personal = await save.submitArcadeRun(key, finished, lap);
       raceHud.setBest(save.arcadeRecordFor(key)?.time ?? null);
+
+      // Medals, personal bests and sweeps, the way a career run has them —
+      // arcade grades the same times against the same tables, and a gold that
+      // nothing marked is the run a player came back for. Shown now rather
+      // than after the board: the board's half follows when it arrives, and a
+      // personal best does not wait on somebody else's server.
+      celebrations.show(
+        awardsFor({
+          keys: career.targets().map((t) => career.keyFor(t)),
+          before,
+          after: career.arcadeRecords(),
+          key,
+          name: label,
+        }),
+      );
 
       // Then the world. Deliberately not awaited by anything that draws — the
       // panel is already up with the time on it, and the board grows into it a
@@ -1613,11 +1629,11 @@ const params = new URLSearchParams(location.search);
           ...(session ? { rivals: multiplayer.standings() } : {}),
         });
 
+        // The world's half only: the personal best was announced above.
         celebrations.show(
           boardAwards({
             name: label,
             time: finished,
-            ...(personal ? { beat: personal.beat } : {}),
             ...(posted ? { rank: posted.rank, dethroned: posted.was } : {}),
           }),
         );
@@ -1814,6 +1830,13 @@ const params = new URLSearchParams(location.search);
     let focusAlong = race?.furthest ?? 0;
     if (attract && stage) {
       const sample = attractSample(attract.t);
+      // The lap loops by teleporting the car back to the start, and the
+      // camera chasing it there swept across the whole stage. A cut instead,
+      // as anything that moves the car further than it can drive in a frame.
+      const from = attract.at;
+      const to = sample.pose.position;
+      if (!from || Math.hypot(to.x - from.x, to.z - from.z) > 30) camera.jumpTo(to);
+      attract.at = { x: to.x, y: to.y, z: to.z };
       carView.updateFromGhost(sample.pose);
       focus = sample.pose.position;
       focusVelocity = sample.velocity;
@@ -2882,8 +2905,13 @@ const params = new URLSearchParams(location.search);
         attract.t += wallDt;
         attractWait += wallDt;
         if (!touch.shown || attractWait >= 1 / 20) {
+          // The time since the last *draw*, not since the last frame. Under
+          // the phone's cap those differ threefold and the frame's own delta
+          // wanders, so the car moved a steady distance per draw while the
+          // camera chasing it moved a random fraction of that — judder.
+          const since = attractWait;
           attractWait = 0;
-          drawOnce(1, wallDt);
+          drawOnce(1, since);
         }
       } else {
         attract = null;

@@ -47,6 +47,18 @@ export interface Animal {
   yaw: number;
   /** 0..1 across the road, once bolting. */
   crossed: number;
+  /**
+   * Metres from the centreline where it stands, on its own `side`.
+   *
+   * Kept per animal because a bolt starts from here. It used to start from the
+   * generic verge offset, which for a flock standing at the road's edge is
+   * several metres further out — so the moment a sheep bolted it snapped away
+   * from the road and then ran back across it, and that was the rubber band
+   * seen on Coldwater's summit as the flock came into view.
+   */
+  rest: number;
+  /** Facing while grazing, so a reset puts it back the way it was placed. */
+  restYaw: number;
   /** Metres per second, while it is being thrown. */
   velocity: Vec3;
   /**
@@ -247,16 +259,19 @@ export class Wildlife {
       const side: -1 | 1 = this.random() < 0.5 ? -1 : 1;
       const sample = this.spline.at(distance);
       const offset = sample.width * VERGE_OFFSET + this.random() * 2;
+      // Grazing animals face away from the road, which is why the head coming
+      // up is a tell you can read at a glance.
+      const yaw = Math.atan2(sample.left.x * side, sample.left.z * side);
       this.animals.push({
         kind: 'deer',
         distance,
         side,
         state: 'grazing',
         position: add(sample.position, scale(sample.left, offset * side)),
-        // Grazing animals face away from the road, which is why the head
-        // coming up is a tell you can read at a glance.
-        yaw: Math.atan2(sample.left.x * side, sample.left.z * side),
+        yaw,
         crossed: 0,
+        rest: offset,
+        restYaw: yaw,
         velocity: v3(0, 0, 0),
         roll: 0,
         spin: 0,
@@ -287,14 +302,17 @@ export class Wildlife {
       // Closer in than the scattered animals: these are on the road's edge and
       // wandering onto it, which is what a flock on an open summit does.
       const offset = sample.width * (0.55 + this.random() * 0.6);
+      const yaw = this.random() * Math.PI * 2;
       this.animals.push({
         kind: spec.kind,
         distance: along,
         side,
         state: 'grazing',
         position: add(sample.position, scale(sample.left, offset * side)),
-        yaw: this.random() * Math.PI * 2,
+        yaw,
         crossed: 0,
+        rest: offset,
+        restYaw: yaw,
         velocity: v3(0, 0, 0),
         roll: 0,
         spin: 0,
@@ -316,8 +334,10 @@ export class Wildlife {
       const sample = this.spline.at(animal.distance);
 
       if (animal.state === 'bolting') {
-        animal.crossed += (BOLT_SPEED * dt) / Math.max(sample.width * 2.6, 1);
-        const offset = sample.width * VERGE_OFFSET * (1 - 2 * animal.crossed);
+        // From where it stood to the far verge, at a steady pace.
+        const far = sample.width * VERGE_OFFSET;
+        animal.crossed += (BOLT_SPEED * dt) / Math.max(animal.rest + far, 1);
+        const offset = animal.rest - (animal.rest + far) * animal.crossed;
         animal.position = add(sample.position, scale(sample.left, offset * animal.side));
         animal.yaw = Math.atan2(-sample.left.x * animal.side, -sample.left.z * animal.side);
         if (animal.crossed >= 1.25) animal.state = 'gone';
@@ -441,15 +461,14 @@ export class Wildlife {
   reset(): void {
     for (const animal of this.animals) {
       const sample = this.spline.at(animal.distance);
-      const offset = sample.width * VERGE_OFFSET;
       animal.state = 'grazing';
       animal.crossed = 0;
       animal.velocity = v3(0, 0, 0);
       animal.roll = 0;
       animal.spin = 0;
       animal.groundY = sample.position.y;
-      animal.position = add(sample.position, scale(sample.left, offset * animal.side));
-      animal.yaw = Math.atan2(sample.left.x * animal.side, sample.left.z * animal.side);
+      animal.position = add(sample.position, scale(sample.left, animal.rest * animal.side));
+      animal.yaw = animal.restYaw;
     }
   }
 }

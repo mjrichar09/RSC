@@ -294,13 +294,27 @@ ${shader.fragmentShader}`.replace(
     diffuseColor.rgb *= mix(vec3(1.0), vec3(0.85, 0.9, 1.0), track * vKind.z);
 
     // Painted lines, on about three tarmac sections in five: solid edge lines
-    // and a dashed centre, worn through in patches. Widths come from the
-    // fragment's own across-the-road rate so they stay crisp at any zoom.
+    // and a dashed centre, worn through in patches.
+    //
+    // Never drawn thinner than a pixel. The lines are 12-16 cm across, which
+    // is a pixel or less once the camera pulls back at speed or a phone drops
+    // its render scale — and a line narrower than a pixel, sampled at pixel
+    // centres, is bright where a centre lands on it and gone where none does,
+    // so as the camera moved the lines flashed in and out. Widened to a pixel
+    // and faded by the same ratio, the ink per metre of road stays the same
+    // and nothing depends on where the pixels fall.
     float marked = vKind.x * vRoad * step(roll2, 0.6);
     float worn = smoothstep(0.2, 0.5, sNoise(w * 1.3 + 3.0));
-    float edgeLine = 1.0 - smoothstep(0.018 - aw, 0.018 + aw, abs(a - 0.9));
-    float dashes = step(fract(vAlong / 9.0), 0.45);
-    float centreLine = (1.0 - smoothstep(0.014 - aw, 0.014 + aw, a)) * dashes;
+    float edgeW = max(0.018, aw * 0.5);
+    float edgeLine = (1.0 - smoothstep(edgeW - aw * 0.5, edgeW + aw * 0.5, abs(a - 0.9)))
+                   * (0.018 / edgeW);
+    // The dash ends too, which were a hard step along the road and crawled.
+    float dashAt = vAlong / 9.0;
+    float dw = max(fwidth(dashAt), 1e-4);
+    float dashes = 1.0 - smoothstep(0.45 - dw, 0.45 + dw, fract(dashAt));
+    float centreW = max(0.014, aw * 0.5);
+    float centreLine = (1.0 - smoothstep(centreW - aw * 0.5, centreW + aw * 0.5, a))
+                     * (0.014 / centreW) * dashes;
     vec3 white = vec3(0.78, 0.78, 0.74);
     // One section in four gets a yellow centre instead.
     vec3 centreInk = roll2 < 0.15 ? vec3(0.8, 0.55, 0.08) : white;

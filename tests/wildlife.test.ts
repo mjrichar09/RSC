@@ -105,6 +105,48 @@ describe('the state machine', () => {
     expect(bolts(36)).toBeGreaterThan(bolts(10));
   });
 
+  /*
+   * The bolt starts where the animal was standing. It used to start from the
+   * generic verge offset, which for a flock at the road's edge is metres
+   * further out: the sheep on Coldwater's summit snapped away from the road the
+   * instant they bolted and then ran back across it.
+   */
+  it('bolts from where it stood, sheep in a flock included', () => {
+    for (const kind of ['deer', 'sheep'] as const) {
+      const wildlife = new Wildlife(stage.spline, stage.length, {
+        random: () => 0,
+        perKm: kind === 'deer' ? 3 : 0,
+        flocks: kind === 'sheep' ? [{ kind: 'sheep', at: 200, count: 1, spread: 0 }] : [],
+      });
+      const animal = wildlife.animals[0]!;
+      expect(animal.kind).toBe(kind);
+      const stood = { ...animal.position };
+      for (let i = 0; i < 120 && animal.state !== 'bolting'; i++) {
+        wildlife.update(1 / 120, animal.distance - 20, 40);
+      }
+      expect(animal.state).toBe('bolting');
+      // The first step of the bolt itself: a stride at a running pace, not a jump.
+      wildlife.update(1 / 120, animal.distance - 20, 40);
+      const moved = Math.hypot(animal.position.x - stood.x, animal.position.z - stood.z);
+      expect(moved).toBeLessThan(0.2);
+    }
+  });
+
+  it('is put back where it was placed by a reset', () => {
+    const wildlife = new Wildlife(stage.spline, stage.length, {
+      random: stream(3),
+      flocks: [{ kind: 'sheep', at: 200, count: 6, spread: 20 }],
+    });
+    const before = wildlife.animals.map((a) => ({ ...a.position, yaw: a.yaw }));
+    for (let i = 0; i < 120 * 3; i++) wildlife.update(1 / 120, 180, 40);
+    wildlife.reset();
+    wildlife.animals.forEach((a, i) => {
+      expect(a.position.x).toBeCloseTo(before[i]!.x, 6);
+      expect(a.position.z).toBeCloseTo(before[i]!.z, 6);
+      expect(a.yaw).toBeCloseTo(before[i]!.yaw, 6);
+    });
+  });
+
   it('crosses the road and leaves', () => {
     const wildlife = new Wildlife(stage.spline, stage.length, { random: () => 0 });
     const animal = wildlife.animals[0]!;

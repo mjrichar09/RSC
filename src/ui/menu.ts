@@ -674,9 +674,12 @@ export class StartMenu {
   }
 
   private arcadeScreen(): string {
+    // Arcade's own bests: the career's are a different car, and stamping a
+    // career gold on a stage never driven in arcade claimed a time it was not.
+    const records = this.career.arcadeRecords();
     const rows = this.arcadePicks()
       .map((pick) => {
-        const record = this.career.recordFor(pick);
+        const record = records[variantKey(pick.def.id, pick.variant.id)];
         // A medal is a rubber stamp on the page; no time yet is a dashed ring
         // where the stamp will go.
         const best = record

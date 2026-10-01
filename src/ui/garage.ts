@@ -241,6 +241,7 @@ export class Garage {
   render(): void {
     if (!this.open) return;
     this.root.innerHTML = `
+      <div class="garage-topbar"><button data-action="menu">‹ Main menu</button></div>
       <div class="garage-inner">
         <header class="garage-head">
           <div>
@@ -260,7 +261,6 @@ export class Garage {
         <footer class="garage-foot">
           <span><b>1</b>–<b>${Math.min(9, this.career.targets().length)}</b> enter stage · <b>Esc</b> close · <b>drag</b> the car to turn it</span>
           <span class="garage-foot-right">
-            <button data-action="menu">Main menu</button>
             ${
               this.confirmingReset
                 ? `<span class="reset-warn">Erases every record, ghost, upgrade and penny.</span>
@@ -354,9 +354,11 @@ export class Garage {
                 ? `${variant.requiresMedals} medal${variant.requiresMedals === 1 ? '' : 's'}`
                 : '';
 
+        // A medal is a rubber stamp on the page, the same stamp the arcade
+        // list uses; no time yet is a dashed ring where it will go.
         const best = record
-          ? `<span style="color:${MEDAL_TINT[record.medal]}">${formatTime(record.time)} · ${record.medal}</span>`
-          : '<span class="dim">no time set</span>';
+          ? `<span class="stamp medal-${record.medal}">${record.medal}<br>${formatTime(record.time)}</span>`
+          : '<span class="stamp empty">no time</span>';
 
         // Only the first nine rows have a number key, so the rest show none
         // rather than a key that does nothing.
@@ -368,12 +370,12 @@ export class Garage {
             <div class="stage-key">${key}</div>
             <div class="stage-map-thumb">${thumb.map}</div>
             <div class="stage-body">
+              ${best}
               <div class="stage-name">${def.name} <span class="dim">· ${variant.name}</span></div>
               <div class="stage-meta">${def.biome} · <span class="stage-climb">▲ ${Math.round(feet(thumb.climb))} ft</span>${
                 check.reason === 'locked' ? ` · <span class="locked-note">locked</span>` : ''
               }</div>
               <div class="stage-profile-thumb">${thumb.profile}</div>
-              <div class="stage-meta">${best}</div>
             </div>
             <div class="stage-pay">
               <div><b style="color:${MEDAL_TINT.gold}">${money(variant.payouts.gold)}</b> gold</div>
