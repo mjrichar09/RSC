@@ -16,7 +16,7 @@ import { CLEAR_DAY, type Conditions, describeConditions } from './conditions.js'
 import { type Vec3, add, scale, v3 } from './math.js';
 import { type ControlPoint, Spline, type SplineSample } from './spline.js';
 import { type Corner, findCorners } from './corners.js';
-import { shapeCamber, terrainRise } from './terrain.js';
+import { groundHeight, shapeCamber, terrainRise } from './terrain.js';
 import {
   BANK_HEIGHT,
   BANK_WIDTH,
@@ -27,9 +27,9 @@ import {
   WALL_HEIGHT,
   WALL_WIDTH,
 } from './corridor.js';
-import { type SceneryItem, scatterScenery } from './scenery.js';
+import { SOLID_MARGIN, type SceneryItem, scatterScenery } from './scenery.js';
 import type { SurfaceId } from './surfaces.js';
-import type { FlockSpec } from './wildlife.js';
+import type { AnimalKind, FlockSpec } from './wildlife.js';
 
 export interface CameraZone {
   /** Arc length along the stage where this zone starts, metres. */
@@ -292,6 +292,40 @@ export interface StageDef {
   warnings?: WarningSign[];
   /** Animals standing together somewhere on the stage. */
   flocks?: FlockSpec[];
+  /** What is scattered along the verges, one at a time. Deer when absent. */
+  fauna?: AnimalKind;
+  /**
+   * Stretches of road, [from, to] in metres, where nothing is scattered. For a
+   * place where the driver is already fully occupied — Red Planet's landing,
+   * where a rover put there by the seed was hit by every car that came down
+   * short of the touchdown and was still settling.
+   */
+  faunaClear?: [number, number][];
+  /**
+   * Gravity, m/s², positive down. Earth's when absent.
+   *
+   * Read by the physics world, by the AI's corner speeds (grip is load, and
+   * load is weight) and by anything thrown. Not by the tyre model directly,
+   * which never needed to know: less weight on a contact patch is less grip
+   * on its own.
+   */
+  gravity?: number;
+  /**
+   * A rocket on a pad beside the start, which goes on the green.
+   *
+   * Where it stands is decided here rather than in the renderer, so it is the
+   * same place for everything that asks — and it is placed `offset` metres
+   * from the centreline, which has to be out of reach of the car (see
+   * `Stage.launchPad`).
+   */
+  launch?: { at: number; side: -1 | 1; offset: number };
+  /**
+   * Metres of the seeded rise and fall laid over the authored heights; 1.1
+   * when absent. Zero for a stage whose heights are exact: Red Planet's jump is
+   * fitted to a measured flight, and a wave under its kicker tilted the launch
+   * enough to move the landing sixty metres.
+   */
+  terrainAmplitude?: number;
   /** A rockslide across one side of the road. The side is seeded. */
   slide?: SlideSpec;
   /**
@@ -302,6 +336,9 @@ export interface StageDef {
   /** Number of intermediate checkpoints. They are spaced evenly along the stage. */
   checkpoints?: number;
 }
+
+/** Half the width of the launch pad and its gantry, metres. */
+export const LAUNCH_PAD_RADIUS = 9;
 
 /**
  * Deterministic RNG, so a stage's hazards are identical on every load and in
@@ -509,6 +546,14 @@ export class Stage {
   readonly crossings: Crossing[];
   readonly start: { position: Vec3; heading: number };
   readonly length: number;
+  /**
+   * Where the rocket stands, on the open ground, or null for a stage with none.
+   *
+   * Refused if it is anywhere a car could reach. The rocket is drawn at the
+   * size of a building and has no collider, which is honest only because the
+   * corridor wall and the run-off past it are between it and the road.
+   */
+  readonly launchPad: Vec3 | null;
 
   /**
    * Which side the rockslide came down, -1 left and 1 right, or 0 for none.
@@ -539,7 +584,11 @@ export class Stage {
     this.spline = new Spline(
       shapeCamber(def.controlPoints, def.id),
       2,
-      terrainRise(def.id, roughLength),
+      terrainRise(
+        def.id,
+        roughLength,
+        def.terrainAmplitude !== undefined ? { amplitude: def.terrainAmplitude } : {},
+      ),
     );
     this.length = this.spline.length;
     this.geometry = this.buildGeometry();
@@ -561,6 +610,18 @@ export class Stage {
       position: add(line.position, v3(0, 1.2, 0)),
       heading: Math.atan2(line.forward.x, line.forward.z),
     };
+
+    this.launchPad = null;
+    if (def.launch) {
+      const at = this.spline.at(def.launch.at);
+      const reach = at.width + VERGE_WIDTH + BANK_WIDTH + WALL_WIDTH + SOLID_MARGIN + LAUNCH_PAD_RADIUS;
+      if (def.launch.offset < reach) {
+        throw new Error(`${def.id}: launch pad at ${def.launch.offset} m is within reach (${reach.toFixed(1)} m)`);
+      }
+      const x = at.position.x + at.left.x * def.launch.offset * def.launch.side;
+      const z = at.position.z + at.left.z * def.launch.offset * def.launch.side;
+      this.launchPad = v3(x, groundHeight(this.spline, x, z), z);
+    }
   }
 
   /**

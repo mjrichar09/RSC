@@ -155,6 +155,21 @@ export interface VehicleTuning {
   downforceFactor: number;
   /** Yaw damping torque, N·m per rad/s. Tames spins without killing rotation. */
   yawDamping: number;
+  /**
+   * In the air, torque turning the nose toward the direction of travel, N·m
+   * per radian of difference.
+   *
+   * Nothing turned the car in flight, so it held whatever attitude the lip gave
+   * it: measured off Red Planet's jump, 14° nose up for all eight seconds of it,
+   * onto a landing slope falling at 20° — tail first, 41 000 N·s, a wheel off.
+   * About a 1.2 s time constant at the car's pitch inertia, so an Earth jump of
+   * half a second is barely touched and a Mars one lands the way it flew.
+   */
+  airPitchAlign: number;
+  /** Damping on pitch rate in the air, N·m per rad/s, so the alignment settles. */
+  airPitchDamping: number;
+  /** Nose-down torque from the brake in the air, N·m at full pedal. */
+  airPitchBrake: number;
 }
 
 export const CAR: VehicleTuning = {
@@ -278,6 +293,9 @@ export const CAR: VehicleTuning = {
   dragFactor: 0.42,
   downforceFactor: 0.22,
   yawDamping: 2200,
+  airPitchAlign: 3500,
+  airPitchDamping: 3800,
+  airPitchBrake: 2600,
 };
 
 export const SIM = {

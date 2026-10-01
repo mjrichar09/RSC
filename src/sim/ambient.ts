@@ -26,6 +26,8 @@ const EXPOSURE: Record<string, number> = {
   // A street is sheltered; a pass over the top is the most exposed place here.
   town: 0.15,
   alpine: 0.95,
+  // A plain with nothing on it for a thousand kilometres.
+  mars: 0.9,
 };
 
 /** Weather that actually blows. Fog is still air, by definition. */
@@ -35,6 +37,8 @@ const WINDINESS: Record<string, number> = {
   rain: 0.9,
   fog: 0.05,
   snowfall: 0.75,
+  // The whole point of a dust storm: it is wind you can see.
+  dust: 1.15,
 };
 
 /** Peak sideways acceleration a gust can apply, m/s². About a tenth of a g. */

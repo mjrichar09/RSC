@@ -581,7 +581,7 @@ export class Precipitation {
   private readonly material: THREE.ShaderMaterial;
   /** Side of the cube the particles live in, centred on the camera's focus. */
   private readonly extent = 90;
-  private mode: 'none' | 'rain' | 'snow' = 'none';
+  private mode: 'none' | 'rain' | 'snow' | 'dust' = 'none';
 
   constructor(parent: THREE.Object3D) {
     this.positions = new Float32Array(this.count * 3);
@@ -631,7 +631,8 @@ export class Precipitation {
 
   /** Match the weather. Anything without falling water simply turns it off. */
   setWeather(weather: Weather): void {
-    this.mode = weather === 'rain' ? 'rain' : weather === 'snowfall' ? 'snow' : 'none';
+    this.mode =
+      weather === 'rain' ? 'rain' : weather === 'snowfall' ? 'snow' : weather === 'dust' ? 'dust' : 'none';
     this.points.visible = this.mode !== 'none';
 
     const u = this.material.uniforms;
@@ -645,6 +646,13 @@ export class Precipitation {
       u.uSize!.value = 0.16;
       u.uStretch!.value = 1;
       u.uOpacity!.value = 0.75;
+    } else if (this.mode === 'dust') {
+      // Grit, not flakes: small, opaque enough to read against red ground,
+      // and the colour of what is blowing.
+      (u.uColor!.value as THREE.Color).setHex(0xd59a68);
+      u.uSize!.value = 0.11;
+      u.uStretch!.value = 1.6;
+      u.uOpacity!.value = 0.6;
     }
   }
 
@@ -653,8 +661,10 @@ export class Precipitation {
     if (this.mode === 'none') return;
     this.material.uniforms.uScale!.value = pixelsPerMetre;
 
-    const fall = this.mode === 'rain' ? 34 : 5;
-    const drift = this.mode === 'rain' ? 4 : 2.2;
+    // Dust barely falls at all; it is carried sideways, hard, close to the
+    // ground — which is why it wraps low as well as at the edges.
+    const fall = this.mode === 'rain' ? 34 : this.mode === 'dust' ? 0.8 : 5;
+    const drift = this.mode === 'rain' ? 4 : this.mode === 'dust' ? 26 : 2.2;
     const half = this.extent / 2;
 
     for (let i = 0; i < this.count; i++) {
@@ -664,8 +674,13 @@ export class Precipitation {
 
       // Wrap rather than respawn: the volume follows the car, so a particle
       // that falls out of the bottom belongs back at the top of it.
+      // A storm sits on the ground: anything left high from the volume's
+      // first fill, or a stage that drops away under it, comes back down.
+      if (this.mode === 'dust' && this.positions[y]! > focus.y + 24) {
+        this.positions[y] = focus.y + Math.random() * 20;
+      }
       if (this.positions[y]! < focus.y - 4) {
-        this.positions[y] = focus.y + 55;
+        this.positions[y] = focus.y + (this.mode === 'dust' ? 4 + Math.random() * 18 : 55);
         this.positions[i * 3] = focus.x + (Math.random() - 0.5) * this.extent;
         this.positions[i * 3 + 2] = focus.z + (Math.random() - 0.5) * this.extent;
       }

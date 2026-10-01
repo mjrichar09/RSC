@@ -49,6 +49,9 @@ const PLACES: Record<string, Place> = {
   town: { wind: 0.08, windCutoff: 700, surf: 0, surfPeriod: 0, birds: 10, birdPitch: 1500, chorus: 0.04 },
   // Thin air over a pass: wind with nothing to break it and nothing living.
   alpine: { wind: 0.38, windCutoff: 780, surf: 0, surfPeriod: 0, birds: 2, birdPitch: 2600, chorus: 0.01 },
+  // Air a hundredth as thick as Earth's carries almost nothing high: a low,
+  // muffled wind, and no living thing at all.
+  mars: { wind: 0.3, windCutoff: 260, surf: 0, surfPeriod: 0, birds: 0, birdPitch: 0, chorus: 0 },
 };
 
 /** Weather multiplies the wind and adds its own noise on top. */
@@ -58,6 +61,7 @@ const WEATHER_WIND: Record<string, number> = {
   rain: 1.5,
   fog: 0.6,
   snowfall: 1.3,
+  dust: 2.1,
 };
 
 export class Ambience {
@@ -153,8 +157,13 @@ export class Ambience {
       this.surfGain.gain.setTargetAtTime(place.surf * swell * overCar, now, 0.3);
     }
 
-    const rain = weather === 'rain' ? 0.1 : weather === 'snowfall' ? 0.022 : 0;
-    this.rainFilter.frequency.setTargetAtTime(weather === 'snowfall' ? 2600 : 4200, now, 0.5);
+    // Grit on the body in a dust storm: the rain's hiss, lower and drier.
+    const rain = weather === 'rain' ? 0.1 : weather === 'snowfall' ? 0.022 : weather === 'dust' ? 0.05 : 0;
+    this.rainFilter.frequency.setTargetAtTime(
+      weather === 'snowfall' ? 2600 : weather === 'dust' ? 1700 : 4200,
+      now,
+      0.5,
+    );
     this.rainGain.gain.setTargetAtTime(rain * presence, now, 0.5);
 
     // Birdsong, in daylight, when the car is not shouting over it.

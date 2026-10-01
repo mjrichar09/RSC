@@ -134,7 +134,28 @@ const WEATHER_DIM: Record<Conditions['weather'], number> = {
   rain: 0.62,
   fog: 0.6,
   snowfall: 0.78,
+  dust: 0.58,
 };
+
+/**
+ * Mars, in daylight.
+ *
+ * A butterscotch sky and a sun that is smaller and whiter than Earth's, over
+ * ground that is red all the way to the horizon. The hemisphere light carries
+ * most of it: on Mars the sky is lit by the dust in it, so the shadowed side
+ * of everything goes warm rather than blue.
+ */
+const MARS_DAY: LightingPreset = {
+  key: { color: 0xfff0dc, intensity: 2.3 },
+  hemisphere: { sky: 0xe0a978, ground: 0x5a2616, intensity: 0.75 },
+  fill: { color: 0xd8915c, intensity: 0.45 },
+  background: 0xc98f62,
+  fog: 0xc28659,
+  shadowStrength: 0.9,
+};
+
+/** The colour of a dust storm, for the fog and the sky behind it. */
+const DUST = 0xa8673f;
 
 export interface SceneBundle {
   renderer: THREE.WebGLRenderer;
@@ -142,7 +163,8 @@ export interface SceneBundle {
   /** Key light; its shadow frustum has to be kept over the car as it drives. */
   key: THREE.DirectionalLight;
   /** Re-light the scene for a set of conditions. Safe to call on every stage load. */
-  applyConditions: (conditions: Conditions) => void;
+  /** `biome` picks a world's own light where it has one: Mars has its own sky. */
+  applyConditions: (conditions: Conditions, biome?: string) => void;
   resize: (width: number, height: number, scale?: number) => void;
   quality: QualitySettings;
 }
@@ -195,8 +217,8 @@ export function createScene(canvas: HTMLCanvasElement, quality = qualityFor('hig
   fill.position.set(34, 16, 30);
   scene.add(fill);
 
-  const applyConditions = (conditions: Conditions) => {
-    const preset = LIGHTING[conditions.timeOfDay];
+  const applyConditions = (conditions: Conditions, biome = '') => {
+    const preset = biome === 'mars' && conditions.timeOfDay === 'day' ? MARS_DAY : LIGHTING[conditions.timeOfDay];
     const dim = WEATHER_DIM[conditions.weather];
     const view = visibility(conditions);
 
@@ -213,13 +235,15 @@ export function createScene(canvas: HTMLCanvasElement, quality = qualityFor('hig
     fill.color.setHex(preset.fill.color);
     fill.intensity = preset.fill.intensity * dim;
 
-    scene.background = new THREE.Color(preset.background);
+    // In a dust storm the sky *is* the dust, and so is the fog.
+    const storm = conditions.weather === 'dust';
+    scene.background = new THREE.Color(storm ? DUST : preset.background);
     // Fog is measured from the camera, which sits a fixed distance back, so a
     // range meaning "visible for 60 m around the car" has to be offset by it.
     // Without the offset the entire world is past the far plane and every
     // frame renders as flat fog colour.
     scene.fog = new THREE.Fog(
-      preset.fog,
+      storm ? DUST : preset.fog,
       CAMERA_DISTANCE + view.fogNear,
       CAMERA_DISTANCE + view.fogFar,
     );

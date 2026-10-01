@@ -30,6 +30,7 @@ const SOILING_RATE: Record<string, number> = {
   rain: 0.36,
   fog: 0.04,
   snowfall: 0.5,
+  dust: 0.3,
 };
 
 /** Surfaces that throw material onto the screen, and how much of it. */
@@ -234,7 +235,12 @@ export class Vision {
     const weather = SOILING_RATE[conditions.weather] ?? 0;
     const arriving = weather * (0.4 + clamp(speed / 30, 0, 1) * 0.6) + spray;
     const kind: VisionKind =
-      spray > weather ? 'mud' : conditions.weather === 'snowfall' ? 'snow' : 'water';
+      // Dust dries on the glass as a crust, which is what mud already draws.
+      spray > weather || conditions.weather === 'dust'
+        ? 'mud'
+        : conditions.weather === 'snowfall'
+          ? 'snow'
+          : 'water';
 
     // Wipers. They run when there is something to clear and they still work.
     const wipersDead = wiperHealth <= 0;

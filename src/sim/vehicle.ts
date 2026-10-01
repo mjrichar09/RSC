@@ -661,6 +661,18 @@ export class Vehicle {
     if (grounded) {
       body.addForce(scale(up, -t.downforceFactor * v * v), true);
       body.addTorque(scale(up, -t.yawDamping * dot(angvel, up)), true);
+    } else if (planarSpeed > 8) {
+      // In the air the nose follows the flight path, and the brake drops it —
+      // a stopped wheel's reaction, which is what a driver uses to land a jump.
+      // About the car's right axis (-X), where a positive rate lifts the nose.
+      const right = rotate(rot, v3(-1, 0, 0));
+      const pitch = Math.asin(Math.max(-1, Math.min(1, nose.y)));
+      const path = Math.atan2(linvel.y, planarSpeed);
+      const torque =
+        t.airPitchAlign * (path - pitch) -
+        t.airPitchDamping * dot(angvel, right) -
+        t.airPitchBrake * input.brake;
+      body.addTorque(scale(right, torque), true);
     }
 
     // Brake heat is settled last, on the torques and wheel speeds this step

@@ -205,11 +205,15 @@ export class Driver {
        */
       const ground = surface(s.surface);
       const grip = ground.grip * gripMultiplier(this.options.conditions, ground);
-      const corner = Math.sqrt(gripBudget * grip * 9.81 * radius);
+      // The stage's own gravity: grip is load, and load is weight, so on Mars
+      // the same tyre on the same gravel corners at sqrt(0.38) of the speed
+      // and stops in more than twice the distance.
+      const g = this.stage.def.gravity ?? 9.81;
+      const corner = Math.sqrt(gripBudget * grip * g * radius);
       // Allow a higher speed for a corner that is still far off — there is time
       // to shed speed before reaching it. Kept conservative: arriving too fast
       // on a narrow stage means going over the bank, not just running wide.
-      const allowance = corner + d * 0.22;
+      const allowance = corner + d * 0.22 * (g / 9.81);
       limit = Math.min(limit, allowance);
     }
     return clamp(limit, 6, maxSpeed);

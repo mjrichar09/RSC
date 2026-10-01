@@ -406,8 +406,12 @@ export function buildStageView(stage: Stage, markers: Markers): StageView {
   const onRoad = new Float32Array(vertexSurfaces.length);
   const c = new THREE.Color();
   const slope = new THREE.Color();
+  const tint = GROUND_TINT[stage.def.biome];
+  const tintColour = new THREE.Color(tint?.[0] ?? 0);
   for (let i = 0; i < vertexSurfaces.length; i++) {
-    c.setHex(SURFACES[vertexSurfaces[i]!].color).multiplyScalar(mottle(i) * vertexShade[i]!);
+    c.setHex(SURFACES[vertexSurfaces[i]!].color);
+    if (tint) c.lerp(tintColour, tint[1]);
+    c.multiplyScalar(mottle(i) * vertexShade[i]!);
     shadeByGrade(c, vertexGrade[i]!, slope);
     colors[i * 3] = c.r;
     colors[i * 3 + 1] = c.g;
@@ -1177,6 +1181,19 @@ const TERRAIN_COLOUR: Record<string, [number, number]> = {
   coast: [0x415034, 0x33402a],
   town: [0x8a8172, 0x6d665b],
   alpine: [0x4a5340, 0x6e6a60],
+  mars: [0x8c4426, 0x6f3520],
+};
+
+/**
+ * A biome whose ground is not Earth's colour, and how far toward it.
+ *
+ * The surfaces carry one colour each, chosen for Earth — dirt is brown and
+ * gravel is grey-tan — and Mars is the same dirt and gravel to a tyre but red
+ * to the eye. Mixed rather than replaced, so tarmac, gravel and dirt still read
+ * as three different things on a red road.
+ */
+const GROUND_TINT: Record<string, [number, number]> = {
+  mars: [0xb45a32, 0.6],
 };
 
 /**

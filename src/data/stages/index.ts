@@ -549,6 +549,7 @@ const scrubbedFlats: StageDef = {
 };
 
 import { GENERATED_STAGES } from './generated.js';
+import { redPlanet } from './mars.js';
 
 /**
  * Hand-authored stages first, then generated ones.
@@ -862,6 +863,7 @@ export const STAGES: StageDef[] = [
   scrubbedFlats,
   grandTraverse,
   coldwaterPass,
+  redPlanet,
 ];
 
 export const stageById = (id: string): StageDef => {

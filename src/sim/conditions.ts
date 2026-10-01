@@ -12,7 +12,7 @@
 import type { Surface, SurfaceId } from './surfaces.js';
 
 export type TimeOfDay = 'dawn' | 'day' | 'dusk' | 'night';
-export type Weather = 'clear' | 'overcast' | 'rain' | 'fog' | 'snowfall';
+export type Weather = 'clear' | 'overcast' | 'rain' | 'fog' | 'snowfall' | 'dust';
 
 export interface Conditions {
   timeOfDay: TimeOfDay;
@@ -34,6 +34,9 @@ const WETNESS: Record<Weather, number> = {
   rain: 1,
   fog: 0.2,
   snowfall: 0.55,
+  // Not water, but a film of fine dust on the road does the same thing to a
+  // tyre on a hard surface, and nearly nothing to one that was already loose.
+  dust: 0.25,
 };
 
 /**
@@ -110,6 +113,12 @@ export function visibility(conditions: Conditions): Visibility {
       near = 75;
       far = 220;
       break;
+    // A dust storm is fog you can see moving: closer than snow, not as total
+    // as a real fog bank, because wind thins it in gusts.
+    case 'dust':
+      near = 20;
+      far = 82;
+      break;
     case 'clear':
       break;
   }
@@ -135,6 +144,7 @@ export function ambientTemperature(conditions: Conditions): number {
     rain: -0.1,
     fog: -0.05,
     snowfall: -0.25,
+    dust: 0,
   };
   return Math.min(Math.max(byTime[conditions.timeOfDay] + byWeather[conditions.weather], 0), 1);
 }
@@ -157,6 +167,7 @@ export function visibilityPenalty(conditions: Conditions): number {
     rain: 0.4,
     fog: 1,
     snowfall: 0.6,
+    dust: 0.85,
   };
   return 1 + dark * 0.1 + murk[conditions.weather] * 0.09;
 }
@@ -165,6 +176,7 @@ export function visibilityPenalty(conditions: Conditions): number {
 export function describeConditions(conditions: Conditions): string {
   const time = conditions.timeOfDay[0]!.toUpperCase() + conditions.timeOfDay.slice(1);
   if (conditions.weather === 'clear') return time;
-  const weather = conditions.weather === 'snowfall' ? 'Snow' : conditions.weather;
+  const weather =
+    conditions.weather === 'snowfall' ? 'Snow' : conditions.weather === 'dust' ? 'Dust storm' : conditions.weather;
   return `${time} · ${weather[0]!.toUpperCase()}${weather.slice(1)}`;
 }

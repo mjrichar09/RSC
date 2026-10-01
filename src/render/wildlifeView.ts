@@ -7,7 +7,9 @@
  * warning the player gets, so it has to be visible in a glance, at 130 km/h,
  * in the rain.
  *
- * Two animals, built separately. A sheep used to be the deer's boxes at two
+ * Four figures, built separately: a deer and a sheep, and on Mars a rover and
+ * one of the swarm, which run through the same state machine with different
+ * numbers. A sheep used to be the deer's boxes at two
  * thirds scale, which made it a small deer — and the two cost very different
  * amounts to hit, so they have to be told apart by *shape*, not only by size
  * and colour. A deer is long-legged and narrow with its head carried high; a
@@ -16,7 +18,7 @@
  */
 
 import * as THREE from 'three';
-import type { Animal } from '../sim/wildlife.js';
+import type { Animal, AnimalKind } from '../sim/wildlife.js';
 import type { Vec3 } from '../sim/math.js';
 import { ball, capsule, cone, merge, place, rod } from './shapes.js';
 
@@ -49,10 +51,32 @@ interface Figure {
   coat: THREE.MeshStandardMaterial;
 }
 
+/** A rover: white and grey, brighter with the mast up and looking. */
+const ROVER = 0xcfcac0;
+const ROVER_ALERT = 0xf3f0e8;
+const ROVER_DARK = 0x3a3a3e;
+const FOIL = 0xc99a3a;
+
+/** The swarm: green, and lit from inside so it reads against red ground. */
+const ALIEN = 0x5fc24a;
+const ALIEN_ALERT = 0x9cff6e;
+const EYE = 0x111214;
+
+/** Coat colour calm and alert, by species. */
+const COAT: Record<AnimalKind, [number, number]> = {
+  deer: [HIDE, HIDE_ALERT],
+  sheep: [WOOL, WOOL_ALERT],
+  rover: [ROVER, ROVER_ALERT],
+  alien: [ALIEN, ALIEN_ALERT],
+};
+
+const KINDS: readonly AnimalKind[] = ['deer', 'sheep', 'rover', 'alien'];
+
 interface Slot {
   root: THREE.Group;
-  deer: Figure;
-  sheep: Figure;
+  figures: Record<AnimalKind, Figure>;
+  /** Which figure it last showed, for a reel frame that does not say. */
+  kind: AnimalKind;
 }
 
 const smooth = (color: number, roughness = 0.85) =>
@@ -144,13 +168,87 @@ function sheepGeometry() {
   return { wool, legs, face, topknot };
 }
 
+/**
+ * A small Mars rover, about two metres long, nose along +Z.
+ *
+ * Six wheels on rocker-bogies and a mast with a camera head. The mast is the
+ * "head": folded down along the deck while it is busy, up and looking once it
+ * has seen the car — the same tell a deer gives, in a shape nobody mistakes
+ * for one.
+ */
+function roverGeometry() {
+  const box = (w: number, h: number, d: number) => new THREE.BoxGeometry(w, h, d);
+  const body = merge([
+    place(box(1.25, 0.42, 1.75), { at: [0, 0.86, 0] }),
+    // The power unit, angled off the back.
+    place(rod(0.16, 0.16, 0.6), { at: [0, 0.98, -1.0], turn: [1.1, 0, 0] }),
+    // A dish on the deck.
+    place(rod(0.26, 0.05, 0.08), { at: [0.32, 1.12, -0.35], turn: [0.3, 0, 0.2] }),
+  ]);
+  const foil = merge([place(box(1.1, 0.06, 1.55), { at: [0, 1.1, 0] })]);
+  const running = merge([
+    ...[0.82, -0.82].flatMap((x) =>
+      [0.72, 0, -0.72].map((z) => place(rod(0.22, 0.22, 0.2), { at: [x, 0.24, z], turn: [0, 0, Math.PI / 2] })),
+    ),
+    // Rockers and bogies: a bar down each side and a strut to each wheel.
+    ...[0.68, -0.68].flatMap((x) => [
+      place(box(0.07, 0.07, 1.6), { at: [x, 0.56, 0] }),
+      ...[0.72, 0, -0.72].map((z) => place(rod(0.035, 0.035, 0.36), { at: [x + Math.sign(x) * 0.06, 0.4, z] })),
+    ]),
+  ]);
+  // In the head group's frame, which pivots at the front of the deck.
+  const mast = merge([place(rod(0.05, 0.06, 0.85), { at: [0, 0.42, 0] })]);
+  const camera = merge([
+    place(box(0.36, 0.16, 0.2), { at: [0, 0.9, 0.04] }),
+    place(rod(0.045, 0.045, 0.06), { at: [0.09, 0.9, 0.16], turn: [Math.PI / 2, 0, 0] }),
+    place(rod(0.045, 0.045, 0.06), { at: [-0.09, 0.9, 0.16], turn: [Math.PI / 2, 0, 0] }),
+  ]);
+  return { body, foil, running, mast, camera };
+}
+
+/**
+ * One of the swarm: a small green figure with a big head, hovering.
+ *
+ * Built to be read in a group from forty metres — a bright blob with two dark
+ * eyes — rather than studied. The head bows while it is idle and comes up to
+ * look at the car, which is the tell every animal here gives.
+ */
+function alienGeometry() {
+  const body = merge([
+    place(capsule(0.16, 0.22), { at: [0, 0.55, 0] }),
+    place(capsule(0.04, 0.26), { at: [0.2, 0.55, 0.02], turn: [0, 0, 0.5] }),
+    place(capsule(0.04, 0.26), { at: [-0.2, 0.55, 0.02], turn: [0, 0, -0.5] }),
+    place(cone(0.16, 0.28), { at: [0, 0.26, 0], turn: [Math.PI, 0, 0] }),
+  ]);
+  // In the head group's frame, which pivots at the neck.
+  const head = merge([
+    place(ball(0.25), { at: [0, 0.17, 0.04], size: [1, 0.85, 1.05] }),
+    place(rod(0.012, 0.012, 0.22), { at: [0.1, 0.42, 0], turn: [0, 0, -0.35] }),
+    place(rod(0.012, 0.012, 0.22), { at: [-0.1, 0.42, 0], turn: [0, 0, 0.35] }),
+    place(ball(0.04), { at: [0.14, 0.52, 0] }),
+    place(ball(0.04), { at: [-0.14, 0.52, 0] }),
+  ]);
+  const eyes = merge([
+    place(ball(0.075), { at: [0.1, 0.2, 0.24], size: [1, 1.45, 0.6], turn: [0, 0, -0.35] }),
+    place(ball(0.075), { at: [-0.1, 0.2, 0.24], size: [1, 1.45, 0.6], turn: [0, 0, 0.35] }),
+  ]);
+  return { body, head, eyes };
+}
+
 export class WildlifeView {
   readonly group = new THREE.Group();
   private readonly slots: Slot[] = [];
+  /** Seconds, for the swarm's hover. Advanced by `update`, never by the clock. */
+  private clock = 0;
 
   constructor(parent: THREE.Object3D) {
     const d = deerGeometry();
     const s = sheepGeometry();
+    const r = roverGeometry();
+    const a = alienGeometry();
+    const roverDark = smooth(ROVER_DARK, 0.5);
+    const foil = new THREE.MeshStandardMaterial({ color: FOIL, roughness: 0.35, metalness: 0.6 });
+    const eye = smooth(EYE, 0.25);
     const pale = smooth(PALE);
     const dark = smooth(DARK, 0.6);
     const antler = smooth(ANTLER, 0.7);
@@ -194,11 +292,46 @@ export class WildlifeView {
       sheepRoot.add(sheepHead);
       root.add(sheepRoot);
 
+      // --- rover ---
+      const roverRoot = new THREE.Group();
+      const shell = smooth(ROVER, 0.55);
+      mesh(r.body, shell, roverRoot);
+      mesh(r.foil, foil, roverRoot);
+      mesh(r.running, roverDark, roverRoot);
+      const roverHead = new THREE.Group();
+      roverHead.position.set(0, 1.08, 0.62);
+      mesh(r.mast, roverDark, roverHead);
+      mesh(r.camera, shell, roverHead);
+      roverRoot.add(roverHead);
+      root.add(roverRoot);
+
+      // --- one of the swarm ---
+      const alienRoot = new THREE.Group();
+      const skin = smooth(ALIEN, 0.45);
+      // Lit from inside: green on red ground in a dust storm is otherwise the
+      // first thing to disappear.
+      skin.emissive.setHex(0x1f6a12);
+      mesh(a.body, skin, alienRoot);
+      const alienHead = new THREE.Group();
+      alienHead.position.set(0, 0.78, 0);
+      mesh(a.head, skin, alienHead);
+      mesh(a.eyes, eye, alienHead);
+      alienRoot.add(alienHead);
+      // Larger than life: at a metre tall a swarm read as green specks from
+      // the race camera, which is a hazard nobody can see.
+      alienRoot.scale.setScalar(1.7);
+      root.add(alienRoot);
+
       root.visible = false;
       this.slots.push({
         root,
-        deer: { root: deerRoot, head: deerHead, coat: hide },
-        sheep: { root: sheepRoot, head: sheepHead, coat: fleece },
+        figures: {
+          deer: { root: deerRoot, head: deerHead, coat: hide },
+          sheep: { root: sheepRoot, head: sheepHead, coat: fleece },
+          rover: { root: roverRoot, head: roverHead, coat: shell },
+          alien: { root: alienRoot, head: alienHead, coat: skin },
+        },
+        kind: 'deer',
       });
       this.group.add(root);
     }
@@ -207,10 +340,16 @@ export class WildlifeView {
   }
 
   /** Show one species in a slot and hand back its parts to pose. */
-  private show(slot: Slot, sheep: boolean): Figure {
-    slot.deer.root.visible = !sheep;
-    slot.sheep.root.visible = sheep;
-    return sheep ? slot.sheep : slot.deer;
+  private show(slot: Slot, kind: AnimalKind): Figure {
+    for (const k of KINDS) slot.figures[k].root.visible = k === kind;
+    slot.kind = kind;
+    return slot.figures[kind];
+  }
+
+  /** The swarm hovers; everything else stands on the ground. */
+  private hover(slot: Slot, index: number): void {
+    const alien = slot.figures.alien.root;
+    alien.position.y = slot.kind === 'alien' ? 0.25 + 0.12 * Math.sin(this.clock * 3.1 + index * 1.7) : 0;
   }
 
   /**
@@ -237,18 +376,20 @@ export class WildlifeView {
       slot.root.visible = true;
       // The reel does not record species; the slot still shows whichever it
       // showed live, which is the right animal because slots never change hands.
-      const figure = animal.kind ? this.show(slot, animal.kind === 'sheep') : slot.sheep.root.visible ? slot.sheep : slot.deer;
+      const figure = this.show(slot, (animal.kind as AnimalKind | undefined) ?? slot.kind);
+      this.hover(slot, i);
       slot.root.position.set(animal.position.x, animal.position.y, animal.position.z);
       slot.root.rotation.set(0, animal.yaw, animal.roll, 'YZX');
       // Head up. An animal in the second before a crash has seen the car; a
       // grazing deer in a crash replay would be the wrong picture even if the
       // reel recorded the pose, which it deliberately does not.
       figure.head.rotation.x = -0.15;
-      figure.coat.color.setHex(figure === slot.sheep ? WOOL_ALERT : HIDE_ALERT);
+      figure.coat.color.setHex(COAT[slot.kind][1]);
     }
   }
 
-  update(animals: readonly Animal[]): void {
+  update(animals: readonly Animal[], dt = 0): void {
+    this.clock += dt;
     for (let i = 0; i < this.slots.length; i++) {
       const slot = this.slots[i]!;
       const animal = animals[i];
@@ -262,8 +403,8 @@ export class WildlifeView {
       // frame rather than once: the pool is reused across stage loads, and a
       // slot that kept the last stage's animal would be a sheep where a deer
       // stands.
-      const sheep = animal.kind === 'sheep';
-      const figure = this.show(slot, sheep);
+      const figure = this.show(slot, animal.kind);
+      this.hover(slot, i);
       slot.root.position.set(animal.position.x, animal.position.y, animal.position.z);
       // Yaw then roll: a struck animal tumbles about its own long axis and ends
       // up lying on its side, which is most of what makes the aftermath read as
@@ -276,7 +417,7 @@ export class WildlifeView {
       // verge at night — and night is exactly when this matters.
       const alert = animal.state !== 'grazing';
       figure.head.rotation.x = alert ? -0.15 : 1.15;
-      figure.coat.color.setHex(sheep ? (alert ? WOOL_ALERT : WOOL) : alert ? HIDE_ALERT : HIDE);
+      figure.coat.color.setHex(COAT[animal.kind][alert ? 1 : 0]);
     }
   }
 

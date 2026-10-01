@@ -96,6 +96,8 @@ const BY_WEATHER: Record<Weather, Partial<Grade>> = {
   // colour. It is the one grade that genuinely takes the stage away from you.
   fog: { gain: [0.95, 0.96, 0.98], lift: [0.06, 0.065, 0.07], saturation: 0.6, contrast: 0.78 },
   snowfall: { gain: [0.98, 1.0, 1.04], lift: [0.03, 0.034, 0.04], saturation: 0.72, contrast: 0.9 },
+  // A dust storm: everything goes the colour of the dust and loses its edges.
+  dust: { gain: [1.06, 0.94, 0.8], lift: [0.05, 0.03, 0.012], saturation: 0.7, contrast: 0.84 },
 };
 
 export function gradeFor(conditions: Conditions): Grade {

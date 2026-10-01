@@ -32,7 +32,48 @@ export type AnimalState = 'grazing' | 'alert' | 'bolting' | 'struck' | 'gone';
  * and the one thing worse than hitting a sheep is swerving off a mountain to
  * avoid one.
  */
-export type AnimalKind = 'deer' | 'sheep';
+export type AnimalKind = 'deer' | 'sheep' | 'rover' | 'alien';
+
+/**
+ * How each kind behaves when a car comes.
+ *
+ * Two of these are not animals. On Mars the deer is a rover and the flock is a
+ * swarm, and they run through exactly the same state machine — placed by the
+ * seed, alert before they move, struck as an event rather than a body — with
+ * different numbers in it.
+ */
+interface Temperament {
+  /** Crossing speed once it goes, m/s. */
+  speed: number;
+  /**
+   * How readily it goes, as a multiplier on the panic roll. A deer bolts on a
+   * third of approaches and only in front of something fast; a rover is on its
+   * own errand and starts across the moment it is alert, at any car speed.
+   */
+  eagerness: number;
+  /** Whether it crosses regardless of how fast the car is coming. */
+  indifferent: boolean;
+  /** Whether it stops on the far side instead of leaving the scene. */
+  stays: boolean;
+  /** How far ahead it notices the car, metres. */
+  notice: number;
+  /** How close the car has to be before it may set off, metres. */
+  window: number;
+}
+
+const TEMPERAMENT: Record<AnimalKind, Temperament> = {
+  // 7.5 m/s: a deer's bolt, which the strike calibration was measured with.
+  deer: { speed: 7.5, eagerness: 1, indifferent: false, stays: false, notice: 60, window: 34 },
+  sheep: { speed: 7.5, eagerness: 1, indifferent: false, stays: false, notice: 60, window: 34 },
+  // A crawl, so it is on the road for most of the approach: the hazard is in
+  // reading which way it is going and passing behind it.
+  // It sets off early — 170 m is about six seconds at stage speed — so it is
+  // in the middle of the road when the car gets there, not still on the verge.
+  rover: { speed: 2.4, eagerness: 4, indifferent: true, stays: true, notice: 170, window: 170 },
+  // Quick, and they scatter: a swarm crossing is a flicker of green across the
+  // road rather than a wall.
+  alien: { speed: 11, eagerness: 1.6, indifferent: false, stays: false, notice: 60, window: 40 },
+};
 
 export interface Animal {
   kind: AnimalKind;
@@ -95,6 +136,12 @@ export interface FlockSpec {
 export interface WildlifeOptions {
   /** How many animals per kilometre of stage. */
   perKm?: number;
+  /** What is scattered along the verges: deer, unless the stage says otherwise. */
+  scatter?: AnimalKind;
+  /** Stretches of road, [from, to] in metres, where nothing is scattered. */
+  clear?: readonly (readonly [number, number])[];
+  /** Gravity for a thrown animal, m/s², positive down. The world's own. */
+  gravity?: number;
   /** Animals standing together, placed rather than scattered. */
   flocks?: readonly FlockSpec[];
   /** Deterministic stream. Placement and behaviour both draw from it. */
@@ -114,10 +161,22 @@ export const DEER_MASS = 130;
  */
 export const SHEEP_MASS = 28;
 
+/**
+ * A small scout rover, kg. Heavier than a deer, and it does not give: a strike
+ * is an accident of the same order, which is fair because it is the slowest
+ * thing in the game to get out of the way of and the easiest to see.
+ */
+export const ROVER_MASS = 180;
+
+/** One of the swarm, kg. Lighter than a sheep; it is the swerve that hurts. */
+export const ALIEN_MASS = 14;
+
 /** What each species weighs, for the strike. */
 export const ANIMAL_MASS: Record<AnimalKind, number> = {
   deer: DEER_MASS,
   sheep: SHEEP_MASS,
+  rover: ROVER_MASS,
+  alien: ALIEN_MASS,
 };
 /**
  * How much harder a strike loads the car's front than its momentum change
@@ -207,17 +266,13 @@ export function strikeImpulse(speed: number, kind: AnimalKind = 'deer'): number 
 
 /** Upward kick given to a struck animal, m/s: enough to clear the bonnet. */
 const LAUNCH_UP = 3.5;
-/** Gravity for the throw, m/s². The world's own, since it is the same world. */
-const GRAVITY = 9.81;
+/** Gravity for the throw, m/s², unless the world says otherwise. */
+const EARTH_GRAVITY = 9.81;
 /** How fast a landed animal slides to a stop, per second. */
 const GROUND_DRAG = 3.2;
 
-/** How far ahead a deer notices the car and lifts its head, metres. */
-const ALERT_RANGE = 60;
 /** Distance at which a bolt would be pointless — it has already been passed. */
 const PASSED_BY = 8;
-/** How fast it crosses, metres per second. */
-const BOLT_SPEED = 7.5;
 /**
  * The strike box, in car-local metres: the car's own footprint plus the deer's
  * body. Half the car is 0.85 m wide and 2.0 m long; a deer is about 0.7 m
@@ -225,6 +280,8 @@ const BOLT_SPEED = 7.5;
  */
 const HIT_HALF_WIDTH = 1.5;
 const HIT_HALF_LENGTH = 2.7;
+/** How far above or below the car's centre an animal can be and still be hit, metres. */
+const HIT_HEIGHT = 2.2;
 
 /** Grazing offset from the centreline, as a multiple of the road half-width. */
 const VERGE_OFFSET = 1.45;
@@ -239,10 +296,13 @@ export class Wildlife {
   readonly animals: Animal[] = [];
   private readonly random: () => number;
   private readonly spline: Spline;
+  private readonly gravity: number;
 
   constructor(spline: Spline, length: number, options: WildlifeOptions = {}) {
     this.spline = spline;
     this.random = options.random ?? (() => 0.5);
+    this.gravity = options.gravity ?? EARTH_GRAVITY;
+    const scatter = options.scatter ?? 'deer';
     const perKm = options.perKm ?? 3;
     for (const flock of options.flocks ?? []) this.placeFlock(flock);
     const count = Math.max(0, Math.round((length / 1000) * perKm));
@@ -255,6 +315,8 @@ export class Wildlife {
       // Never in the first or last stretch: the line off the start and the run
       // to the finish are where a surprise would feel arbitrary.
       if (distance < 60 || distance > length - 60) continue;
+      // Nor anywhere the stage asks to be left alone.
+      if (options.clear?.some(([from, to]) => distance >= from && distance <= to)) continue;
 
       const side: -1 | 1 = this.random() < 0.5 ? -1 : 1;
       const sample = this.spline.at(distance);
@@ -263,7 +325,7 @@ export class Wildlife {
       // up is a tell you can read at a glance.
       const yaw = Math.atan2(sample.left.x * side, sample.left.z * side);
       this.animals.push({
-        kind: 'deer',
+        kind: scatter,
         distance,
         side,
         state: 'grazing',
@@ -333,10 +395,13 @@ export class Wildlife {
       const ahead = animal.distance - carDistance;
       const sample = this.spline.at(animal.distance);
 
+      const temper = TEMPERAMENT[animal.kind];
       if (animal.state === 'bolting') {
         // From where it stood to the far verge, at a steady pace.
         const far = sample.width * VERGE_OFFSET;
-        animal.crossed += (BOLT_SPEED * dt) / Math.max(animal.rest + far, 1);
+        // Something that stays stops on the far verge and stands there.
+        const end = temper.stays ? 1 : 1.25;
+        animal.crossed = Math.min(animal.crossed + (temper.speed * dt) / Math.max(animal.rest + far, 1), end);
         const offset = animal.rest - (animal.rest + far) * animal.crossed;
         animal.position = add(sample.position, scale(sample.left, offset * animal.side));
         animal.yaw = Math.atan2(-sample.left.x * animal.side, -sample.left.z * animal.side);
@@ -344,7 +409,7 @@ export class Wildlife {
         continue;
       }
 
-      if (ahead < -PASSED_BY || ahead > ALERT_RANGE) continue;
+      if (ahead < -PASSED_BY || ahead > temper.notice) continue;
 
       if (animal.state === 'grazing') {
         // Head up, facing the road. This lasts as long as it takes the car to
@@ -357,13 +422,13 @@ export class Wildlife {
 
       // Alert: the roll. Weighted by closing speed, and only while the car is
       // close enough that bolting would put it in the way.
-      if (ahead > 0 && ahead < 34) {
+      if (ahead > 0 && ahead < temper.window) {
         // About a third of deer bolt in front of a car arriving at racing
         // speed, and the ones that do give roughly a second of warning. Higher
         // than that and every animal on the stage becomes a wall; lower and the
         // tell stops meaning anything.
-        const panic = Math.min(Math.max(carSpeed - 8, 0) / 28, 1);
-        if (this.random() < panic * 0.35 * dt) animal.state = 'bolting';
+        const panic = temper.indifferent ? 1 : Math.min(Math.max(carSpeed - 8, 0) / 28, 1);
+        if (this.random() < panic * 0.35 * temper.eagerness * dt) animal.state = 'bolting';
       }
     }
   }
@@ -396,6 +461,10 @@ export class Wildlife {
         z: animal.position.z - carPosition.z,
       });
       if (Math.abs(local.x) > HIT_HALF_WIDTH || Math.abs(local.z) > HIT_HALF_LENGTH) continue;
+      // And at the same height. The footprint test is flat, so a car flying
+      // over a rover sixteen metres below it on Red Planet's jump "hit" it in
+      // mid-air and lost 5 m/s of speed to an animal it never touched.
+      if (Math.abs(animal.position.y - carPosition.y) > HIT_HEIGHT) continue;
 
       const speed = Math.hypot(carVelocity.x, carVelocity.z);
       animal.state = 'struck';
@@ -445,7 +514,7 @@ export class Wildlife {
       // Flat on its side, reached quickly and then held.
       animal.roll += (Math.PI / 2 - animal.roll) * Math.min(6 * dt, 1);
     } else {
-      animal.velocity.y -= GRAVITY * dt;
+      animal.velocity.y -= this.gravity * dt;
       animal.roll += animal.spin * dt;
     }
     animal.position.x += animal.velocity.x * dt;

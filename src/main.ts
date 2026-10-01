@@ -73,6 +73,7 @@ import { RaceHud } from './ui/raceHud.js';
 import { DamagePanel } from './ui/damagePanel.js';
 import { DebrisView } from './render/debrisView.js';
 import { WildlifeView } from './render/wildlifeView.js';
+import { RocketView } from './render/rocket.js';
 import { Garage } from './ui/garage.js';
 import { MultiplayerPanel } from './ui/multiplayer.js';
 import { UpdateBanner, UpdateWatch } from './ui/update.js';
@@ -222,6 +223,8 @@ async function main(): Promise<void> {
   /** Reused for the screen-space projection each frame. */
   const SCRATCH = new THREE.Vector3();
   const wildlifeView = new WildlifeView(scene);
+  /** The launch beside Red Planet's grid; hidden on every stage without one. */
+  const rocketView = new RocketView(scene);
   ghostView.visible = false;
   wrView.visible = false;
   // With a soft layer of its own for dust, powder, mist and smoke.
@@ -685,7 +688,7 @@ const params = new URLSearchParams(location.search);
     // Conditions light the scene, set the fog, and decide how much the
     // headlights matter — which is what finally gives the `lights` component
     // something to do.
-    applyConditions(variant.conditions);
+    applyConditions(variant.conditions, def.biome);
     // The colour of the light. Set with the conditions, not with the weather
     // effects: turning the windscreen effect off is asking not to be blinded,
     // not asking for dusk to look like midday.
@@ -719,6 +722,16 @@ const params = new URLSearchParams(location.search);
     // Built after the world, and given the world's own marker poles: what is
     // drawn lying flat has to be exactly what the car knocked over.
     stageView = buildStageView(stage, world.markers!);
+    // The pad is the stage's; the view only stands the rocket on it, turned
+    // so that it leans away from the road as it climbs.
+    if (stage.launchPad && def.launch) {
+      const at = stage.spline.at(def.launch.at);
+      const awayX = at.left.x * def.launch.side;
+      const awayZ = at.left.z * def.launch.side;
+      rocketView.attach(stage.launchPad, Math.atan2(awayZ, -awayX));
+    } else {
+      rocketView.attach(null);
+    }
     scene.add(stageView.group);
     applyCarCondition();
     race = new Race(stage, variant.medals);
@@ -1692,6 +1705,7 @@ const params = new URLSearchParams(location.search);
     const scale = window.innerHeight / (2 * camera.effectiveViewSize);
     particles.setScale(scale);
     impacts.setScale(scale);
+    rocketView.setScale(scale);
   };
   window.addEventListener('resize', onResize);
   onResize();
@@ -1822,7 +1836,24 @@ const params = new URLSearchParams(location.search);
     // The crowd gets out of the way. Driven from the car's drawn position, so
     // people react to where it looks like it is rather than to a fixed step.
     stageView?.crowd.update(dt, transform.position);
-    wildlifeView.update(world.wildlife?.animals ?? []);
+    wildlifeView.update(world.wildlife?.animals ?? [], dt);
+    // The rocket's clock is the race's: negative through the countdown, zero
+    // on the green. Standing idle behind a menu, or while a network grid is
+    // held with the gantry dark. The race is asked first: a harness seek starts
+    // the race without ever advancing the lights, which are left "counting",
+    // and read first they held the rocket on the pad in every screenshot.
+    if (rocketView.visible) {
+      const untilGreen = lights.untilGreen;
+      const t =
+        attract || !race
+          ? -10
+          : race.phase !== 'staging' || lights.released
+            ? race.time
+            : untilGreen !== null
+              ? -untilGreen
+              : -10;
+      rocketView.update(t, dt);
+    }
 
     // The attract lap: the player's own car, posed rather than simulated.
     let focus = transform.position;
@@ -2568,6 +2599,9 @@ const params = new URLSearchParams(location.search);
           const p = car.vehicle.body.translation();
           return [+p.x.toFixed(2), +p.z.toFixed(2)];
         }),
+        // The launch beside the grid, where there is one: the clock it was
+        // last posed at and how high that put it.
+        rocket: rocketView.visible ? rocketView.pose : null,
         net: session
           ? {
               role: session.role,

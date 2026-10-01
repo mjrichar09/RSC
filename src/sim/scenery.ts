@@ -191,6 +191,13 @@ export const DRESSING: Record<string, SceneryRecipe[]> = {
     { kind: 'boulder', band: 'verge', density: 24, size: [0.18, 0.45], color: 0xb2ada4, colorB: 0x8d887f },
     { kind: 'tuft', band: 'verge', density: 14, size: [0.25, 0.5], color: 0x74804f },
   ],
+  // Mars: rock, and nothing else, ever. Rust-red boulders scattered to the
+  // horizon and a litter of small stones at the road's edge.
+  mars: [
+    { kind: 'boulder', band: 'far', density: 18, size: [0.8, 3.0], color: 0x8a3f24, colorB: 0x6e321d },
+    { kind: 'boulder', band: 'near', density: 16, size: [0.35, 1.0], color: 0x9c4a2a, colorB: 0x7d3a20 },
+    { kind: 'boulder', band: 'verge', density: 22, size: [0.16, 0.42], color: 0xa5583a, colorB: 0x86452c },
+  ],
   // Wind-bent pines and dune grass, thinning toward the water.
   coast: [
     { kind: 'conifer', band: 'far', density: 9, size: [0.6, 1.1], color: 0x3d5a3c, colorB: 0x4a6440 },

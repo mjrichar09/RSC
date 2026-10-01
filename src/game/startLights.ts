@@ -107,6 +107,14 @@ export class StartLights {
     return this.phase === 'go' || this.phase === 'done';
   }
 
+  /**
+   * Seconds until the green while counting down, or null in any other phase.
+   * The launch beside Red Planet's grid fires its engines on this clock.
+   */
+  get untilGreen(): number | null {
+    return this.phase === 'counting' ? Math.max(STEP * 4 - this.elapsed, 0) : null;
+  }
+
   /** Green, and for how long — the HUD flashes for as long as this is above 0. */
   get greenFor(): number {
     return this.phase === 'go' ? Math.max(GREEN_FOR - this.elapsed, 0) : 0;

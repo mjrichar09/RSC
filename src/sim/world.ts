@@ -308,7 +308,12 @@ export class SimWorld {
     this.baseSurface = options.baseSurface ?? 'tarmac';
     this.patches = options.patches ?? [];
 
-    this.world = new RAPIER.World({ x: 0, y: SIM.gravity, z: 0 });
+    // A stage can bring its own gravity: Mars is about 0.38 of Earth's.
+    this.world = new RAPIER.World({
+      x: 0,
+      y: options.stage?.def.gravity !== undefined ? -options.stage.def.gravity : SIM.gravity,
+      z: 0,
+    });
     this.world.integrationParameters.dt = this.dt;
     this.stage = options.stage ?? null;
 
@@ -418,6 +423,9 @@ export class SimWorld {
             // places on every load — the same rule its hazards follow.
             random: stageStream(this.stage.def.id),
             ...(this.stage.def.flocks ? { flocks: this.stage.def.flocks } : {}),
+            ...(this.stage.def.fauna ? { scatter: this.stage.def.fauna } : {}),
+            ...(this.stage.def.faunaClear ? { clear: this.stage.def.faunaClear } : {}),
+            ...(this.stage.def.gravity !== undefined ? { gravity: this.stage.def.gravity } : {}),
           })
         : null;
     this.events = wantsDamage ? new RAPIER.EventQueue(true) : null;
