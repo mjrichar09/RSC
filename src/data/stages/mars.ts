@@ -1,21 +1,24 @@
 /**
  * Red Planet: a stage on Mars.
  *
- * The difference is gravity, and almost everything about the stage follows
- * from it. At 3.71 m/s² — 0.38 of Earth's — the car weighs a third of what it
- * did, and a tyre's grip is its load, so it corners at about sqrt(0.38) of the
- * speed and stops in more than twice the distance. The corners are wide
- * sweepers for that reason: a hairpin here would be a crawl.
+ * The difference is gravity, in the air. At 3.71 m/s² — 0.38 of Earth's — a
+ * car off a crest flies two and a half times as long. On the ground it is
+ * given its Earth weight (`groundGravity`): with only Mars's, a tyre's grip is
+ * a third of what it was, and the car spun its wheels down every straight and
+ * cornered as if on ice; given the grip back without the weight, it went round
+ * the first hairpin on two wheels.
  *
- * And a car leaves the ground wherever v² / R > g, which on Mars is almost
- * anywhere. One place is built to use that on purpose: a kicker at the end of
- * a long straight and a crater the road dives into under the car.
+ * The stage is a story in that air. An S and a boulder chicane on the plain,
+ * a switchback climb up a mesa, three moon-hops across the top — two-metre
+ * bumps that are jumps here — and then the mesa's edge, a kicker, and a crater
+ * the road dives into under the car. The swarm is on the crater floor, a
+ * rockfall on the way out, and craters in the plain on every side.
  *
  * ## The jump
  *
  * Measured, after calculating it went wrong three times. Off the 14° lip the
- * car arrives flat out at 143 km/h — that is what the run-up allows, and the
- * AI takes it flat too — and flies about 225 m over six seconds. The road
+ * car arrives flat out at 150 km/h — that is what the run-up allows, and the
+ * AI takes it flat too — and flies about 216 m over six seconds. The road
  * under it is built from that flight as recorded (`flight`, below), not from
  * a parabola: the car launches at its own angle rather than the lip's, and
  * bleeds speed to drag in the air, and a road drawn to the textbook arc had it
@@ -39,9 +42,10 @@
  *   land tail first on a road falling at 20°, for 41 000 N·s and a wheel off.
  *
  * Measured, with the throttle held back on the run-up to stand in for a
- * player who is not flat out: 106 km/h at the lip flies 58 m, 122 flies 102 m,
- * 143 flies 224 m with one 32 m rebound off the landing, and all three finish
- * with the front panel at 96%. Nothing is scattered on the road from the
+ * player who is not flat out: 104 km/h at the lip flies 52 m, 121 flies 88 m,
+ * 139 flies 154 m, and flat out (150) flies 216 m in 5.7 s — every one a soft
+ * landing, and no rebound, because the car has its Earth weight the moment a
+ * wheel is down. Nothing is scattered on the road from the
  * run-up to 150 m past the runout (`faunaClear`): a rover the seed put under
  * the flight was hit by every car that came down short.
 
@@ -84,8 +88,12 @@ function walk(legs: Leg[], height: (d: number) => number, step: (d: number) => n
     while (d < end - 1e-6) {
       // Never a sliver at the end of a leg: a last step of 0.2 m put two
       // control points on top of each other and bunched the spline's samples.
-      let ds = Math.min(step(d), end - d);
-      if (end - d - ds < step(d) * 0.5) ds = end - d;
+      // On an arc, never more than a quarter of its radius at a time: a 22 m
+      // step round a 30 m hairpin is 43° per control point, and the spline cut
+      // the corner so badly that the AI went off the side of the mesa there.
+      const here = 'arc' in leg ? Math.min(step(d), leg.radius * 0.25) : step(d);
+      let ds = Math.min(here, end - d);
+      if (end - d - ds < here * 0.5) ds = end - d;
       if ('straight' in leg) {
         x += Math.sin(heading) * ds;
         z += Math.cos(heading) * ds;
@@ -108,40 +116,59 @@ function walk(legs: Leg[], height: (d: number) => number, step: (d: number) => n
 const DEG = Math.PI / 180;
 
 const LEGS: Leg[] = [
-  // The start, with the launch pad off to the left.
+  // 0: the start, with the launch pad off to the left.
   { straight: 160, width: 8.0, surface: 'dirt' },
-  // Real corners, if slow ones: under 160 m of radius is what the co-driver
-  // and the corner boards call. Drawn first as 260-320 m sweepers, the stage
-  // had no corners at all, which is a stage the co-driver says nothing about.
-  { arc: 50 * DEG, radius: 130, width: 7.6, surface: 'dirt' },
-  { straight: 150, width: 7.4, surface: 'gravel' },
-  { arc: -35 * DEG, radius: 120, width: 7.6, surface: 'dirt' },
-  { straight: 60, width: 7.6, surface: 'dirt' },
-  // Deliberately gentle: its exit speed is the lip speed, and the landing is
-  // fitted to the flight that speed produces.
-  { arc: -80 * DEG, radius: 260, width: 7.6, surface: 'dirt' },
-  // The run-up, the lip, the flight and the landing: one straight.
-  { straight: 960, width: 8.5, surface: 'dirt' },
-  // The crater floor, and the swarm. A sweeper, not a corner: the car arrives
-  // here at 120 km/h straight off the landing, and on Mars slowing for a
-  // 140 m corner takes 180 m of braking the bounce off the landing does not
-  // leave — drawn that way, the AI went into the wall.
-  { arc: -70 * DEG, radius: 280, width: 7.8, surface: 'gravel' },
-  { straight: 200, width: 7.6, surface: 'dirt' },
-  { arc: 60 * DEG, radius: 120, width: 7.6, surface: 'dirt' },
+  // 1-3: an S off the line, and into the boulder field.
+  { arc: 60 * DEG, radius: 90, width: 7.4, surface: 'dirt' },
+  { straight: 70, width: 7.2, surface: 'gravel' },
+  { arc: -95 * DEG, radius: 55, width: 7.0, surface: 'gravel' },
+  // 4: the boulder chicane — rocks left and right on the road.
   { straight: 140, width: 7.6, surface: 'dirt' },
-  { arc: -40 * DEG, radius: 130, width: 7.6, surface: 'dirt' },
+  { arc: 40 * DEG, radius: 150, width: 7.4, surface: 'dirt' },
+  // 6-10: up the face of the mesa, two hairpins in it.
+  { straight: 160, width: 7.0, surface: 'dirt' },
+  { arc: 170 * DEG, radius: 45, width: 7.6, surface: 'gravel' },
+  { straight: 140, width: 7.0, surface: 'dirt' },
+  { arc: -170 * DEG, radius: 45, width: 7.6, surface: 'gravel' },
+  { straight: 120, width: 7.2, surface: 'dirt' },
+  // 11-13: across the top, with three moon-hops on the straight.
+  { arc: 70 * DEG, radius: 200, width: 7.6, surface: 'dirt' },
+  { straight: 200, width: 7.8, surface: 'dirt' },
+  // Deliberately gentle enough to be the speed the run-up starts from: the
+  // landing is fitted to the flight it produces.
+  { arc: -60 * DEG, radius: 120, width: 7.6, surface: 'dirt' },
+  // 14: the run-up to the mesa's edge, the lip, the flight and the landing.
+  { straight: 1040, width: 8.5, surface: 'dirt' },
+  // 15: the crater floor, and the swarm. A sweeper, not a corner: the car
+  // arrives at speed straight off the landing.
+  { arc: -70 * DEG, radius: 280, width: 7.8, surface: 'gravel' },
+  { straight: 140, width: 7.6, surface: 'dirt' },
+  { arc: 80 * DEG, radius: 110, width: 7.6, surface: 'dirt' },
+  // 18: the rockfall, on one side or the other — the side is rolled per run.
+  { straight: 200, width: 7.6, surface: 'gravel' },
+  { arc: -50 * DEG, radius: 130, width: 7.6, surface: 'dirt' },
   // Long and level to the line, and past it.
-  { straight: 240, width: 8.0, surface: 'dirt' },
+  { straight: 220, width: 8.0, surface: 'dirt' },
 ];
 
 const legLength = (leg: Leg) => ('straight' in leg ? leg.straight : Math.abs(leg.arc) * leg.radius);
-/** The straight the jump is on. */
-const JUMP_LEG = 6;
+/** Where a leg starts, metres along the walk. */
+const legStart = (index: number) => LEGS.slice(0, index).reduce((sum, leg) => sum + legLength(leg), 0);
+
+/** The chicane, the climb, the hops, the jump and the rockfall, by leg. */
+const CHICANE = legStart(4);
+const CLIMB_FROM = legStart(6);
+const CLIMB_TO = legStart(11);
+const HOPS = legStart(12);
+const JUMP_LEG = 14;
+const ROCKFALL = legStart(18);
 /** How far down the jump straight the lip is: the run-up. */
 const RUN_UP = 420;
 /** Where the lip is, metres along the walk. */
-export const LIP = LEGS.slice(0, JUMP_LEG).reduce((sum, leg) => sum + legLength(leg), 0) + RUN_UP;
+export const LIP = legStart(JUMP_LEG) + RUN_UP;
+/** Height of the mesa the climb reaches and the jump leaves from, metres. */
+const MESA = 40;
+
 /** How far from the lip the intended flight touches down. */
 const LANDING = 240;
 /**
@@ -168,9 +195,9 @@ const RUNOUT = 200;
 const RIDE = 1.0;
 
 /**
- * The flight off the lip, measured: the AI's car flat out at 143 km/h, its
+ * The flight off the lip, measured: the AI's car flat out at 150 km/h, its
  * centre's height above the lip against distance past it, sampled every ten
- * metres and fitted with a cubic (worst residual 0.07 m), iterated until the
+ * metres and fitted with a cubic (worst residual 0.17 m), iterated until the
  * touchdown stopped moving. Re-measure and refit
  * whenever the kicker, the run-up or the car changes: the road under the
  * flight is only right for the flight it was fitted to.
@@ -179,12 +206,11 @@ const RIDE = 1.0;
  * a parabola from the lip's drawn angle and the speed put the touchdown 80 m
  * from where the car came down. The cubic term is the drag.
  */
-const flight = (x: number) => 1.2952 + 0.211272 * x - 0.00122308 * x * x - 5.5341e-07 * x * x * x;
-const flightSlope = (x: number) => 0.211272 - 2 * 0.00122308 * x - 3 * 5.5341e-07 * x * x;
+const flight = (x: number) => 0.9065 + 0.195794 * x - 0.00101104 * x * x - 7.5140e-07 * x * x * x;
+const flightSlope = (x: number) => 0.195794 - 2 * 0.00101104 * x - 3 * 7.5140e-07 * x * x;
 /** Clearance under the intended flight at its widest, metres. */
 const CLEARANCE = 6;
-/** Height of the plateau the run-up crosses, and of the kicker above it. */
-const PLATEAU = 15;
+/** Height of the kicker above the mesa, metres. */
 const KICKER = 5;
 
 const smooth = (t: number) => {
@@ -209,16 +235,45 @@ const smooth = (t: number) => {
  */
 const gap = (x: number) => (CLEARANCE * 4 * x * (LANDING - x)) / LANDING ** 2;
 
+/**
+ * How much of the climb is done by `d`: distance along the climb's straights,
+ * with a hairpin counting a tenth of its length. Fed through `smooth`, so the
+ * grade eases in and out at the ends.
+ */
+function climbed(d: number): number {
+  let total = 0;
+  let at = CLIMB_FROM;
+  for (let i = 6; i < 11; i++) {
+    const length = legLength(LEGS[i]!);
+    const weight = 'arc' in LEGS[i]! ? 0.1 : 1;
+    total += Math.min(Math.max(d - at, 0), length) * weight;
+    at += length;
+  }
+  return total;
+}
+
 /** Road height at a distance along the walk. */
 function height(d: number): number {
-  // A long gentle climb onto the plateau the jump is launched from.
-  if (d < LIP - 40) return PLATEAU * smooth((d - 300) / 700);
+  // Flat off the line and through the boulders.
+  if (d < CLIMB_FROM) return 0;
+  // Up the mesa on the straights, with the hairpins nearly level between
+  // them — the way Coldwater's stack is built. Climbing through them, the
+  // second hairpin sat on 10% of grade with the drop on the outside, and the
+  // AI went off the side of the mesa there every run.
+  if (d < CLIMB_TO) return MESA * smooth(climbed(d) / climbed(CLIMB_TO));
+  if (d < LIP - 40) {
+    // Three moon-hops across the top. A crest launches a car wherever
+    // v² / R > g, and at Mars gravity a bump under two metres is a jump.
+    let hop = 0;
+    for (let k = 0; k < 3; k++) hop += 1.8 * Math.exp(-(((d - (HOPS + 45 + 50 * k)) / 9) ** 2));
+    return MESA + hop;
+  }
   // The kicker: a parabola, 0.25 (14°) at the lip.
   if (d < LIP) {
     const t = (d - (LIP - 40)) / 40;
-    return PLATEAU + KICKER * t * t;
+    return MESA + KICKER * t * t;
   }
-  const top = PLATEAU + KICKER;
+  const top = MESA + KICKER;
   const x = d - LIP;
   if (x <= LANDING) return top + flight(x) - RIDE - MARGIN - gap(x);
   // The landing slope, held straight from the touchdown at the *road's* own
@@ -248,12 +303,19 @@ export const redPlanet: StageDef = {
   verge: 'gravel',
   bank: 'dirt',
   gravity: MARS_GRAVITY,
+  // Earth weight while a wheel is down: on the ground this is the car you
+  // know, and only the air is Mars. See `StageDef.groundGravity`.
+  groundGravity: 9.81,
+  // Impact craters in the plain on every side, out of reach of the road.
+  craters: { count: 80, radius: [12, 70] },
   // The heights here are exact, and the jump is fitted to them.
   terrainAmplitude: 0,
   fauna: 'rover',
-  // Nothing on the run-up, under the flight, on the landing, or in the next
-  // 150 m, where the car is still settling off the bounce at 120 km/h.
-  faunaClear: [[LIP - 150, LIP + LANDING + HOLD + RUNOUT + 150]],
+  // No rovers anywhere on the mesa, from the foot of the climb to 150 m past
+  // the landing: struck in a hairpin one knocked the car off the side, struck
+  // between the hops one cost the jump, and one under the flight was hit by
+  // every car that came down short. They live on the plain and the crater floor.
+  faunaClear: [[CLIMB_FROM - 20, LIP + LANDING + HOLD + RUNOUT + 150]],
   hazards: { kinds: ['rock'], spacing: 22 },
   // Level with the grid and just past the reach of a car that leaves the road
   // there (38.7 m, which `Stage` checks), so that the start camera, pulled
@@ -263,21 +325,36 @@ export const redPlanet: StageDef = {
   entryFee: 1500,
   payouts: { author: 28000, gold: 17500, silver: 9800, bronze: 5400, finish: 3100 },
   requiresMedals: 12,
-  checkpoints: 3,
-  // Calibrated against a measured AI lap of 144.6 s, at the ratios every other
+  checkpoints: 4,
+  // Calibrated against a measured AI lap of 148.7 s, at the ratios every other
   // stage uses: author is the lap x1.026, gold author x1.10, silver x1.38,
   // bronze x1.81. Re-measure if the jump, the gravity or the car changes.
-  medals: { author: 148, gold: 163, silver: 204, bronze: 268 },
+  medals: { author: 153, gold: 168, silver: 211, bronze: 277 },
   flocks: [{ kind: 'alien', at: LIP + LANDING + HOLD + RUNOUT + 170, count: 14, spread: 120 }],
-  warnings: [],
+  /*
+   * The boulder chicane: rocks on the road, left, right, left, each well clear
+   * of the centreline so there is always a line through — the question is
+   * whether you are on it at speed out of the S before it.
+   */
+  obstacles: [
+    { kind: 'rock', distance: CHICANE + 30, across: -0.6, size: 1.3 },
+    { kind: 'rock', distance: CHICANE + 62, across: 0.6, size: 1.2 },
+    { kind: 'rock', distance: CHICANE + 96, across: -0.58, size: 1.4 },
+  ],
+  // A rockfall across one side of the crater's exit road, rolled per run.
+  slide: { from: ROCKFALL + 50, length: 80, reach: 0.75, count: 16 },
+  warnings: [
+    { at: CHICANE - 40, kind: 'chicane' },
+    { at: ROCKFALL - 30, kind: 'slide' },
+  ],
   variants: [
     // Instead of rain and snow, the one weather Mars has.
     {
       id: 'dust-storm',
       conditions: { timeOfDay: 'day', weather: 'dust' },
-      // Measured: `npm run stages` puts it at 1.11 — the dust film costs
-      // little grip on loose ground, and most of it is visibility.
-      timeScale: 1.11,
+      // Measured: `npm run stages` puts it at 1.16 — the dust film costs a
+      // little grip, and most of it is visibility.
+      timeScale: 1.16,
       rewardScale: 1.6,
       requiresMedals: 14,
     },
@@ -285,7 +362,10 @@ export const redPlanet: StageDef = {
   cameraZones: [
     // Wide at the start, so the rocket is in the picture.
     { from: 0, yaw: 0, zoom: 28 },
-    { from: 220, yaw: 0, zoom: 16 },
+    { from: 200, yaw: 0, zoom: 15 },
+    // Pulled back up the mesa, so the leg above is in frame with this one.
+    { from: CLIMB_FROM, yaw: 0, zoom: 19 },
+    { from: CLIMB_TO, yaw: 0, zoom: 17 },
     // Pulled right back for the jump: the flight is over two hundred metres
     // and the point is to see it.
     { from: LIP - 160, yaw: 0, zoom: 24 },

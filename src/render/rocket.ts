@@ -27,6 +27,12 @@ const RADIUS = 1.9;
 const IGNITION = -3;
 /** After this the rocket is too high to matter and is not drawn. */
 const GONE = 30;
+/**
+ * Height of the launch table the rocket stands on, metres. It stood on the pad
+ * itself at first, and its engine bell and flame went through the pad's
+ * surface, which flickered in and out as the flame did.
+ */
+const MOUNT = 3.5;
 
 export interface RocketPose {
   /** Height of the base above the pad, metres. */
@@ -65,6 +71,8 @@ export class RocketView {
   private readonly flame: THREE.Mesh;
   private readonly core: THREE.Mesh;
   private readonly arm: THREE.Group;
+  private readonly jets: THREE.Mesh[] = [];
+  private readonly padGlow: THREE.Mesh;
   private readonly smoke: ParticleField;
   private flicker = 0;
   /** What it was last posed at, for the harness's status line. */
@@ -88,9 +96,25 @@ export class RocketView {
     const dark = solid(DARK, 0.5);
     const steel = solid(STEEL, 0.5, 0.4);
 
-    // The pad: a slab, and a flame trench across it.
+    // The pad: a slab, and a flame trench across it. The trench stands a few
+    // centimetres proud: with its top level with the slab's, the two faces
+    // fought for the same pixels and the pad blinked under the rocket.
     add(new THREE.BoxGeometry(18, 1.2, 18), solid(CONCRETE, 0.9), this.group, { x: 0, y: -0.4, z: 0 });
-    add(new THREE.BoxGeometry(18.2, 1.0, 3.2), dark, this.group, { x: 0, y: -0.3, z: 0 });
+    add(new THREE.BoxGeometry(18.2, 0.1, 3.2), dark, this.group, { x: 0, y: 0.25, z: 0 });
+    // The launch table: a ring on four legs, open in the middle for the flame.
+    const table = new THREE.Mesh(new THREE.TorusGeometry(RADIUS + 0.5, 0.3, 8, 24), steel);
+    table.rotation.x = Math.PI / 2;
+    table.position.y = MOUNT - 0.2;
+    table.castShadow = true;
+    this.group.add(table);
+    for (const [x, z] of [
+      [2.4, 2.4],
+      [-2.4, 2.4],
+      [2.4, -2.4],
+      [-2.4, -2.4],
+    ] as const) {
+      add(new THREE.BoxGeometry(0.5, MOUNT, 0.5), steel, this.group, { x, y: MOUNT / 2, z });
+    }
 
     // The vehicle, built from its base upward.
     const body = HEIGHT - 8;
@@ -135,6 +159,24 @@ export class RocketView {
     }
     this.group.add(this.vehicle);
 
+    // What the trench throws out: two jets of flame along it, either way, and
+    // the glow of the fire on the concrete. Both fade as the rocket climbs.
+    const jetGeometry = new THREE.ConeGeometry(1.5, 1, 14, 1, true);
+    jetGeometry.translate(0, -0.5, 0);
+    for (const side of [1, -1]) {
+      const jet = new THREE.Mesh(jetGeometry, glow(FLAME, 0.8));
+      jet.rotation.z = (side * Math.PI) / 2;
+      jet.position.set(0, 0.9, 0);
+      jet.visible = false;
+      this.group.add(jet);
+      this.jets.push(jet);
+    }
+    this.padGlow = new THREE.Mesh(new THREE.CircleGeometry(7, 24), glow(FLAME, 0.5));
+    this.padGlow.rotation.x = -Math.PI / 2;
+    this.padGlow.position.y = 0.32;
+    this.padGlow.visible = false;
+    this.group.add(this.padGlow);
+
     // The tower, on the far side from the road. Up the road from it instead,
     // the camera — which looks along the road — saw the two in one column and
     // the lattice hid the rocket entirely.
@@ -159,7 +201,7 @@ export class RocketView {
 
     // Its own smoke. A cloud that has to hang for seconds over a pad cannot
     // share a pool with gravel spray, which churns through one in half a second.
-    this.smoke = new ParticleField(parent, 40, { haze: 900 });
+    this.smoke = new ParticleField(parent, 40, { haze: 2000 });
     this.smoke.fadeIn = 0.15;
 
     this.group.visible = false;
@@ -196,7 +238,7 @@ export class RocketView {
     this.vehicle.visible = t < GONE;
     // Pitches over down-range, along the road, so it climbs away up the
     // screen rather than toward the tower.
-    this.vehicle.position.set(0, pose.altitude, Math.sin(pose.lean) * pose.altitude * 0.25);
+    this.vehicle.position.set(0, MOUNT + pose.altitude, Math.sin(pose.lean) * pose.altitude * 0.25);
     this.vehicle.rotation.x = pose.lean;
     // The arm swings clear as the engines light.
     const swing = Math.min(Math.max((t - IGNITION + 1) / 2, 0), 1);
@@ -206,12 +248,23 @@ export class RocketView {
     const on = pose.thrust > 0.01 && t < GONE;
     this.flame.visible = on;
     this.core.visible = on;
+    // How much of the fire is still on the pad: all of it at the start, none
+    // once the rocket is twenty metres up.
+    const onPad = on ? Math.max(1 - pose.altitude / 20, 0) * pose.thrust : 0;
     if (on) {
       const jitter = 1 + Math.sin(this.flicker) * 0.06 + Math.sin(this.flicker * 2.3) * 0.05;
-      const length = (6 + 10 * pose.thrust) * jitter;
+      // Never longer than the drop to the trench, so it never goes through it.
+      const length = Math.min((6 + 10 * pose.thrust) * jitter, MOUNT + pose.altitude - 0.35);
       this.flame.scale.set(1, length, 1);
       this.core.scale.set(0.5, length * 0.6, 0.5);
     }
+    for (const [i, jet] of this.jets.entries()) {
+      jet.visible = onPad > 0.02;
+      const reach = (5 + 9 * onPad) * (1 + Math.sin(this.flicker * 1.3 + i * 2) * 0.08);
+      jet.scale.set(0.6 + 0.4 * onPad, reach, 0.6 + 0.4 * onPad);
+    }
+    this.padGlow.visible = onPad > 0.02;
+    (this.padGlow.material as THREE.MeshBasicMaterial).opacity = 0.55 * onPad;
 
     if (!on || dt <= 0) return;
     const world = new THREE.Vector3();
@@ -220,27 +273,28 @@ export class RocketView {
     if (!haze) return;
     // On the pad, smoke boils out sideways along the trench; once it is up, it
     // trails behind in a column.
-    const onPad = pose.altitude < 25;
-    const rate = (onPad ? 90 : 26) * pose.thrust;
+    const low = pose.altitude < 25;
+    // A great deal of it on the pad: a launch is mostly a cloud.
+    const rate = (low ? 260 : 30) * pose.thrust;
     const count = Math.floor(rate * dt + Math.random());
     for (let n = 0; n < count; n++) {
       const out = (Math.random() - 0.5) * 2;
       const across = this.group.rotation.y;
       const spread = 9 + Math.random() * 9;
-      const velocity = onPad
+      const velocity = low
         ? {
             x: Math.cos(across) * out * spread + (Math.random() - 0.5) * 3,
             y: 1 + Math.random() * 3,
             z: -Math.sin(across) * out * spread + (Math.random() - 0.5) * 3,
           }
         : { x: (Math.random() - 0.5) * 3, y: -4 - Math.random() * 4, z: (Math.random() - 0.5) * 3 };
-      const at = onPad
+      const at = low
         ? { x: world.x + (Math.random() - 0.5) * 4, y: this.group.position.y + 1, z: world.z + (Math.random() - 0.5) * 4 }
         : { x: world.x, y: world.y - 4, z: world.z };
-      haze.emit(at, velocity, SMOKE, 3 + Math.random() * 3, 3.5 + Math.random() * 3, {
+      haze.emit(at, velocity, SMOKE, low ? 4 + Math.random() * 5 : 3 + Math.random() * 3, 4.5 + Math.random() * 3.5, {
         drop: -0.02,
-        peak: 0.55,
-        grow: 2.2,
+        peak: 0.6,
+        grow: 2.6,
       });
     }
   }

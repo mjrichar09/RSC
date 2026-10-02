@@ -16,6 +16,7 @@ import { describeConditions, visibility } from '../src/sim/conditions.js';
 import { Stage, stageVariants } from '../src/sim/stage.js';
 import { createWorld } from '../src/sim/world.js';
 import { Wildlife } from '../src/sim/wildlife.js';
+import { CRATER_APRON, groundHeight } from '../src/sim/terrain.js';
 import { v3 } from '../src/sim/math.js';
 
 const def = stageById('red-planet');
@@ -37,6 +38,45 @@ describe('the planet', () => {
     // And it closes the world in: closer than snow, not as total as fog.
     expect(visibility(storm).fogFar).toBeLessThan(visibility({ timeOfDay: 'day', weather: 'snowfall' }).fogFar);
     expect(visibility(storm).fogFar).toBeGreaterThan(visibility({ timeOfDay: 'day', weather: 'fog' }).fogFar);
+  });
+});
+
+describe('the car on Mars', () => {
+  /*
+   * Its Earth weight on the ground. With Mars's own, a tyre had a third of its
+   * grip; with the grip handed back by a multiplier instead, the car tipped
+   * onto two wheels in the first hairpin. Settled on its springs, a car
+   * carrying its Earth weight sits exactly as low as it does on Earth.
+   */
+  it('sits on its springs as it does on Earth', async () => {
+    const settle = async (s: Stage) => {
+      const world = await createWorld({ stage: s });
+      for (let i = 0; i < 240; i++) world.step({ throttle: 0, brake: 1, steer: 0, handbrake: 1 });
+      const p = world.state().position;
+      return p.y - s.spline.at(s.progressAt(p).distance).position.y;
+    };
+    const mars = await settle(stage);
+    const earth = await settle(new Stage(stageById('pine-loop')));
+    expect(Math.abs(mars - earth)).toBeLessThan(0.02);
+  });
+});
+
+describe('the craters', () => {
+  it('are many, and every one clear of the corridor', () => {
+    expect(stage.craters.length).toBeGreaterThan(40);
+    for (const c of stage.craters) {
+      const near = stage.progressAt({ x: c.x, y: 0, z: c.z });
+      // The corridor's wall is under 18 m out; the apron stays past it.
+      expect(Math.abs(near.lateral) - c.radius * CRATER_APRON).toBeGreaterThan(18);
+    }
+  });
+
+  it('drop the open ground out from under themselves, and nowhere else', () => {
+    const c = stage.craters[0]!;
+    const flat = groundHeight(stage.spline, c.x, c.z);
+    expect(groundHeight(stage.spline, c.x, c.z, stage.craters)).toBeLessThan(flat - c.depth);
+    const away = c.radius * CRATER_APRON + 1;
+    expect(groundHeight(stage.spline, c.x + away, c.z, [c])).toBeCloseTo(groundHeight(stage.spline, c.x + away, c.z), 6);
   });
 });
 

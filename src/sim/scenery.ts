@@ -31,7 +31,7 @@
 import { type Vec3, clamp, v3 } from './math.js';
 import { CORRIDOR } from './corridor.js';
 import type { Spline } from './spline.js';
-import { groundHeight } from './terrain.js';
+import { CRATER_APRON, type Crater, groundHeight } from './terrain.js';
 
 export type SceneryKind =
   | 'conifer'
@@ -467,7 +467,12 @@ function colliderFor(
  * Takes the spline rather than the `Stage` that owns it, because it runs from
  * inside that stage's constructor.
  */
-export function scatterScenery(id: string, biome: string, spline: Spline): SceneryItem[] {
+export function scatterScenery(
+  id: string,
+  biome: string,
+  spline: Spline,
+  craters: readonly Crater[] = [],
+): SceneryItem[] {
   const recipes = DRESSING[biome] ?? DRESSING.forest!;
   const items: SceneryItem[] = [];
   const length = spline.length;
@@ -521,6 +526,9 @@ export function scatterScenery(id: string, biome: string, spline: Spline): Scene
 
         const x = sample.position.x + sample.left.x * out * side + sample.forward.x * along;
         const z = sample.position.z + sample.left.z * out * side + sample.forward.z * along;
+        // Nothing stands in a crater: the ground there is the crater's own
+        // mesh, and a boulder on the open ground under it would be buried.
+        if (!onCorridor && craters.some((c) => Math.hypot(x - c.x, z - c.z) < c.radius * CRATER_APRON)) continue;
         // On the corridor, the corridor's own cross-section: a bush on a bank
         // has to sit on that bank, not a metre above it.
         //

@@ -60,7 +60,12 @@ const BELOW_ROAD = 4;
  * One function, called by both. It is not cheap — it sweeps the sample list —
  * but it runs once per stage load for a few thousand points, not per frame.
  */
-export function groundHeight(spline: Spline, x: number, z: number): number {
+export function groundHeight(
+  spline: Spline,
+  x: number,
+  z: number,
+  craters: readonly Crater[] = [],
+): number {
   // Two octaves of cheap trig noise: enough to read as landscape, and
   // deterministic, so the same stage always looks the same.
   const h =
@@ -89,7 +94,114 @@ export function groundHeight(spline: Spline, x: number, z: number): number {
   // The noise fades in with distance from the road: the ground has to meet the
   // corridor flush where it touches it and is free to be landscape further out.
   const clearance = Math.min(Math.max((Math.abs(nearest.lateral) - 30) / 110, 0), 1);
-  return roadHeight - BELOW_ROAD + h * clearance;
+  return roadHeight - BELOW_ROAD + h * clearance - craterDip(craters, x, z);
+}
+
+/**
+ * A crater in the open ground, out of reach of the road.
+ *
+ * Placed here, seeded, rather than in the renderer, for the reason everything
+ * the size of a building is: the scenery scatter has to know to keep its
+ * boulders out of them, and the ground mesh has to make room for them.
+ */
+export interface Crater {
+  x: number;
+  z: number;
+  /** Rim radius, metres. The ejecta apron reaches half as far again. */
+  radius: number;
+  /** Floor below the surrounding ground, metres. */
+  depth: number;
+  /** Rim above it, metres. */
+  rim: number;
+}
+
+/** How far past the rim the ejecta apron runs, as a multiple of the radius. */
+export const CRATER_APRON = 1.5;
+
+/**
+ * Height of a crater's surface above the open ground under it, at `r` metres
+ * from its centre: a bowl, a raised rim, and an apron falling away to nothing.
+ */
+export function craterProfile(c: Crater, r: number): number {
+  const u = r / c.radius;
+  if (u >= CRATER_APRON) return 0;
+  if (u <= 1) return -c.depth + (c.depth + c.rim) * u ** 2.6;
+  const t = (u - 1) / (CRATER_APRON - 1);
+  return c.rim * (1 - t) * (1 - t);
+}
+
+/**
+ * How far the open ground is dropped under the craters near a point.
+ *
+ * The crater itself is its own fine mesh (the ground grid is twenty metres to
+ * a cell, coarser than most craters), so the ground under it only has to get
+ * out of the way: deeper than the bowl inside the rim, easing back to nothing
+ * at the apron's edge, where the crater mesh meets it flush.
+ */
+export function craterDip(craters: readonly Crater[], x: number, z: number): number {
+  let dip = 0;
+  for (const c of craters) {
+    const r = Math.hypot(x - c.x, z - c.z);
+    if (r >= c.radius * CRATER_APRON) continue;
+    const t = Math.min(Math.max((c.radius * CRATER_APRON - r) / (c.radius * 0.4), 0), 1);
+    dip = Math.max(dip, (c.depth + 3) * t * t * (3 - 2 * t));
+  }
+  return dip;
+}
+
+/**
+ * Scatter craters around a stage, seeded from its id.
+ *
+ * Every one keeps its apron `reach` metres clear of the centreline — past the
+ * corridor's wall, so no crater ever changes the ground the corridor meets;
+ * clear of `avoid` (a launch pad, say); and clear of each other.
+ */
+export function placeCraters(
+  spline: Spline,
+  seed: string,
+  count: number,
+  radius: readonly [number, number],
+  reach: number,
+  avoid: readonly { x: number; z: number; clear: number }[] = [],
+): Crater[] {
+  let state = hash(`${seed}:craters`) * 4294967296;
+  const random = () => {
+    state = (state * 1664525 + 1013904223) % 4294967296;
+    return state / 4294967296;
+  };
+  const length = spline.length;
+  const craters: Crater[] = [];
+  for (let attempt = 0; attempt < count * 40 && craters.length < count; attempt++) {
+    // Mostly small, a few large: the way craters come.
+    const r = radius[0] + (radius[1] - radius[0]) * random() ** 2.2;
+    const apron = r * CRATER_APRON;
+    // Along the road and out to the side, weighted toward it: scattered over
+    // the stage's whole bounding box, nearly all of them were somewhere the
+    // camera never looks.
+    const sample = spline.at(random() * length);
+    const side = random() < 0.5 ? -1 : 1;
+    const out = sample.width + apron + reach + random() ** 1.6 * 160;
+    const x = sample.position.x + sample.left.x * out * side;
+    const z = sample.position.z + sample.left.z * out * side;
+    if (Math.abs(spline.locate({ x, y: 0, z }).lateral) < apron + reach) continue;
+    if (avoid.some((a) => Math.hypot(x - a.x, z - a.z) < apron + a.clear)) continue;
+    if (craters.some((c) => Math.hypot(x - c.x, z - c.z) < (c.radius + r) * CRATER_APRON)) continue;
+    // Only on level ground. The open ground follows the lowest road nearby, so
+    // beside a climb it steps — and a crater laid over a step came out as a
+    // torn sheet standing on its edge beside Red Planet's mesa.
+    let low = Infinity;
+    let high = -Infinity;
+    for (let k = 0; k <= 8; k++) {
+      const a = (k / 8) * Math.PI * 2;
+      const reachOut = k === 8 ? 0 : apron;
+      const y = groundHeight(spline, x + Math.cos(a) * reachOut, z + Math.sin(a) * reachOut);
+      low = Math.min(low, y);
+      high = Math.max(high, y);
+    }
+    if (high - low > r * 0.25) continue;
+    craters.push({ x, z, radius: r, depth: r * 0.32, rim: r * 0.12 });
+  }
+  return craters;
 }
 
 export interface TerrainOptions {

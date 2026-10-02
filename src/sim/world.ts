@@ -15,7 +15,7 @@ import { CLEAR_DAY, type Conditions, ambientTemperature } from './conditions.js'
 import { DamageModel, type DamageOptions, impactPointFromForce } from './damage.js';
 import { DebrisModel, type DetachEvent, type PartId } from './debris.js';
 import { Ambient } from './ambient.js';
-import { Wildlife } from './wildlife.js';
+import { type AnimalKind, Wildlife } from './wildlife.js';
 import { Markers, Signs } from './markers.js';
 import { type Quat, type Vec3, add, lerpVec, rotate, rotateInverse, slerp, v3 } from './math.js';
 import { type Stage, type StageProp } from './stage.js';
@@ -173,6 +173,14 @@ export interface Car {
  * enough to be a grid, far enough that nobody is touching before the lights.
  */
 const GRID_SPACING = 2.8;
+
+/** What the HUD calls each kind of strike. */
+const STRIKE_NOTICE: Record<AnimalKind, string> = {
+  deer: 'Deer strike',
+  sheep: 'Sheep strike',
+  rover: 'Rover strike',
+  alien: 'Alien strike',
+};
 
 export class SimWorld {
   readonly world: RAPIER.World;
@@ -450,6 +458,11 @@ export class SimWorld {
       const vehicle = new Vehicle(RAPIER, this.world, tuning, this.gridSlot(spawn, i), {
         surfaceAt: (p) => surface(this.surfaceIdAt(p)),
         conditions: this.conditions,
+        // The difference between the weight the car has on the ground and the
+        // gravity the world has, added while a wheel is down.
+        ...(this.stage?.def.groundGravity !== undefined && this.stage.def.gravity !== undefined
+          ? { groundWeight: this.stage.def.groundGravity - this.stage.def.gravity }
+          : {}),
         ...(remote.has(i) ? { remote: true } : {}),
         ...(damage ? { damage } : {}),
         ...(debris ? { debris } : {}),
@@ -691,7 +704,7 @@ export class SimWorld {
             // Felt and heard, not just billed: this is what the camera shake
             // and the impact sound read.
             this.noteImpact(hit.impulse, v3(0, 0, 1.8));
-            this.notices.push(hit.kind === 'sheep' ? 'Sheep strike' : 'Deer strike');
+            this.notices.push(STRIKE_NOTICE[hit.kind]);
           }
           // And the car loses the momentum it gave the deer, which at speed is
           // a couple of metres per second and a very unwelcome shove.

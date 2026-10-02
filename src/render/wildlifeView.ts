@@ -57,10 +57,11 @@ const ROVER_ALERT = 0xf3f0e8;
 const ROVER_DARK = 0x3a3a3e;
 const FOIL = 0xc99a3a;
 
-/** The swarm: green, and lit from inside so it reads against red ground. */
-const ALIEN = 0x5fc24a;
-const ALIEN_ALERT = 0x9cff6e;
-const EYE = 0x111214;
+/** The swarm: dark olive-grey skin, a little lighter once it has seen you. */
+const ALIEN = 0x47503f;
+const ALIEN_ALERT = 0x66735a;
+const EYE = 0x0a0b0a;
+const ALIEN_GLOW = 0x7cff9a;
 
 /** Coat colour calm and alert, by species. */
 const COAT: Record<AnimalKind, [number, number]> = {
@@ -207,32 +208,50 @@ function roverGeometry() {
 }
 
 /**
- * One of the swarm: a small green figure with a big head, hovering.
+ * One of the swarm: gaunt, hunched, about a man's height, nose along +Z.
  *
- * Built to be read in a group from forty metres — a bright blob with two dark
- * eyes — rather than studied. The head bows while it is idle and comes up to
- * look at the car, which is the tell every animal here gives.
+ * Redrawn from a green blob with big eyes and antennae, which read as a toy —
+ * a swarm of something you would hit for fun rather than swerve to avoid.
+ * Spindly limbs, backward-jointed legs, a long skull with slit eyes, and dark
+ * glossy skin: something that stands still in the road and watches you come.
  */
 function alienGeometry() {
+  // Torso leaning forward over the hips, ribs and a hunched back.
   const body = merge([
-    place(capsule(0.16, 0.22), { at: [0, 0.55, 0] }),
-    place(capsule(0.04, 0.26), { at: [0.2, 0.55, 0.02], turn: [0, 0, 0.5] }),
-    place(capsule(0.04, 0.26), { at: [-0.2, 0.55, 0.02], turn: [0, 0, -0.5] }),
-    place(cone(0.16, 0.28), { at: [0, 0.26, 0], turn: [Math.PI, 0, 0] }),
+    place(capsule(0.13, 0.42), { at: [0, 1.12, 0.04], turn: [0.45, 0, 0], size: [1, 1, 0.8] }),
+    place(capsule(0.1, 0.12), { at: [0, 0.82, -0.04] }),
+    place(ball(0.12), { at: [0, 1.36, 0.1], size: [1.3, 0.8, 1] }),
+    // Arms, long and thin, hanging forward past the knees.
+    ...[1, -1].flatMap((side) => [
+      place(rod(0.035, 0.03, 0.5), { at: [side * 0.2, 1.12, 0.2], turn: [0.35, 0, side * 0.12] }),
+      place(rod(0.03, 0.022, 0.52), { at: [side * 0.22, 0.68, 0.32], turn: [-0.2, 0, side * 0.05] }),
+      place(cone(0.035, 0.16), { at: [side * 0.22, 0.38, 0.36], turn: [Math.PI - 0.2, 0, 0] }),
+    ]),
+    // Legs bent backward at the knee, the way something that runs is built.
+    ...[1, -1].flatMap((side) => [
+      place(rod(0.05, 0.035, 0.48), { at: [side * 0.1, 0.62, 0.08], turn: [0.45, 0, 0] }),
+      place(rod(0.032, 0.025, 0.44), { at: [side * 0.1, 0.22, -0.02], turn: [-0.35, 0, 0] }),
+      place(capsule(0.03, 0.12), { at: [side * 0.1, 0.02, 0.06], turn: [Math.PI / 2, 0, 0] }),
+    ]),
   ]);
-  // In the head group's frame, which pivots at the neck.
+  // In the head group's frame, which pivots at the neck: a long skull swept
+  // back, a narrow jaw, and no ears.
   const head = merge([
-    place(ball(0.25), { at: [0, 0.17, 0.04], size: [1, 0.85, 1.05] }),
-    place(rod(0.012, 0.012, 0.22), { at: [0.1, 0.42, 0], turn: [0, 0, -0.35] }),
-    place(rod(0.012, 0.012, 0.22), { at: [-0.1, 0.42, 0], turn: [0, 0, 0.35] }),
-    place(ball(0.04), { at: [0.14, 0.52, 0] }),
-    place(ball(0.04), { at: [-0.14, 0.52, 0] }),
+    place(rod(0.04, 0.05, 0.16), { at: [0, 0.06, 0.02], turn: [0.6, 0, 0] }),
+    place(ball(0.13), { at: [0, 0.16, 0.06], size: [0.85, 0.9, 1.1] }),
+    place(ball(0.12), { at: [0, 0.2, -0.1], size: [0.75, 0.8, 1.6] }),
+    place(cone(0.07, 0.14), { at: [0, 0.08, 0.18], turn: [Math.PI / 2 + 0.3, 0, 0], size: [1, 1, 0.8] }),
   ]);
   const eyes = merge([
-    place(ball(0.075), { at: [0.1, 0.2, 0.24], size: [1, 1.45, 0.6], turn: [0, 0, -0.35] }),
-    place(ball(0.075), { at: [-0.1, 0.2, 0.24], size: [1, 1.45, 0.6], turn: [0, 0, 0.35] }),
+    place(ball(0.045), { at: [0.06, 0.18, 0.16], size: [1.4, 0.45, 0.6], turn: [0, 0, -0.35] }),
+    place(ball(0.045), { at: [-0.06, 0.18, 0.16], size: [1.4, 0.45, 0.6], turn: [0, 0, 0.35] }),
   ]);
-  return { body, head, eyes };
+  // A faint line of light down the spine: something to see in a dust storm,
+  // and not a cartoon glow all over.
+  const glow = merge([
+    place(capsule(0.025, 0.36), { at: [0, 1.18, -0.06], turn: [0.45, 0, 0] }),
+  ]);
+  return { body, head, eyes, glow };
 }
 
 export class WildlifeView {
@@ -248,7 +267,8 @@ export class WildlifeView {
     const a = alienGeometry();
     const roverDark = smooth(ROVER_DARK, 0.5);
     const foil = new THREE.MeshStandardMaterial({ color: FOIL, roughness: 0.35, metalness: 0.6 });
-    const eye = smooth(EYE, 0.25);
+    const eye = smooth(EYE, 0.15);
+    const glowMaterial = new THREE.MeshBasicMaterial({ color: ALIEN_GLOW });
     const pale = smooth(PALE);
     const dark = smooth(DARK, 0.6);
     const antler = smooth(ANTLER, 0.7);
@@ -307,19 +327,16 @@ export class WildlifeView {
 
       // --- one of the swarm ---
       const alienRoot = new THREE.Group();
-      const skin = smooth(ALIEN, 0.45);
-      // Lit from inside: green on red ground in a dust storm is otherwise the
-      // first thing to disappear.
-      skin.emissive.setHex(0x1f6a12);
+      // Glossy rather than matte: wet-looking skin is most of what stops it
+      // reading as a toy.
+      const skin = smooth(ALIEN, 0.32);
       mesh(a.body, skin, alienRoot);
+      mesh(a.glow, glowMaterial, alienRoot);
       const alienHead = new THREE.Group();
-      alienHead.position.set(0, 0.78, 0);
+      alienHead.position.set(0, 1.42, 0.2);
       mesh(a.head, skin, alienHead);
       mesh(a.eyes, eye, alienHead);
       alienRoot.add(alienHead);
-      // Larger than life: at a metre tall a swarm read as green specks from
-      // the race camera, which is a hazard nobody can see.
-      alienRoot.scale.setScalar(1.7);
       root.add(alienRoot);
 
       root.visible = false;
@@ -346,10 +363,10 @@ export class WildlifeView {
     return slot.figures[kind];
   }
 
-  /** The swarm hovers; everything else stands on the ground. */
+  /** The swarm sways where it stands, each to its own beat; nothing else moves. */
   private hover(slot: Slot, index: number): void {
     const alien = slot.figures.alien.root;
-    alien.position.y = slot.kind === 'alien' ? 0.25 + 0.12 * Math.sin(this.clock * 3.1 + index * 1.7) : 0;
+    alien.rotation.z = slot.kind === 'alien' ? 0.05 * Math.sin(this.clock * 1.7 + index * 1.3) : 0;
   }
 
   /**

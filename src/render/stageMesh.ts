@@ -19,7 +19,7 @@ import { DRESSING, type SceneryItem, type SceneryKind } from '../sim/scenery.js'
 import type { Markers } from '../sim/markers.js';
 import type { Vec3 } from '../sim/math.js';
 import { SURFACES } from '../sim/surfaces.js';
-import { groundHeight } from '../sim/terrain.js';
+import { CRATER_APRON, craterProfile, groundHeight } from '../sim/terrain.js';
 
 /** Slight per-vertex value jitter so large flat areas do not read as dead. */
 function mottle(index: number): number {
@@ -1242,7 +1242,7 @@ function buildTerrain(stage: Stage): THREE.Group {
 
     // The rule itself lives in `sim/terrain.ts`, because the scenery scatter
     // has to stand its trees on exactly this surface and used to guess at it.
-    const y = groundHeight(stage.spline, x, z);
+    const y = groundHeight(stage.spline, x, z, stage.craters);
     // The colour still reads off the noise alone, so a hillside is green at the
     // same height whatever the road beside it is doing.
     const h =
@@ -1307,7 +1307,71 @@ ${shader.fragmentShader}`.replace(
    */
   mesh.receiveShadow = false;
   group.add(mesh);
+  if (stage.craters.length > 0) group.add(buildCraters(stage, groundMaterial));
   return group;
+}
+
+/**
+ * The craters, each its own fine polar mesh, all in one geometry.
+ *
+ * Fine because the ground grid is twenty metres to a cell and most craters are
+ * narrower than two of them; the ground is dropped out of the way underneath
+ * (`craterDip`) and this sits on the undisturbed ground plus the crater's own
+ * profile, so at the apron's edge it meets the ground flush.
+ */
+function buildCraters(stage: Stage, material: THREE.Material): THREE.Mesh {
+  const RINGS = 14;
+  const SEGMENTS = 32;
+  const positions: number[] = [];
+  const colors: number[] = [];
+  const indices: number[] = [];
+  const [near] = TERRAIN_COLOUR[stage.def.biome] ?? TERRAIN_COLOUR.forest!;
+  const ground = new THREE.Color(near);
+  const c = new THREE.Color();
+  for (const crater of stage.craters) {
+    const base = positions.length / 3;
+    for (let ring = 0; ring <= RINGS; ring++) {
+      // Rings bunched toward the rim, where the shape turns.
+      const u = (ring / RINGS) ** 0.8 * CRATER_APRON;
+      const r = u * crater.radius;
+      for (let seg = 0; seg < SEGMENTS; seg++) {
+        const a = (seg / SEGMENTS) * Math.PI * 2;
+        const x = crater.x + Math.cos(a) * r;
+        const z = crater.z + Math.sin(a) * r;
+        positions.push(x, groundHeight(stage.spline, x, z) + craterProfile(crater, r), z);
+        // A dark floor, a bright fresh rim, and ejecta paler than the ground it
+        // landed on, fading out across the apron. Strong on purpose: from a
+        // camera looking almost straight down, a crater coloured like the
+        // ground around it was a faint circle nobody noticed.
+        const shade =
+          u < 1 ? 0.5 + 0.5 * u ** 3 + (u > 0.85 ? (u - 0.85) * 2.4 : 0) : 1.36 - 0.36 * ((u - 1) / (CRATER_APRON - 1));
+        c.copy(ground).multiplyScalar(shade);
+        colors.push(c.r, c.g, c.b);
+      }
+    }
+    for (let ring = 0; ring < RINGS; ring++) {
+      for (let seg = 0; seg < SEGMENTS; seg++) {
+        const a = base + ring * SEGMENTS + seg;
+        const b = base + ring * SEGMENTS + ((seg + 1) % SEGMENTS);
+        const d = a + SEGMENTS;
+        const e = b + SEGMENTS;
+        // Wound so the normals face up: (a, d, b) faced down and was culled.
+        indices.push(a, b, d, b, e, d);
+      }
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  const mesh = new THREE.Mesh(geometry, material);
+  // Shadowed, unlike the ground under it: the bowl's own shadow is most of
+  // what makes it read as a hole from above, and every crater stands clear of
+  // the corridor whose shadow is the reason the ground refuses them.
+  mesh.receiveShadow = true;
+  mesh.castShadow = true;
+  return mesh;
 }
 
 /**

@@ -208,7 +208,8 @@ export class Driver {
       // The stage's own gravity: grip is load, and load is weight, so on Mars
       // the same tyre on the same gravel corners at sqrt(0.38) of the speed
       // and stops in more than twice the distance.
-      const g = this.stage.def.gravity ?? 9.81;
+      // What the car weighs on the ground, which on Mars is not the world's.
+      const g = this.stage.def.groundGravity ?? this.stage.def.gravity ?? 9.81;
       const corner = Math.sqrt(gripBudget * grip * g * radius);
       // Allow a higher speed for a corner that is still far off — there is time
       // to shed speed before reaching it. Kept conservative: arriving too fast

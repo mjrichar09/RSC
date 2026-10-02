@@ -16,7 +16,7 @@ import { CLEAR_DAY, type Conditions, describeConditions } from './conditions.js'
 import { type Vec3, add, scale, v3 } from './math.js';
 import { type ControlPoint, Spline, type SplineSample } from './spline.js';
 import { type Corner, findCorners } from './corners.js';
-import { groundHeight, shapeCamber, terrainRise } from './terrain.js';
+import { type Crater, groundHeight, placeCraters, shapeCamber, terrainRise } from './terrain.js';
 import {
   BANK_HEIGHT,
   BANK_WIDTH,
@@ -311,6 +311,24 @@ export interface StageDef {
    */
   gravity?: number;
   /**
+   * What the car weighs while a wheel is on the ground, m/s². `gravity` when
+   * absent.
+   *
+   * A tyre's grip is its load, so low gravity takes grip away with weight: on
+   * Mars as first built, the car spun its wheels for most of every straight,
+   * cornered at 60% of the speed and stopped in two and a half times the
+   * distance — which read as driving on ice, not as driving on Mars.
+   *
+   * Handing the grip back with a multiplier was tried and is worse: the tyres
+   * then corner as hard as on Earth with a third of the weight holding the car
+   * down, and a car tips once it corners at about 1.5 g of its own gravity.
+   * On Mars that is 5.6 m/s², and the AI went round the first hairpin on two
+   * wheels and off the side of the mesa. So the car is given its Earth weight
+   * while it is touching the ground — grip, roll, springs and brakes are the
+   * car you know — and only the air is Mars.
+   */
+  groundGravity?: number;
+  /**
    * A rocket on a pad beside the start, which goes on the green.
    *
    * Where it stands is decided here rather than in the renderer, so it is the
@@ -326,6 +344,8 @@ export interface StageDef {
    * enough to move the landing sixty metres.
    */
   terrainAmplitude?: number;
+  /** Craters in the open ground around the stage: how many, and their radii. */
+  craters?: { count: number; radius: [number, number] };
   /** A rockslide across one side of the road. The side is seeded. */
   slide?: SlideSpec;
   /**
@@ -554,6 +574,8 @@ export class Stage {
    * corridor wall and the run-off past it are between it and the road.
    */
   readonly launchPad: Vec3 | null;
+  /** Craters in the open ground, none of them within reach of the road. */
+  readonly craters: Crater[];
 
   /**
    * Which side the rockslide came down, -1 left and 1 right, or 0 for none.
@@ -601,16 +623,6 @@ export class Stage {
     this.signs = this.buildSigns();
     this.crossings = this.findCrossings();
     this.props = this.buildProps();
-    this.scenery = scatterScenery(def.id, def.biome, this.spline);
-
-    // Sit the car a few metres up the road from the start line, well inside the
-    // geometry, and let the apron cover anything behind it.
-    const line = this.spline.at(5);
-    this.start = {
-      position: add(line.position, v3(0, 1.2, 0)),
-      heading: Math.atan2(line.forward.x, line.forward.z),
-    };
-
     this.launchPad = null;
     if (def.launch) {
       const at = this.spline.at(def.launch.at);
@@ -622,6 +634,33 @@ export class Stage {
       const z = at.position.z + at.left.z * def.launch.offset * def.launch.side;
       this.launchPad = v3(x, groundHeight(this.spline, x, z), z);
     }
+
+    // Craters before the scenery, which keeps its boulders out of them, and
+    // after the pad, which they keep clear of. Reach is the road plus the
+    // corridor's verge, bank and wall and a few metres: the open ground has no
+    // collider, so a crater only has to leave the corridor's own edge alone.
+    // Kept past the run-off as well at first, nearly none of them was on screen.
+    const reach = 8 + VERGE_WIDTH + BANK_WIDTH + WALL_WIDTH + 4;
+    this.craters = def.craters
+      ? placeCraters(
+          this.spline,
+          def.id,
+          def.craters.count,
+          def.craters.radius,
+          reach,
+          this.launchPad ? [{ x: this.launchPad.x, z: this.launchPad.z, clear: 30 }] : [],
+        )
+      : [];
+    this.scenery = scatterScenery(def.id, def.biome, this.spline, this.craters);
+
+    // Sit the car a few metres up the road from the start line, well inside the
+    // geometry, and let the apron cover anything behind it.
+    const line = this.spline.at(5);
+    this.start = {
+      position: add(line.position, v3(0, 1.2, 0)),
+      heading: Math.atan2(line.forward.x, line.forward.z),
+    };
+
   }
 
   /**

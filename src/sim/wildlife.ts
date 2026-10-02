@@ -168,8 +168,13 @@ export const SHEEP_MASS = 28;
  */
 export const ROVER_MASS = 180;
 
-/** One of the swarm, kg. Lighter than a sheep; it is the swerve that hurts. */
-export const ALIEN_MASS = 14;
+/**
+ * One of the swarm, kg. A fraction of a sheep: a swarm is fourteen of them
+ * across the road, and at 14 kg driving through four of them took the front
+ * off the car badly enough that it drifted off the next corner. It is the
+ * swerve that should hurt.
+ */
+export const ALIEN_MASS = 8;
 
 /** What each species weighs, for the strike. */
 export const ANIMAL_MASS: Record<AnimalKind, number> = {

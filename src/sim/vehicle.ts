@@ -141,6 +141,12 @@ export interface VehicleOptions {
   /** Weather and time of day. Weather takes real grip away. */
   conditions?: Conditions;
   /**
+   * Extra downward acceleration while any wheel is on the ground, m/s²: the
+   * difference between the weight a stage gives the car on the ground and
+   * the world's gravity. See `StageDef.groundGravity`.
+   */
+  groundWeight?: number;
+  /**
    * True for a car whose position comes off the wire rather than out of the
    * physics — somebody else's car, on a guest.
    *
@@ -191,6 +197,7 @@ export class Vehicle {
   readonly damage: DamageModel | null;
   readonly debris: DebrisModel | null;
   readonly conditions: Conditions;
+  private readonly groundWeight: number;
   private effects: DamageEffects = PRISTINE;
 
   readonly wheels: WheelState[] = [];
@@ -221,6 +228,7 @@ export class Vehicle {
     this.damage = options.damage ?? null;
     this.debris = options.debris ?? null;
     this.conditions = options.conditions ?? CLEAR_DAY;
+    this.groundWeight = options.groundWeight ?? 0;
     this.remote = options.remote ?? false;
 
     const h = tuning.halfExtents;
@@ -568,7 +576,8 @@ export class Vehicle {
       // Weather multiplies in alongside the surface's own grip: a wet racing
       // line is a different road from a dry one, and the car has to feel that.
       const weather = gripMultiplier(this.conditions, w.surface);
-      const mu = t.tireGrip * w.surface.grip * weather * balance * handbrakeLoss * fx.wheelGrip[i]!;
+      const mu =
+        t.tireGrip * w.surface.grip * weather * balance * handbrakeLoss * fx.wheelGrip[i]!;
 
       const tyre = {
         load: susp[i]!,
@@ -660,6 +669,9 @@ export class Vehicle {
     const grounded = this.wheels.some((w) => w.grounded);
     if (grounded) {
       body.addForce(scale(up, -t.downforceFactor * v * v), true);
+      // Weight the world's gravity does not supply, down the world's vertical
+      // rather than the car's: it is weight, not downforce.
+      if (this.groundWeight !== 0) body.addForce(v3(0, -this.groundWeight * body.mass(), 0), true);
       body.addTorque(scale(up, -t.yawDamping * dot(angvel, up)), true);
     } else if (planarSpeed > 8) {
       // In the air the nose follows the flight path, and the brake drops it —
