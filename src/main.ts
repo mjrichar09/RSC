@@ -74,6 +74,7 @@ import { DamagePanel } from './ui/damagePanel.js';
 import { DebrisView } from './render/debrisView.js';
 import { WildlifeView } from './render/wildlifeView.js';
 import { RocketView } from './render/rocket.js';
+import { type CarStyle, isCarStyle } from './render/carStyles.js';
 import { Garage } from './ui/garage.js';
 import { MultiplayerPanel } from './ui/multiplayer.js';
 import { UpdateBanner, UpdateWatch } from './ui/update.js';
@@ -338,6 +339,9 @@ const params = new URLSearchParams(location.search);
   // the saved setting, which the front screen changes. See render/look.ts.
   // Declared here, above `loadStage`, which boot calls.
   const lookParam = params.get('look');
+  // `?car=monster|rover` dresses the car for a screenshot, as `?look=` does.
+  const carParam = params.get('car');
+  if (isCarStyle(carParam)) carView.setStyle(carParam);
   let look = lookById(lookParam ?? career.profile.settings.look);
   visionPass.look = look.fx;
   /** The conditions' own grade, so a new look can be laid on it without a reload. */
@@ -973,6 +977,7 @@ const params = new URLSearchParams(location.search);
     // the car completely in a lobby.
     mode = 'arcade';
     sessionHealth = {};
+    carView.setStyle('rally');
     // Paint and number come from the lobby, so the local car is the one the
     // player picked rather than the one their profile happens to wear.
     const me = start.setup.players.find((player) => player.car === (start.guest?.car ?? 0));
@@ -1077,9 +1082,25 @@ const params = new URLSearchParams(location.search);
       profile.settings.look = id;
     });
   };
+  /**
+   * The arcade car's body. Worn in arcade only: a career car is the car the
+   * garage built, and in a network race everybody is told apart by paint.
+   */
+  let arcadeCar: CarStyle = isCarStyle(career.profile.settings.arcadeCar)
+    ? career.profile.settings.arcadeCar
+    : 'rally';
+  menu.setCar(arcadeCar);
+  menu.onCar = (style) => {
+    arcadeCar = style;
+    if (mode === 'arcade' && !session) carView.setStyle(style);
+    void save.update((profile) => {
+      profile.settings.arcadeCar = style;
+    });
+  };
   menu.onCareer = () => {
     rivalLiveries = [];
     mode = 'career';
+    carView.setStyle('rally');
     // The world record goes with it, here and not at the next stage load:
     // coming out of an arcade race into the garage reloads nothing, so the
     // stock-car record sat on the HUD underneath a career run — which is the
@@ -1102,6 +1123,7 @@ const params = new URLSearchParams(location.search);
     }
     sessionHealth = {};
     garage.setOpen(false);
+    carView.setStyle(arcadeCar);
     loadStage(pick.def.id, pick.variant.id);
   };
   /**
@@ -2602,6 +2624,8 @@ const params = new URLSearchParams(location.search);
         // The launch beside the grid, where there is one: the clock it was
         // last posed at and how high that put it.
         rocket: rocketView.visible ? rocketView.pose : null,
+        // Which body the player's car is wearing.
+        car: carView.carStyle,
         net: session
           ? {
               role: session.role,

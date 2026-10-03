@@ -65,11 +65,14 @@ const outName = arg('out', 'composite');
 const cells = cellSpec.split(',').map((whole) => {
   // `look<id>:` in front of any cell shoots that cell in that look, so one
   // composite can put the looks side by side.
-  const lookCell = /^look(\w+):(.+)$/.exec(whole);
+  // `car<style>:` does the same for the arcade car's body: carmonster:, carrover:.
+  const carCell = /^car(\w+):(.+)$/.exec(whole);
+  const cellCar = carCell?.[1] ?? '';
+  const lookCell = /^look(\w+):(.+)$/.exec(carCell?.[2] ?? whole);
   const cellLook = lookCell?.[1] ?? lookArg;
   // `surf<id>:trace:<name>` drives a trace on a proving ground of that surface.
-  const surfCell = /^surf(\w+):(.+)$/.exec(lookCell?.[2] ?? whole);
-  const spec = surfCell?.[2] ?? lookCell?.[2] ?? whole;
+  const surfCell = /^surf(\w+):(.+)$/.exec(lookCell?.[2] ?? carCell?.[2] ?? whole);
+  const spec = surfCell?.[2] ?? lookCell?.[2] ?? carCell?.[2] ?? whole;
   const [name, t] = spec.split('@');
   const seconds = Number(t ?? '3');
   const isTrace = name!.startsWith('trace:');
@@ -145,10 +148,10 @@ const cells = cellSpec.split(',').map((whole) => {
       }${crashFor ? `&crash=${crashFor}` : ''}${hotFor ? `&brakes=${hotFor}` : ''}${zoomArg ? `&zoom=${zoomArg}` : ''}${looseFor ? `&loosen=${looseFor}` : ''}${afterFor ? `&after=${afterFor}` : ''}${
         wreckMatch ? `&wreck=${wreckMatch[1]}` : ''
       }${glassMatch ? `&glass=${(Number(glassMatch[1]) / 100).toFixed(2)}` : ''
-      }${signArg ? `&sign=${signArg}` : ''}${visionFor ? `&vision=${visionFor}` : ''}${carsArg ? `&cars=${carsArg}` : ''}${boilArg ? `&boil=${boilArg}` : ''}${knockArg ? `&knock=${knockArg}` : ''}${lightsArg ? `&lights=${lightsArg}` : ''}${awardArg ? `&award=${awardArg}` : ''}${replayArg ? '&replay=1' : ''}${cellLook ? `&look=${cellLook}` : ''}`;
+      }${signArg ? `&sign=${signArg}` : ''}${visionFor ? `&vision=${visionFor}` : ''}${carsArg ? `&cars=${carsArg}` : ''}${boilArg ? `&boil=${boilArg}` : ''}${knockArg ? `&knock=${knockArg}` : ''}${lightsArg ? `&lights=${lightsArg}` : ''}${awardArg ? `&award=${awardArg}` : ''}${replayArg ? '&replay=1' : ''}${cellLook ? `&look=${cellLook}` : ''}${cellCar ? `&car=${cellCar}` : ''}`;
   return {
     url,
-    label: `${cellLook ? `[${cellLook}] ` : ''}${surfCell ? `${surfCell[1]} ` : ''}${id}${useVariant ? ` ${useVariant}` : ''} @ ${seconds}s${glassMatch ? ` · glass ${glassMatch[1]}%` : ''}${withGhost ? ' + ghost' : ''}${
+    label: `${cellCar ? `[${cellCar}] ` : ''}${cellLook ? `[${cellLook}] ` : ''}${surfCell ? `${surfCell[1]} ` : ''}${id}${useVariant ? ` ${useVariant}` : ''} @ ${seconds}s${glassMatch ? ` · glass ${glassMatch[1]}%` : ''}${withGhost ? ' + ghost' : ''}${
       crashFor ? ` + ${crashFor}s crash` : ''
     }${carsArg ? ` · ${carsArg} cars` : ''}${boilArg ? ` · boiling` : ''}${hotMatch ? ` · ${hotFor}°C` : ''}${
       looseMatch ? ` · ${looseFor} N·s +${afterFor}s` : ''

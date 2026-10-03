@@ -137,6 +137,13 @@ export interface Settings {
    * turns anything it does not know back into the standard look.
    */
   look: string;
+  /**
+   * The body the arcade car wears, by id: 'rally', 'monster' or 'rover'. A
+   * skin only — every arcade car is the same car underneath, which is what
+   * keeps the board one board. A string at this layer; `render/carStyles.ts`
+   * says what the ids are.
+   */
+  arcadeCar: string;
   /** Spoken pacenotes during a stage. */
   codriver: boolean;
   /** Gamepad rumble and phone vibration. */
@@ -153,6 +160,7 @@ export const DEFAULT_SETTINGS: Settings = {
   tilt: false,
   pad: {},
   look: 'standard',
+  arcadeCar: 'rally',
   codriver: true,
   rumble: true,
 };
@@ -238,6 +246,10 @@ function migrate(stored: unknown): Profile {
             typeof stored.settings.look === 'string'
               ? stored.settings.look.slice(0, 24)
               : DEFAULT_SETTINGS.look,
+          arcadeCar:
+            typeof stored.settings.arcadeCar === 'string'
+              ? stored.settings.arcadeCar.slice(0, 16)
+              : DEFAULT_SETTINGS.arcadeCar,
           codriver:
             typeof stored.settings.codriver === 'boolean'
               ? stored.settings.codriver

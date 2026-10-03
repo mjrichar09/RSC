@@ -53,6 +53,13 @@ import type { GhostSample } from '../sim/replay.js';
 import type { VehicleState } from '../sim/vehicle.js';
 import { PALETTE } from './scene.js';
 import { DEFAULT_LIVERY, type Livery } from '../data/liveries.js';
+import {
+  type CarStyle,
+  WHEEL_LAYOUT,
+  buildMonsterExtras,
+  buildRoverBody,
+  buildRoverWheel,
+} from './carStyles.js';
 
 export interface CarViewOptions {
   /**
@@ -397,6 +404,18 @@ export class CarView {
 
   private readonly chassis = new THREE.Group();
   private readonly wheels: THREE.Group[] = [];
+  /**
+   * What each wheel draws, per body style. Inside the wheel group rather than
+   * on it, because the wheel group's own scale is how a flat tyre squats.
+   */
+  private readonly wheelRims: THREE.Group[] = [];
+  private readonly roverRims: THREE.Group[] = [];
+  /** The rover's middle pair, which the physics does not have. */
+  private readonly middleWheels: THREE.Group[] = [];
+  /** Everything of the rally car's body, so another style can hide it. */
+  private readonly rallyBody = new THREE.Group();
+  private readonly styleParts: Partial<Record<CarStyle, THREE.Group>> = {};
+  private style: CarStyle = 'rally';
   private readonly discs: THREE.Mesh[] = [];
 
   private readonly ghost: boolean;
@@ -673,11 +692,14 @@ export class CarView {
 
     for (let i = 0; i < 4; i++) {
       const wheel = new THREE.Group();
+      const rim = new THREE.Group();
+      wheel.add(rim);
+      this.wheelRims.push(rim);
       const tire = new THREE.Mesh(tireGeo, tireMat);
       tire.castShadow = !isGhost;
-      wheel.add(tire);
+      rim.add(tire);
       // The hub spins with the wheel and makes rotation (and lockup) visible.
-      wheel.add(new THREE.Mesh(hubGeo, hubMat));
+      rim.add(new THREE.Mesh(hubGeo, hubMat));
       // Each disc owns its material: four corners reach four temperatures, and
       // the front pair does most of the work.
       const disc = new THREE.Mesh(
@@ -686,7 +708,7 @@ export class CarView {
       );
       // Outboard face. Wheel 0 is the front left, and the car's left is +X.
       disc.position.x = i % 2 === 0 ? 0.135 : -0.135;
-      wheel.add(disc);
+      rim.add(disc);
       this.discs.push(disc);
       this.wheels.push(wheel);
       this.group.add(wheel);
@@ -727,6 +749,16 @@ export class CarView {
       this.buildDecals(h);
       this.setTag(options.tag, tint ?? GHOST_BLUE);
     }
+
+    // The rally car's body into its own group, last, once everything that is
+    // part of it exists. The headlights stay in the chassis: a light under a
+    // hidden parent is not collected, and the rover still needs to see.
+    for (const child of [...this.chassis.children]) {
+      if (child instanceof THREE.Light || this.headlights.some((b) => b.target === child)) continue;
+      if (this.lamps.includes(child as THREE.Mesh)) continue;
+      this.rallyBody.add(child);
+    }
+    this.chassis.add(this.rallyBody);
 
   }
 
@@ -1485,6 +1517,7 @@ export class CarView {
       view.position.set(mount.x, mount.y + CAR.suspensionRestLength * 0.5, mount.z);
       view.rotation.set(sample.wheelRotation[i]!, i < 2 ? sample.steer : 0, 0, 'YXZ');
     }
+    this.placeStyledWheels();
   }
 
   /**
@@ -1520,6 +1553,77 @@ export class CarView {
         : CAR.suspensionRestLength;
       view.position.set(mount.x, mount.y + CAR.suspensionRestLength - drop, mount.z);
       view.rotation.set(frame.wheelRotation[i]!, i < 2 ? frame.steer : 0, 0, 'YXZ');
+    }
+    this.placeStyledWheels();
+  }
+
+  /**
+   * Draw a different body over the same car. See `carStyles.ts`: nothing here
+   * moves a contact patch, so the physics never knows.
+   *
+   * Built the first time it is asked for, so the cars that never wear one —
+   * the ghosts, a rival in a network race — never pay for it.
+   */
+  setStyle(style: CarStyle): void {
+    if (this.ghost || style === this.style) return;
+    this.style = style;
+    if (style !== 'rally' && !this.styleParts[style]) {
+      const part = style === 'monster' ? buildMonsterExtras() : buildRoverBody();
+      this.chassis.add(part);
+      this.styleParts[style] = part;
+      if (style === 'rover') {
+        for (const wheel of this.wheels) {
+          const rim = buildRoverWheel();
+          wheel.add(rim);
+          this.roverRims.push(rim);
+        }
+        for (let i = 0; i < 2; i++) {
+          const middle = new THREE.Group();
+          middle.add(buildRoverWheel());
+          this.group.add(middle);
+          this.middleWheels.push(middle);
+        }
+      }
+    }
+    for (const [name, part] of Object.entries(this.styleParts)) part!.visible = name === style;
+    const rover = style === 'rover';
+    this.rallyBody.visible = !rover;
+    for (const lamp of this.lamps) lamp.visible = !rover;
+    const layout = WHEEL_LAYOUT[style];
+    for (const rim of this.wheelRims) {
+      rim.visible = !rover;
+      rim.scale.set(layout.width, layout.size, layout.size);
+    }
+    for (const rim of this.roverRims) rim.visible = rover;
+    for (const middle of this.middleWheels) middle.visible = rover;
+    this.chassis.position.y = layout.body;
+  }
+
+  get carStyle(): CarStyle {
+    return this.style;
+  }
+
+  /**
+   * Where the style draws the wheels the physics has just placed: further
+   * out, lifted by however much bigger they are, and for the rover, the
+   * middle pair between the other two on each side, turning with them.
+   * Called at the end of every path that poses the wheels.
+   */
+  private placeStyledWheels(): void {
+    if (this.style === 'rally') return;
+    const layout = WHEEL_LAYOUT[this.style];
+    for (const wheel of this.wheels) {
+      wheel.position.x += Math.sign(wheel.position.x) * layout.spread;
+      wheel.position.y += layout.lift;
+    }
+    if (this.style === 'rover') {
+      for (const [i, middle] of this.middleWheels.entries()) {
+        const front = this.wheels[i]!;
+        const rear = this.wheels[i + 2]!;
+        middle.position.copy(front.position).add(rear.position).multiplyScalar(0.5);
+        middle.rotation.set(front.rotation.x, 0, 0);
+        middle.visible = front.visible && rear.visible;
+      }
     }
   }
 
@@ -1565,5 +1669,6 @@ export class CarView {
       view.rotation.set(w.rotation, w.steer, Math.sign(mount.x) * sag * 0.3, 'YZX');
 
     }
+    this.placeStyledWheels();
   }
 }

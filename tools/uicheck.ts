@@ -277,8 +277,14 @@ await page.mouse.move(2, 2);
 await page.locator('.menu-row[data-id="pine-loop:day-clear"]').hover();
 await page.waitForFunction(`window.__intro.some((t) => t.includes('Pine Loop'))`, undefined, { timeout: 5000 });
 console.log(`co-driver introduces a stage: "${((await page.evaluate('window.__intro')) as string[])[0]}"`);
+// The arcade car's body is picked on this page, and worn in the race. A skin
+// only — the same car underneath — so the rest of this check drives it.
+await page.click('[data-action="car"][data-id="monster"]');
+await page.waitForSelector('[data-action="car"][data-id="monster"].is-on');
 await page.locator('.menu-row[data-id="quarry-run:night"]').click();
 await page.waitForFunction(() => (window.RSC!.status() as { stage: string }).stage === 'quarry-run');
+if ((await status()).car !== 'monster') throw new Error('the arcade race did not wear the car picked for it');
+console.log('arcade car picker: the race wears the monster truck');
 console.log(`arcade lists ${rows} races and drives one`);
 
 /*

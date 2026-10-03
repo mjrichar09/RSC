@@ -30,6 +30,7 @@ import {
   type PadBindings,
 } from './gamepad.js';
 import { LOOKS, type LookId } from '../render/look.js';
+import { CAR_STYLES, type CarStyle, isCarStyle } from '../render/carStyles.js';
 
 export interface ArcadePick {
   def: StageDef;
@@ -111,6 +112,9 @@ export class StartMenu {
 
   /** Raised when a look is picked on the front screen. */
   onLook: ((id: LookId) => void) | null = null;
+  /** The arcade car's body was changed. */
+  onCar: ((style: CarStyle) => void) | null = null;
+  private car: CarStyle = 'rally';
   /** The look in force, so the picker can show it. */
   private look: LookId = 'standard';
 
@@ -129,6 +133,11 @@ export class StartMenu {
   /** Show the saved switches, without raising a change. */
   setSwitches(values: { codriver: boolean; rumble: boolean }): void {
     this.switches = { ...values };
+  }
+
+  /** Show the saved arcade body as picked, without raising a change. */
+  setCar(style: CarStyle): void {
+    this.car = style;
   }
 
   /** Show the saved look as picked, without raising a change. */
@@ -285,6 +294,13 @@ export class StartMenu {
           this.onToggle?.(id, this.switches[id]);
         }
         break;
+      case 'car':
+        if (isCarStyle(id)) {
+          this.car = id;
+          this.onCar?.(id);
+          this.render();
+        }
+        return;
       case 'look':
         if (id in LOOKS) {
           this.look = id as LookId;
@@ -625,6 +641,25 @@ export class StartMenu {
    * the front screen is behind the game — picking one here repaints the stage
    * the moment the menu closes, which is how a look is judged.
    */
+  /**
+   * Which body the arcade car wears. On the arcade page and nowhere else: a
+   * career car is the car the garage built, and the skin is the one thing
+   * about an arcade car that is the player's to choose.
+   */
+  private carRow(): string {
+    const choices = (Object.keys(CAR_STYLES) as CarStyle[])
+      .map(
+        (id) =>
+          `<button class="look-choice${id === this.car ? ' is-on' : ''}" data-action="car" data-id="${id}">${escapeHtml(CAR_STYLES[id].name)}</button>`,
+      )
+      .join('');
+    return `
+      <div class="menu-look">
+        <span>Car</span>
+        <div class="look-choices">${choices}</div>
+      </div>`;
+  }
+
   private lookRow(): string {
     const choices = Object.values(LOOKS)
       .map(
@@ -713,6 +748,7 @@ export class StartMenu {
             this.career.driverName,
           )}</b> — change</button>
         </p>
+        ${this.carRow()}
         <div class="menu-rows">${rows}</div>
       </div>`;
   }
