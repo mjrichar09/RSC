@@ -63,6 +63,10 @@ const COMPOSITE = /* glsl */ `
   uniform float uWiper;      // blade position 0..1, or -1 when parked
   uniform float uWiperBack;  // 1 while the blade is on its return stroke
   uniform float uTime;
+  // Where the water on the glass has got to, integrated from the car's speed:
+  // positive is down the glass under its own weight, negative is up it, blown.
+  uniform float uFlow;
+  uniform float uFlowRate;
   /** How dark the darkest part of the world is allowed to get. */
   uniform float uFloor;
   // The grade: the colour of the light, and what it does to shadows and colour.
@@ -99,40 +103,148 @@ const COMPOSITE = /* glsl */ `
   }
 
   /**
-   * Beads of water on glass.
+   * Beads of water on glass, each with a life.
    *
-   * One droplet per cell of a jittered grid, each with its own size and its own
-   * slow slide downward — so what is on the glass is a scatter of round things
-   * with clear glass between them, which is what a windscreen in rain actually
-   * looks like. A wash of noise reads as a dirty lens instead.
+   * One bead per cell of a grid, and each one lands, sits and goes on its own
+   * clock — so the glass is never the same scatter twice, and new water can be
+   * seen arriving. Every landing is somewhere new in its cell (the cycle number
+   * is in the hash), and is marked by a ring of spray flung out from it in the
+   * first instant: that is the impact.
    *
-   * Returns coverage, and writes the bead's bright edge into the rim output:
-   * that edge is
-   * most of why a droplet reads as a droplet rather than as a grey blob.
+   * Coverage comes back; the bead's bright edge, the offset to bend the view
+   * through it (a bead is a lens), and the splash come back through the outs.
    */
-  float droplets(vec2 uv, float scale, float speed, out float rim) {
-    vec2 p = uv * scale;
-    // Slow drift down the glass, faster for the bigger beads.
-    p.y += uTime * speed;
+  float beads(vec2 uv, float scale, float seed, out float rim, out vec2 lens, out float splash) {
+    vec2 p = vec2(uv.x * uAspect, uv.y) * scale;
+    // Drifting with the water on the glass: down when slow, up when blown.
+    p.y += uFlow * scale * 0.18;
     vec2 cell = floor(p);
     vec2 f = fract(p);
-
     float best = 0.0;
     rim = 0.0;
+    lens = vec2(0.0);
+    splash = 0.0;
     for (int dy = -1; dy <= 1; dy++) {
       for (int dx = -1; dx <= 1; dx++) {
         vec2 o = vec2(float(dx), float(dy));
         vec2 id = cell + o;
-        float h = hash(id);
-        float h2 = hash(id + 17.3);
-        // Not every cell has a bead, and the ones that do sit anywhere in it.
-        if (h > 0.72) continue;
-        vec2 centre = o + vec2(0.2 + 0.6 * h2, 0.2 + 0.6 * fract(h * 31.7));
-        float radius = 0.13 + 0.3 * h;
-        float d = length((f - centre) * vec2(1.0, 1.15));
-        float body = 1.0 - smoothstep(radius * 0.55, radius, d);
+        float h = hash(id + seed);
+        float period = 2.2 + 4.5 * hash(id + seed + 41.9);
+        float clock = uTime / period + h;
+        float life = fract(clock);
+        // A new place each time it lands.
+        float cycle = floor(clock);
+        float hc = hash(id + seed + cycle * 7.31);
+        if (hc > 0.8) continue;
+        vec2 centre = o + vec2(0.18 + 0.64 * hash(id + cycle * 3.7), 0.18 + 0.64 * hash(id + cycle * 9.1 + seed));
+        float grow = smoothstep(0.0, 0.07, life);
+        float fade = 1.0 - smoothstep(0.84, 1.0, life);
+        float radius = (0.12 + 0.26 * hc) * mix(0.45, 1.0, grow);
+        vec2 d = f - centre;
+        float dist = length(d * vec2(1.0, 1.12));
+        float body = (1.0 - smoothstep(radius * 0.55, radius, dist)) * fade;
+        if (body > best) {
+          best = body;
+          lens = d / max(radius, 0.001);
+        }
+        // Not a ring of light round every bead — that read as bubbles. A bead
+        // is a lens: a crescent of highlight on the side toward the sky, and a
+        // darker edge opposite where it bends the ground into it.
+        float edge = (1.0 - smoothstep(radius * 0.7, radius * 1.02, dist))
+          * smoothstep(radius * 0.35, radius * 0.8, dist) * fade;
+        float facing = dot(d / max(dist, 0.0001), vec2(-0.45, 0.89));
+        rim = max(rim, edge * smoothstep(0.35, 0.9, facing) - edge * smoothstep(0.4, 0.95, -facing) * 0.6);
+        // The impact: a ring of spray thrown out from where it landed, gone in
+        // a moment — and only on some landings, or the glass is all rings.
+        float out_ = life / 0.035;
+        if (out_ < 1.0 && hash(id + cycle * 1.9 + seed) < 0.3) {
+          float ringR = radius * (0.7 + 2.2 * out_);
+          splash = max(splash, (1.0 - smoothstep(0.0, 0.03, abs(dist - ringR))) * (1.0 - out_) * 0.6);
+        }
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Drops big enough to run.
+   *
+   * A few columns, one drop each, meandering as they go: down the glass under
+   * their own weight when the car is slow, stalling, then driven up and back
+   * across it once the airflow at speed beats gravity. Behind each one, the
+   * wet trail it leaves, along the path it actually took.
+   */
+  float runners(vec2 uv, out vec2 lens, out float trail) {
+    lens = vec2(0.0);
+    trail = 0.0;
+    float cols = 10.0;
+    float col = floor(uv.x * cols);
+    float best = 0.0;
+    // Which way is behind a drop: up the glass for one running down.
+    float behindSign = uFlowRate >= 0.0 ? 1.0 : -1.0;
+    for (int k = -1; k <= 1; k++) {
+      float c = col + float(k);
+      float h = hash(vec2(c, 3.7));
+      if (h > 0.6) continue;
+      float h2 = hash(vec2(c, 9.1));
+      float y = fract(h2 - uFlow * (0.55 + 0.6 * h));
+      float wander = h * 6.2831853;
+      float x = (c + 0.5 + 0.3 * sin(y * 8.0 + wander)) / cols;
+      vec2 d = vec2((uv.x - x) * uAspect, uv.y - y);
+      float r = 0.010 + 0.008 * h2;
+      float dist = length(d * vec2(1.0, 0.78));
+      float body = 1.0 - smoothstep(r * 0.6, r, dist);
+      if (body > best) {
+        best = body;
+        lens = d / r;
+      }
+      // The trail, along the path the drop took to get here.
+      float behind = (uv.y - y) * behindSign;
+      float length_ = 0.16;
+      if (behind > 0.0 && behind < length_) {
+        float xPath = (c + 0.5 + 0.3 * sin(uv.y * 8.0 + wander)) / cols;
+        float across = abs(uv.x - xPath) * uAspect;
+        float width = r * 0.35 * (1.0 - behind / length_);
+        trail = max(trail, (1.0 - smoothstep(width * 0.5, width + 0.0015, across)) * (1.0 - behind / length_));
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Snowflakes landing on the glass.
+   *
+   * Each lands with a little pop — arriving a touch large and bright, then
+   * settling — in a six-armed shape, sits where it landed (snow does not run),
+   * and melts away slowly at the end of its life, going grey and shrinking.
+   */
+  float snowflakes(vec2 uv, out float sparkle) {
+    vec2 p = vec2(uv.x * uAspect, uv.y) * 30.0;
+    vec2 cell = floor(p);
+    vec2 f = fract(p);
+    float best = 0.0;
+    sparkle = 0.0;
+    for (int dy = -1; dy <= 1; dy++) {
+      for (int dx = -1; dx <= 1; dx++) {
+        vec2 o = vec2(float(dx), float(dy));
+        vec2 id = cell + o;
+        float period = 5.0 + 7.0 * hash(id + 5.3);
+        float clock = uTime / period + hash(id + 2.9);
+        float life = fract(clock);
+        float cycle = floor(clock);
+        float hc = hash(id + cycle * 4.17);
+        if (hc > 0.62) continue;
+        vec2 centre = o + vec2(0.2 + 0.6 * hash(id + cycle * 2.3), 0.2 + 0.6 * hash(id + cycle * 6.1));
+        // The landing pop, then a slow melt that shrinks it.
+        float pop = 1.0 + 0.45 * (1.0 - smoothstep(0.0, 0.05, life));
+        float melt = smoothstep(0.7, 1.0, life);
+        float radius = (0.16 + 0.22 * hc) * pop * (1.0 - 0.5 * melt);
+        vec2 d = f - centre;
+        float dist = length(d);
+        float arms = 0.72 + 0.28 * cos(atan(d.y, d.x) * 6.0 + hc * 6.28);
+        float body = (1.0 - smoothstep(radius * arms * 0.55, radius * arms, dist)) * (1.0 - melt * 0.85);
         best = max(best, body);
-        rim = max(rim, (1.0 - smoothstep(radius * 0.72, radius * 1.05, d)) * smoothstep(radius * 0.5, radius * 0.85, d));
+        sparkle = max(sparkle, body * (1.0 - smoothstep(0.0, 0.06, life)));
       }
     }
     return best;
@@ -322,19 +434,34 @@ const COMPOSITE = /* glsl */ `
     // hard-edged blobs — the same number drawn three ways.
     float grain;
     float rim = 0.0;
+    // How the view is bent through the water on this pixel, and the spray
+    // of whatever just landed — rain only.
+    vec2 lens = vec2(0.0);
+    float splash = 0.0;
+    float trail = 0.0;
+    float sparkle = 0.0;
     if (uKind < 0.5) {
-      // Rain: beads of two sizes, sliding, plus the runnels they leave behind.
+      // Rain: beads of two sizes landing and going, drops running through
+      // them, and the trails those leave.
       float rimA;
       float rimB;
-      float big = droplets(vUv, 26.0, 0.03, rimA);
-      float small = droplets(vUv + 3.1, 52.0, 0.012, rimB);
-      rim = max(rimA, rimB * 0.6);
-      float runnel = smoothstep(0.55, 0.95, noise(vUv * vec2(120.0, 9.0) + vec2(0.0, uTime * 0.5)));
-      grain = clamp(max(big, small * 0.75) + runnel * 0.35, 0.0, 1.0);
+      vec2 lensA;
+      vec2 lensB;
+      vec2 lensR;
+      float splashA;
+      float splashB;
+      float big = beads(vUv, 16.0, 0.0, rimA, lensA, splashA);
+      float small = beads(vUv + 3.1, 34.0, 5.0, rimB, lensB, splashB);
+      float run = runners(vUv, lensR, trail);
+      rim = rimA + rimB * 0.35;
+      splash = splashA;
+      lens = run > max(big, small) ? lensR * run : (big >= small ? lensA * big : lensB * small);
+      grain = clamp(max(max(big, small * 0.75), run) + trail * 0.55, 0.0, 1.0);
     } else if (uKind < 1.5) {
-      // Snow: bigger, softer, settling in clumps that pack together.
-      float clump = noise(vUv * 20.0 + uTime * 0.02) * 0.7 + noise(vUv * 46.0) * 0.3;
-      grain = smoothstep(0.42, 0.78, clump);
+      // Snow: flakes landing and melting, over a soft pack where they gather.
+      float flakes = snowflakes(vUv, sparkle);
+      float clump = noise(vUv * 20.0) * 0.7 + noise(vUv * 46.0) * 0.3;
+      grain = clamp(max(flakes, smoothstep(0.55, 0.85, clump) * 0.55), 0.0, 1.0);
     } else {
       // Mud: large hard-edged blobs that stay exactly where they land.
       float blob = noise(vUv * 11.0) * 0.65 + noise(vUv * 31.0) * 0.35;
@@ -352,6 +479,34 @@ const COMPOSITE = /* glsl */ `
     // what made every windscreen in this game look like a dirty lens.
     float cleared = uOcclusion * grain * 0.8;
     float caked = uCrust * (0.62 + 0.38 * grain) * (1.0 - swept);
+
+    /*
+     * Snow builds up rather than fading in.
+     *
+     * It drifts in from the frame — the bottom and the corners first — with a
+     * ragged front that advances as the crust grows, so a short snowy stage
+     * leaves white edges and a long one closes in on the arc. And where the
+     * blade parks at the end of each stroke it pushes a bank up along the
+     * edge of its sweep, which is the line every snowy windscreen has.
+     */
+    float snowLip = 0.0;
+    if (uKind > 0.5 && uKind < 1.5) {
+      float fromEdge = min(
+        min(vUv.y * 0.75, (1.0 - vUv.y) * 1.7),
+        min(vUv.x, 1.0 - vUv.x) * uAspect * 0.85
+      );
+      // Thirty percent of the way in at most: drifting further, the whole
+      // screen outside the arc went to one grey wash and there was no front
+      // to see advancing.
+      float front = uCrust * 0.3 + lumps * 0.45;
+      float drift = 1.0 - smoothstep(front - 0.012, front + 0.012, fromEdge);
+      float bank = (exp(-pow((sweepR - reachEdge) / 0.04, 2.0))
+        + exp(-pow((abs(sweepA) - angleEdge) / 0.035, 2.0)) * inReach)
+        * smoothstep(0.05, 0.35, uCrust) * (0.55 + 0.45 * grain);
+      caked = clamp(max(drift * (1.0 - swept * 0.9), min(bank, 1.0) * 0.9), 0.0, 1.0);
+      // The lip along the front of the drift, where it is thickest.
+      snowLip = drift * (1.0 - smoothstep(front - 0.05, front - 0.008, fromEdge));
+    }
 
     /*
      * The blade, sweeping the arc.
@@ -451,10 +606,36 @@ const COMPOSITE = /* glsl */ `
     // Never fully black: a driver's eyes adapt, and a screen that goes to zero
     // outside the beams is not dramatic, it is unplayable.
     colour.rgb = mix(colour.rgb, colour.rgb * uFloor, dark * (1.0 - onCar));
-    colour.rgb = mix(colour.rgb, tint * (0.16 + 0.30 * (1.0 - uDarkness)), cleared * swept * 0.55);
-    colour.rgb = mix(colour.rgb, crustTint * (0.22 + 0.55 * (1.0 - uDarkness)), min(caked * 1.15, 0.94));
+    // Through the water, the view is bent and softened: each bead shows its
+    // own small blurred picture of what is behind it, displaced as a lens
+    // displaces it. That, more than a grey tint, is what wet glass looks like.
+    if (uKind < 0.5) {
+      float water = clamp(grain * uOcclusion * 1.4, 0.0, 1.0) * swept * (1.0 - wipe);
+      vec3 through = texture2D(uBlur, clamp(vUv - lens * vec2(0.03 / uAspect, 0.03), 0.0, 1.0)).rgb;
+      colour.rgb = mix(colour.rgb, through * 1.08, water * 0.85);
+      colour.rgb = mix(colour.rgb, tint * (0.16 + 0.30 * (1.0 - uDarkness)), cleared * swept * 0.2);
+      // The impacts: a flash of spray where each one lands.
+      colour.rgb += splash * uOcclusion * swept * (1.0 - wipe) * (0.22 + 0.3 * (1.0 - uDarkness));
+    } else if (uKind < 1.5) {
+      // Flakes on the glass are pale even at night, like the drift they build.
+      colour.rgb = mix(colour.rgb, vec3(0.9, 0.93, 0.97) * (0.5 + 0.4 * (1.0 - uDarkness)), cleared * swept * 0.8);
+    } else {
+      colour.rgb = mix(colour.rgb, tint * (0.16 + 0.30 * (1.0 - uDarkness)), cleared * swept * 0.55);
+    }
+    // A flake landing catches the light for a moment.
+    colour.rgb += sparkle * uOcclusion * swept * (1.0 - wipe) * 0.25;
+    // Snow's drift is shaded along its front edge, where it banks up, which is
+    // what makes it read as depth on the glass rather than as a white stain.
+    vec3 crustShade = crustTint * (1.0 - snowLip * 0.22);
+    // Snow stays pale at night — packed on the glass it catches the scatter of
+    // your own lights — where mud and grime go dark with everything else.
+    float crustLight = uKind > 0.5 && uKind < 1.5
+      ? 0.5 + 0.38 * (1.0 - uDarkness)
+      : 0.22 + 0.55 * (1.0 - uDarkness);
+    colour.rgb = mix(colour.rgb, crustShade * crustLight, min(caked * 1.15, 0.94));
     // The bright edge of a bead, which is most of why a droplet reads as one:
     // it is a lens, and it catches whatever light there is.
+    // Negative where a bead's lower edge darkens, positive along its highlight.
     colour.rgb += rim * uOcclusion * swept * (1.0 - wipe) * (0.18 + 0.26 * (1.0 - uDarkness));
     // The blade itself: a dark rubber edge with the thin bright line of water
     // standing in front of it. Drawn here, on the finished picture, because it
@@ -552,6 +733,14 @@ export class VisionPass {
   private readonly compositeMaterial: THREE.ShaderMaterial;
   /** 0 turns the whole effect off; 1 is full strength. */
   strength = 1;
+  /**
+   * The car's speed, m/s. Set before each frame: it is what blows the water
+   * up the glass at speed and lets it run down when slow.
+   */
+  speed = 0;
+  /** Where the water on the glass has got to; see `uFlow`. */
+  private flow = 0;
+  private lastTime = 0;
 
   constructor(renderer: THREE.WebGLRenderer) {
     this.renderer = renderer;
@@ -599,6 +788,8 @@ export class VisionPass {
         uWiper: { value: -1 },
         uWiperBack: { value: 0 },
         uTime: { value: 0 },
+        uFlow: { value: 0 },
+        uFlowRate: { value: 0 },
         uFloor: { value: 0.22 },
         uGain: { value: new THREE.Vector3(1, 1, 1) },
         uLift: { value: new THREE.Vector3(0, 0, 0) },
@@ -773,6 +964,16 @@ export class VisionPass {
     (c.uPaper!.value as THREE.Vector3).set(look.paper[0], look.paper[1], look.paper[2]);
     c.uPaperMix!.value = look.paperMix;
     c.uTime!.value = time;
+    // The water on the glass, moved by the car's speed. Integrated here rather
+    // than computed from it in the shader, so a change of speed changes how
+    // the drops move and not where they are.
+    const dt = Math.min(Math.max(time - this.lastTime, 0), 0.1);
+    this.lastTime = time;
+    const blown = Math.min(Math.max(this.speed / 42, 0), 1);
+    const rate = 0.05 - blown * 0.17;
+    this.flow += dt * rate;
+    c.uFlow!.value = this.flow;
+    c.uFlowRate!.value = rate;
     // At full strength the world outside the beams keeps about a twelfth of
     // its light; at low strength it barely dims at all. This used to bottom
     // out at a fifth, which on a night stage read as "dim" rather than as

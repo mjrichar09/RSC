@@ -1948,6 +1948,9 @@ const params = new URLSearchParams(location.search);
     const forwardY = ahead.y - origin.y;
     const forwardLength = Math.hypot(forwardX, forwardY) || 1;
 
+    // What moves the water on the glass: blown up it at speed, running down it
+    // when slow.
+    visionPass.speed = Math.hypot(state.velocity.x, state.velocity.z);
     visionPass.render(
       scene,
       camera.camera,
