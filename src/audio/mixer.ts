@@ -106,6 +106,8 @@ export class Mixer {
   private clock = 0;
 
   private muted = false;
+  /** True while the page is out of sight: see `setHidden`. */
+  private hidden = false;
   /**
    * Master volume, 0 to 1.
    *
@@ -115,6 +117,11 @@ export class Mixer {
    * out in three places, which is exactly how a setting gets lost.
    */
   private volume = DEFAULT_VOLUME;
+
+  /** The context's state, or 'none' before the first gesture builds it. */
+  get state(): string {
+    return this.ctx?.state ?? 'none';
+  }
 
   /** True once audio is actually running. */
   get running(): boolean {
@@ -127,7 +134,7 @@ export class Mixer {
    */
   start(): void {
     if (this.ctx) {
-      void this.ctx.resume();
+      if (!this.hidden) void this.ctx.resume();
       return;
     }
     const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -211,6 +218,23 @@ export class Mixer {
   setPlace(biome: string, conditions: Conditions): void {
     this.place = { biome, conditions };
     this.ambience?.setPlace(biome, conditions);
+  }
+
+  /**
+   * The page has gone into the background, or come back.
+   *
+   * A hidden tab stops drawing frames, and nothing else here ever stops a
+   * voice: the engine note, the wind and the rain are oscillators and loops
+   * that hold whatever they were last set to. So the game went on droning from
+   * a background tab, on a desktop and on a phone, until the tab was closed.
+   * Suspending the context stops every voice at once and costs nothing to
+   * undo; it is not the mute, which is the player's and survives this.
+   */
+  setHidden(hidden: boolean): void {
+    this.hidden = hidden;
+    if (!this.ctx) return;
+    if (hidden) void this.ctx.suspend();
+    else void this.ctx.resume();
   }
 
   toggleMute(): boolean {

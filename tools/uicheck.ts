@@ -285,6 +285,28 @@ await page.locator('.menu-row[data-id="quarry-run:night"]').click();
 await page.waitForFunction(() => (window.RSC!.status() as { stage: string }).stage === 'quarry-run');
 if ((await status()).car !== 'monster') throw new Error('the arcade race did not wear the car picked for it');
 console.log('arcade car picker: the race wears the monster truck');
+
+/*
+ * Silent in the background. A hidden tab stops the frame loop but not the
+ * sound graph, so the engine went on droning from a tab nobody was looking at
+ * until it was closed. Hidden is faked here — a headless page is always
+ * "visible" — by the property and the event the game listens to.
+ */
+const audioState = async () => (await status()).audio as string;
+await page.keyboard.press('ArrowLeft');
+await page.waitForFunction(() => (window.RSC!.status() as { audio: string }).audio === 'running', undefined, { timeout: 10_000 });
+const setVisibility = (state: 'hidden' | 'visible') =>
+  page.evaluate((s) => {
+    Object.defineProperty(document, 'visibilityState', { value: s, configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  }, state);
+await setVisibility('hidden');
+await page.waitForFunction(() => (window.RSC!.status() as { audio: string }).audio === 'suspended', undefined, { timeout: 5_000 })
+  .catch(async () => { throw new Error(`hiding the page left the sound ${await audioState()}`); });
+await setVisibility('visible');
+await page.waitForFunction(() => (window.RSC!.status() as { audio: string }).audio === 'running', undefined, { timeout: 5_000 })
+  .catch(async () => { throw new Error(`showing the page again left the sound ${await audioState()}`); });
+console.log('sound suspends when the page is hidden and comes back when it is shown');
 console.log(`arcade lists ${rows} races and drives one`);
 
 /*
@@ -385,12 +407,26 @@ await page.evaluate(`(() => {
   };
   tick();
 })()`);
-const finished = (await page.evaluate(() => window.RSC!.finishWithAi())) as {
-  phase?: string;
-  medal?: string;
-  time?: string;
-};
-if (finished.phase !== 'finished') throw new Error(`the AI did not finish: ${finished.phase}`);
+/*
+ * One retry, and only for a retirement. Quarry Run at night has deer, the AI
+ * does not swerve, and a holed radiator overheats just short of the line — it
+ * failed this check at "retired", "overheated", a 1052 bill, with nothing
+ * wrong in the finish flow this step exists to test. A second retirement is
+ * still a failure.
+ */
+type Finish = { phase?: string; medal?: string; time?: string };
+let finished = (await page.evaluate(() => window.RSC!.finishWithAi())) as Finish;
+if (finished.phase === 'retired') {
+  console.log(`the AI retired (${JSON.stringify((finished as { failures?: unknown }).failures)}); restarting it once`);
+  await page.keyboard.press('r');
+  await page.waitForFunction(() => (window.RSC!.status() as { phase: string }).phase === 'staging', {
+    timeout: 20_000,
+  });
+  finished = (await page.evaluate(() => window.RSC!.finishWithAi())) as Finish;
+}
+if (finished.phase !== 'finished') {
+  throw new Error(`the AI did not finish: ${finished.phase} ${JSON.stringify(finished)}`);
+}
 /*
  * And it was celebrated. Arcade marked a run only through the board, so a
  * medal was never announced and nothing here noticed: this check finished an

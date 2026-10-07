@@ -1205,6 +1205,34 @@ const params = new URLSearchParams(location.search);
   const AUDIO_GESTURES = ['keydown', 'pointerdown', 'pointerup', 'click', 'touchend'] as const;
   for (const event of AUDIO_GESTURES) window.addEventListener(event, startAudio);
 
+  /*
+   * Silent in the background.
+   *
+   * A hidden tab stops the frame loop but not the sound graph, so the engine
+   * droned on from a tab nobody was looking at — on a phone, until the tab was
+   * closed. Suspended whenever the page is out of sight (another tab, the app
+   * switcher, a locked screen) and on `pagehide`, which is what a phone sends
+   * on its way into the back-forward cache.
+   *
+   * Coming back, the context is asked to resume, and the gesture listeners are
+   * put back as well: Safari on iOS may refuse a resume that is not inside a
+   * tap, and the next touch then brings the sound back rather than leaving the
+   * game silent for good.
+   */
+  const backgrounded = (hidden: boolean) => {
+    mixer.setHidden(hidden);
+    if (hidden) {
+      codriver.silence();
+      return;
+    }
+    for (const event of AUDIO_GESTURES) window.addEventListener(event, startAudio);
+  };
+  document.addEventListener('visibilitychange', () => backgrounded(document.visibilityState === 'hidden'));
+  window.addEventListener('pagehide', () => backgrounded(true));
+  window.addEventListener('pageshow', () => {
+    if (document.visibilityState === 'visible') backgrounded(false);
+  });
+
   controls.onMute = () => mixer.toggleMute();
 
   // The volume slider on the front screen. Applied live as it moves and saved
@@ -2629,6 +2657,9 @@ const params = new URLSearchParams(location.search);
         rocket: rocketView.visible ? rocketView.pose : null,
         // Which body the player's car is wearing.
         car: carView.carStyle,
+        // The sound: 'running', 'suspended' while the page is hidden, or
+        // 'none' before anything has been touched.
+        audio: mixer.state,
         net: session
           ? {
               role: session.role,
