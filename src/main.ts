@@ -3061,7 +3061,7 @@ const params = new URLSearchParams(location.search);
       ? // The throttle still reaches the engine while the car is held: the revs
         // are what there is to time, and a countdown you can only watch is a
         // countdown with no decision in it. The handbrake holds the car.
-        { ...NEUTRAL_INPUT, throttle: driving.throttle, handbrake: 1 }
+        { ...NEUTRAL_INPUT, throttle: driving.throttle, handbrake: 1, hold: true }
       : // A launch fluffed by sitting on the limiter through the whole
         // countdown does not hook up. This is the only place the start can
         // cost you anything, and it is what makes timing the light worth more

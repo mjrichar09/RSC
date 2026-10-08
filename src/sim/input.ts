@@ -5,6 +5,14 @@ export interface DriverInput {
   /** 0..1 */
   brake: number;
   /**
+   * Held on the line by the start lights. All four wheels are braked and the
+   * gearbox never selects reverse, while the throttle still reaches the engine
+   * so there is a launch to time. The rear handbrake alone used to do this, and
+   * the driven front axle pulled the car up to 0.7 m off its mark before the
+   * green.
+   */
+  hold?: boolean;
+  /**
    * -1 (left) .. 1 (right), from the driver's point of view.
    *
    * The simulation's own frame has the car's local +X on its *left* — that

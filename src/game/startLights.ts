@@ -19,8 +19,14 @@ const STEP = 0.9;
 /** How long the green stays lit before the gantry goes dark. */
 const GREEN_FOR = 1.6;
 
-/** Throttle above this counts as flat out. */
-const FLAT = 0.9;
+/**
+ * Throttle above this counts as flat out.
+ *
+ * 0.6, not 0.9: an engine held on the line at 89% is on the limiter just as
+ * surely, and at 0.9 a trigger held a hair short of the end of its travel —
+ * which a gamepad does by itself — never bogged at all.
+ */
+const FLAT = 0.6;
 /**
  * Sitting flat for longer than this before the green is bouncing off the
  * limiter rather than launching, and it costs you.
@@ -144,11 +150,19 @@ export class StartLights {
    * the road bogs the car. Waiting and going at the light costs nothing.
    */
   private gradeLaunch(): LaunchQuality {
+    // How long before the green the throttle went down; negative after it.
+    const early = this.flatFor - (this.sinceGreen ?? 0);
     // Flat well before the green: the engine has been on the limiter.
-    if (this.flatFor > (this.sinceGreen ?? 0) + LIMITER_AFTER) {
+    if (early > LIMITER_AFTER) {
       this.bogged = Math.min((this.flatFor - LIMITER_AFTER) / 1.6, 1);
       return 'bogged';
     }
+    // Anticipated: not punished, and not perfect either. Everything flat for
+    // less than the limiter's 0.9 s before the green used to grade as a delay
+    // of zero — perfect — so the "perfect" window was nearly a second wide and
+    // could be stumbled into by being early, which is the one thing it exists
+    // not to reward. A reaction just ahead of the light still counts.
+    if (early > PERFECT_WINDOW) return 'clean';
     const delay = this.sinceGreen ?? 0;
     if (delay <= PERFECT_WINDOW) return 'perfect';
     if (delay <= LATE_WINDOW) return 'clean';

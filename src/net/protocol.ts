@@ -226,6 +226,7 @@ export function cleanInput(raw: unknown): DriverInput {
     brake: axis(input.brake, 0),
     steer: axis(input.steer, -1),
     handbrake: axis(input.handbrake, 0),
+    ...(input.hold === true ? { hold: true } : {}),
   };
 }
 

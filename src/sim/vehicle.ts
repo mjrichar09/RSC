@@ -472,7 +472,7 @@ export class Vehicle {
     }
 
     // --- Drivetrain ----------------------------------------------------------
-    this.updateGearbox(dt, speed, input);
+    this.updateGearbox(dt, speed, input, planarSpeed);
 
     // Arcade reverse: at a standstill, holding the brake selects reverse and
     // then *is* the reverse throttle, while the throttle becomes the brake.
@@ -493,7 +493,12 @@ export class Vehicle {
       ? 1 - clamp((Math.abs(speed) - REVERSE_MAX_MPS) / REVERSE_FADE_MPS, 0, 1)
       : 1;
     const driveInput = (inReverse ? input.brake : input.throttle) * reverseFade;
-    const brakeInput = inReverse ? input.throttle : input.brake;
+    // Rolling back faster than reverse drives — down a hill, with the pedal
+    // that drives it backwards held — that pedal brakes instead, so reverse has
+    // a speed and gravity does not take the car past it. Without this the
+    // drive simply faded out above the cap and nothing slowed the car.
+    const overCap = inReverse ? 1 - reverseFade : 0;
+    const brakeInput = input.hold ? 1 : inReverse ? Math.max(input.throttle, input.brake * overCap) : input.brake;
 
     // A stalled engine makes nothing and brakes nothing: it is disconnected,
     // not seized to the driveline. The car rolls, steers and brakes exactly as
@@ -535,7 +540,7 @@ export class Vehicle {
       // and the discs recorded it honestly: 373 C from a manoeuvre nobody
       // thought of as braking at all. Backing up is not a stop, and this is the
       // one place in the game where the pedal does not mean what it says.
-      const pressure = inReverse ? brakeInput * REVERSE_BRAKE : brakeInput;
+      const pressure = inReverse && !input.hold ? brakeInput * REVERSE_BRAKE : brakeInput;
       const axleBrake = pressure * (front ? t.brakeBias : 1 - t.brakeBias) * 2;
       const brakeTorque =
         t.brakeTorque * clamp(axleBrake, 0, 1) * fx.wheelBrake[i]! +
@@ -546,7 +551,16 @@ export class Vehicle {
       if (!h) {
         // Airborne: the wheel is free, so it just spins up under drive torque
         // and bleeds off slowly. Keeps the visual spin honest over jumps.
-        w.spin += ((driveTorque - Math.sign(w.spin) * brakeTorque) / WHEEL_INERTIA) * dt;
+        //
+        // The brake stops it and holds it stopped, as it does on the ground.
+        // Applied unclamped it overshot: about 14 rad/s a step against a wheel
+        // spinning less than that, so the spin flipped sign every step and
+        // never settled — and brake heat is torque times spin, so six seconds
+        // of brake in the air took the front discs from 27 to 128 °C. Brake is
+        // the in-air nose-down control, and a Red Planet flight is eight.
+        const spun = w.spin + (driveTorque / WHEEL_INERTIA) * dt;
+        const stop = (brakeTorque / WHEEL_INERTIA) * dt;
+        w.spin = Math.abs(spun) <= stop ? 0 : spun - Math.sign(spun) * stop;
         w.spin *= 0.995;
         w.rotation += w.spin * dt;
         continue;
@@ -677,13 +691,25 @@ export class Vehicle {
       // In the air the nose follows the flight path, and the brake drops it —
       // a stopped wheel's reaction, which is what a driver uses to land a jump.
       // About the car's right axis (-X), where a positive rate lifts the nose.
+      //
+      // The error is measured in the car's own pitch plane: the angle from the
+      // nose to the velocity, seen along the right axis — or from the tail,
+      // when the car is going backwards. Upright and nose-first that is exactly
+      // the world-frame "path minus pitch" this used to compute, so a normal
+      // flight is untouched. The world-frame version ignored roll and which end
+      // was leading: measured, a car rolled 90° had the pitch torque turned
+      // into yaw and spun, one upside down ran away end over end, and one
+      // flying backwards was steered 40° the wrong way.
       const right = rotate(rot, v3(-1, 0, 0));
-      const pitch = Math.asin(Math.max(-1, Math.min(1, nose.y)));
-      const path = Math.atan2(linvel.y, planarSpeed);
+      const along = dot(linvel, nose);
+      const across = dot(linvel, up);
+      const error = along >= 0 ? Math.atan2(across, along) : -Math.atan2(across, -along);
+      // The brake's nose-down only means anything with the wheels underneath.
+      const upright = Math.max(up.y, 0);
       const torque =
-        t.airPitchAlign * (path - pitch) -
+        t.airPitchAlign * error -
         t.airPitchDamping * dot(angvel, right) -
-        t.airPitchBrake * input.brake;
+        t.airPitchBrake * input.brake * upright;
       body.addTorque(scale(right, torque), true);
     }
 
@@ -747,9 +773,15 @@ export class Vehicle {
     const linvel = this.body.linvel() as Vec3;
     const nose = rotate(rot, v3(0, 0, 1));
     const planar = v3(linvel.x, 0, linvel.z);
+    // Against the end that is leading by choice: the nose in a forward gear,
+    // the tail in reverse. Measured against the nose alone, reversing in a
+    // straight line read as a 180° drift, and the HUD announced it in its
+    // biggest type. A car going backwards in a forward gear has spun, and
+    // still reads as one.
+    const leading = this.gearIndex === 0 ? -1 : 1;
     const drift =
       length(planar) > 1.5
-        ? Math.acos(clamp(dot(normalize(planar), normalize(v3(nose.x, 0, nose.z))), -1, 1))
+        ? Math.acos(clamp(dot(normalize(planar), normalize(v3(nose.x * leading, 0, nose.z * leading))), -1, 1))
         : 0;
 
     const angvel = this.body.angvel() as Vec3;
@@ -821,7 +853,7 @@ export class Vehicle {
     return peak * (0.06 + 0.94 * th) - braking;
   }
 
-  private updateGearbox(dt: number, speed: number, input: DriverInput): void {
+  private updateGearbox(dt: number, speed: number, input: DriverInput, planarSpeed: number): void {
     const t = this.tuning;
     if (this.shiftTimer > 0) this.shiftTimer -= dt;
 
@@ -865,7 +897,22 @@ export class Vehicle {
     // left again by applying throttle once the car has stopped rolling back.
     // The short hold stops a hard stop from flipping straight into reverse
     // while the player still has the brake buried.
-    if (this.gearIndex > 0 && speed < 0.6 && input.brake > 0.5 && input.throttle < 0.1) {
+    //
+    // "Near a stop" is the car's whole speed, not its forward component. Read
+    // as the signed forward speed, a car sliding sideways (forward speed about
+    // zero) or rolling backwards (negative) at any speed was "stopped", so
+    // holding the brake through a spin selected reverse at 10 m/s — and in
+    // reverse the brake pedal drives. Measured: a spin from 80 km/h with the
+    // brake held never stopped and ended at 7.9 m/s backwards; a car held on
+    // the brake facing up a 30% slope rolled back 43 m and was still gaining.
+    if (
+      this.gearIndex > 0 &&
+      Math.abs(speed) < 0.6 &&
+      planarSpeed < 0.6 &&
+      input.brake > 0.5 &&
+      input.throttle < 0.1 &&
+      !input.hold
+    ) {
       this.reverseHold += dt;
       if (this.reverseHold > 0.45) {
         this.gearIndex = 0;
