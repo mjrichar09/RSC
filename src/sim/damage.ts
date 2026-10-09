@@ -473,16 +473,19 @@ const FADE_FLOOR = 0.35;
  * What the disc looks like, in two stages, because a hot disc changes colour
  * long before it emits any light.
  *
- * Steel oxidises straw, then bronze, then blue from about 200°C — that is the
- * `tint`. Actual incandescence starts around 500°C and reaches orange-white
- * near 800. Measured against a hard AI lap of Quarry Run, which peaks around
- * 345°C, the tint is a normal sight and the glow is something you have to
- * earn — a long descent, a dragged pedal, or brakes already damaged.
+ * Steel oxidises straw, then bronze, then blue — that is the `tint` — before
+ * it emits any light at all. Real incandescence starts around 500°C; these
+ * are brought well forward of that on purpose, because a glowing disc is the
+ * best thing a brake can show you and at the real figures nobody ever saw
+ * one: a hard AI lap of Quarry Run peaks around 345°C, so the glow took a
+ * mountain descent. From 280°C a stage driven hard glows at its braking zones,
+ * a run of hard stops (about 175°C) only tints, and Coldwater's descent, past
+ * 500, is orange-white. Display only: fade still starts at FADE_START_C.
  */
-const TINT_START_C = 200;
-const TINT_FULL_C = 450;
-const GLOW_START_C = 500;
-const GLOW_FULL_C = 800;
+const TINT_START_C = 140;
+const TINT_FULL_C = 320;
+const GLOW_START_C = 280;
+const GLOW_FULL_C = 560;
 
 /**
  * Small deterministic stream, the same shape as the one stages use. Kept here
