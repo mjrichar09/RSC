@@ -27,6 +27,22 @@ describe('the stage', () => {
     expect(stageVariants(def).map((v) => v.id)).toEqual(['day-clear']);
   });
 
+  /*
+   * Positive curvature is a right turn, and `left.y` is how far the left edge
+   * sits above the centre per metre across. As first written every turn
+   * leaned out of itself: the outside edge the low one, by up to 2.5 m.
+   */
+  it('banks every turn into itself', () => {
+    let banked = 0;
+    for (const s of stage.spline.samples) {
+      if (Math.abs(s.left.y) < 0.05 || Math.abs(s.curvature) < 0.005) continue;
+      banked++;
+      // Turning right, the outside is the left: it has to be the high edge.
+      expect(Math.sign(s.left.y)).toBe(Math.sign(s.curvature));
+    }
+    expect(banked).toBeGreaterThan(20);
+  });
+
   it('has a loop where the stage says', () => {
     expect(loop).not.toBeNull();
     expect(loop.spec.at).toBe(LOOP_AT);

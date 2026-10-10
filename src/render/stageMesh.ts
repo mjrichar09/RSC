@@ -946,7 +946,8 @@ export function buildCrowd(stage: Stage): CrowdView {
     const sample = stage.spline.at(Math.max(Math.min(distance, stage.length - 1), 0));
     const home = new THREE.Vector3(
       sample.position.x + sample.left.x * out * side,
-      sample.position.y + CORRIDOR.heightAt(sample.width, out),
+      // `left.y` carries the camber, as it does for the scenery.
+      sample.position.y + sample.left.y * out * side + CORRIDOR.heightAt(sample.width, out),
       sample.position.z + sample.left.z * out * side,
     );
     // Facing the road: everyone is watching the corner, not the scenery.

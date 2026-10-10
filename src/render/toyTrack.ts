@@ -20,8 +20,12 @@
 
 import * as THREE from 'three';
 
-/** Metres of track per piece. */
-export const TOY_PIECE = 8;
+/**
+ * Metres of track per piece. A real orange-track set comes in long flexible
+ * lengths, and at 8 m the colours changed every half-second at speed and read
+ * as stripes rather than as pieces.
+ */
+export const TOY_PIECE = 80;
 
 /** The glitter colours a toy track comes in. */
 const PALETTE = [0xff2d95, 0x8a3bff, 0x00c9c0, 0xffb81a, 0x6fe03a, 0xff6a1a, 0x2f6bff].map(
@@ -115,9 +119,11 @@ export function toyTrackMaterial(options: ToyTrackOptions = {}): THREE.MeshStand
         float toyF = fract(vToyAlong / ${TOY_PIECE.toFixed(1)});
         float toyJoint = step(min(toyF, 1.0 - toyF) * ${TOY_PIECE.toFixed(1)}, 0.16);
         toyCol = mix(toyCol, toyA <= 1.0 ? vec3(0.1, 0.1, 0.13) : vec3(0.93), toyJoint * 0.85);
-        // The booster's chevrons, pointing the way it throws you.
+        // The booster's chevrons, pointing the way it throws you: the tip on
+        // the centreline is the furthest along, so the arms trail back from
+        // it. With the sign the other way they pointed at the start line.
         if (vToyAlong > uToyBoost.x && vToyAlong < uToyBoost.y && toyA < 0.8) {
-          float toyChevron = fract((vToyAlong - toyA * 2.2) / 3.0);
+          float toyChevron = fract((vToyAlong + toyA * 2.2) / 3.0);
           if (toyChevron < 0.32) toyCol = vec3(1.0, 0.86, 0.12);
         }
         // Glitter: a flake in every cell, a few of them catching the light.

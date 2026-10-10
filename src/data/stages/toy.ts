@@ -52,6 +52,16 @@ type Leg =
 const SURFACE: SurfaceId = 'tarmac';
 const DEG = Math.PI / 180;
 
+/**
+ * Metres a banked turn takes to roll into its camber and out again, at most;
+ * never more than a third of the turn. At 30 degrees the road's inside edge
+ * sits 2.3 m below its centre, and rolled out over 15 m between control points
+ * 10 m apart, the inside edge climbed 1.7 m in the last ten: a car hugging the
+ * inside of the hairpin at 54 km/h met it as a kerb and lost 60% of its front
+ * panel. Over 35 m the edge never rises more than about one in ten.
+ */
+const BANK_EASE = 35;
+
 const smooth = (t: number) => {
   const c = Math.min(Math.max(t, 0), 1);
   return c * c * (3 - 2 * c);
@@ -66,7 +76,7 @@ const legLength = (leg: Leg) =>
  *
  * A jog is the one new thing — a sideways move at an unchanged heading,
  * eased in and out — and it exists for the road under the loop. Banking on an
- * arc is eased in over its first and last fifteen metres, so a banked turn
+ * arc is eased in over its first and last `BANK_EASE` metres, so a banked turn
  * rolls into its camber rather than stepping onto it.
  */
 function walk(legs: Leg[]): ControlPoint[] {
@@ -98,8 +108,12 @@ function walk(legs: Leg[]): ControlPoint[] {
       continue;
     }
     // Straights at 4 m into and out of the loop, so the spline is straight
-    // to within a centimetre right up to the run-in; coarser elsewhere.
-    const step = 'straight' in leg ? 4 : Math.min(12, leg.radius * 0.25);
+    // to within a centimetre right up to the run-in; coarser elsewhere, except
+    // on a banked arc, where the camber is interpolated linearly between
+    // points and a coarse step puts a kink in the edge of the road.
+    const banked = 'arc' in leg && (leg.bank ?? 0) !== 0;
+    const step = 'straight' in leg || banked ? 4 : Math.min(12, leg.radius * 0.25);
+    const ease = Math.min(BANK_EASE, length / 3);
     let d = 0;
     while (d < length - 1e-6) {
       let ds = Math.min(step, length - d);
@@ -115,7 +129,11 @@ function walk(legs: Leg[]): ControlPoint[] {
         z += Math.cos(heading) * ds;
         heading += turn / 2;
         const edge = Math.min(d + ds, length - d - ds);
-        banking = (leg.bank ?? 0) * Math.sign(leg.arc) * smooth(edge / 15);
+        // Positive banking raises the left edge, and a turn to the left
+        // (positive arc) wants its outside — the right — up. Written the other
+        // way round, every turn on this stage leaned out of itself by 1.7 to
+        // 2.5 m across the road.
+        banking = -(leg.bank ?? 0) * Math.sign(leg.arc) * smooth(edge / ease);
       }
       d += ds;
       emit(leg.width, banking);
@@ -130,10 +148,10 @@ const LEGS: Leg[] = [
   { arc: 70 * DEG, radius: 85, width: 4.2 },
   { straight: 90, width: 4.0 },
   // 3: a hard right, banked.
-  { arc: -120 * DEG, radius: 48, width: 4.4, bank: 0.2 },
+  { arc: -120 * DEG, radius: 48, width: 4.4, bank: 30 * DEG },
   { straight: 110, width: 4.0 },
   // 5: the big banked hairpin, the way a toy track turns round.
-  { arc: 170 * DEG, radius: 38, width: 4.6, bank: 0.28 },
+  { arc: 170 * DEG, radius: 38, width: 4.6, bank: 30 * DEG },
   { straight: 130, width: 4.0 },
   // 7: into the loop's line.
   { arc: -60 * DEG, radius: 70, width: 4.0 },
@@ -147,7 +165,7 @@ const LEGS: Leg[] = [
   { straight: 160 + LOOP_RUN_IN, width: LOOP_WIDTH },
   { straight: 40, width: 4.0 },
   // 13: a banked left, a right, and the run to the line.
-  { arc: 130 * DEG, radius: 55, width: 4.4, bank: 0.22 },
+  { arc: 130 * DEG, radius: 55, width: 4.4, bank: 30 * DEG },
   { straight: 100, width: 4.0 },
   { arc: -55 * DEG, radius: 95, width: 4.2 },
   { straight: 150, width: 4.2 },
@@ -173,10 +191,10 @@ export const sparkleSpeedway: StageDef = {
   requiresMedals: 6,
   payouts: { author: 8400, gold: 5200, silver: 2900, bronze: 1650, finish: 950 },
   checkpoints: 3,
-  // Calibrated against a measured AI lap of 78.8 s, at the ratios every other
+  // Calibrated against a measured AI lap of 74.7 s, at the ratios every other
   // stage uses: author is the lap x1.026, gold author x1.10, silver x1.38,
   // bronze x1.81. Re-measure if the loop, the booster or the car changes.
-  medals: { author: 81, gold: 89, silver: 112, bronze: 147 },
+  medals: { author: 77, gold: 85, silver: 106, bronze: 139 },
   loop: {
     at: LOOP_AT,
     length: LOOP_LENGTH,

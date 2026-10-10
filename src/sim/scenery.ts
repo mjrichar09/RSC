@@ -553,8 +553,13 @@ export function scatterScenery(
         // by up to a dozen metres; where a stage crosses over itself the ground
         // drops to the lower leg while the nearest sample stayed the upper one.
         // Both read as trees hanging in the air, which is what they were.
+        //
+        // `left.y` is the camber: on a banked turn the whole cross-section is
+        // rolled, and without it a brick beside Sparkle Speedway's 30-degree
+        // hairpin hung four metres over the inside and sank into the outside.
+        // It is exactly zero on unbanked road.
         const y = onCorridor
-          ? sample.position.y + CORRIDOR.heightAt(sample.width, out)
+          ? sample.position.y + sample.left.y * out * side + CORRIDOR.heightAt(sample.width, out)
           : groundHeight(spline, x, z);
         const position = v3(x, y, z);
 
