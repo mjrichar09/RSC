@@ -52,6 +52,9 @@ const PLACES: Record<string, Place> = {
   // Air a hundredth as thick as Earth's carries almost nothing high: a low,
   // muffled wind, and no living thing at all.
   mars: { wind: 0.3, windCutoff: 260, surf: 0, surfPeriod: 0, birds: 0, birdPitch: 0, chorus: 0 },
+  // Indoors: no wind to speak of, a bird or two through the window, and the
+  // faint hum of a house.
+  toy: { wind: 0.02, windCutoff: 300, surf: 0, surfPeriod: 0, birds: 2, birdPitch: 2800, chorus: 0.03 },
 };
 
 /** Weather multiplies the wind and adds its own noise on top. */

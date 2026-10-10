@@ -20,6 +20,8 @@ import type { Markers } from '../sim/markers.js';
 import type { Vec3 } from '../sim/math.js';
 import { SURFACES } from '../sim/surfaces.js';
 import { CRATER_APRON, craterProfile, groundHeight } from '../sim/terrain.js';
+import { buildLoopView } from './loopView.js';
+import { tickToyTrack, toyTrackMaterial } from './toyTrack.js';
 
 /** Slight per-vertex value jitter so large flat areas do not read as dead. */
 function mottle(index: number): number {
@@ -483,20 +485,32 @@ export function buildStageView(stage: Stage, markers: Markers): StageView {
   // Smooth-shaded: the corridor is a coarse ribbon, and with a normal per face
   // every sample along it was a visible kink — the road read as a folded
   // strip of card rather than as a road following the ground.
-  const roadMaterial = new THREE.MeshStandardMaterial({
-    vertexColors: true,
-    roughness: 0.95,
-    metalness: 0,
-  });
-  // A stage's own number for its sections, so two stages mark differently.
-  let seed = 0;
-  for (const ch of stage.def.id) seed = (seed * 31 + ch.charCodeAt(0)) % 997;
-  addContours(roadMaterial, seed / 10);
+  //
+  // A toy stage is track pieces instead: the same geometry, painted by its
+  // own shader, and none of a rally road's markings, rubber or ruts.
+  const toy = stage.def.biome === 'toy';
+  const loop = stage.loop;
+  const roadMaterial = toy
+    ? toyTrackMaterial(loop ? { boost: [loop.span()[0], loop.spec.at] } : {})
+    : new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        roughness: 0.95,
+        metalness: 0,
+      });
+  if (!toy) {
+    // A stage's own number for its sections, so two stages mark differently.
+    let seed = 0;
+    for (const ch of stage.def.id) seed = (seed * 31 + ch.charCodeAt(0)) % 997;
+    addContours(roadMaterial, seed / 10);
+  }
 
   const road = new THREE.Mesh(geometry, roadMaterial);
   road.receiveShadow = true;
   road.castShadow = true;
+  if (toy) road.onBeforeRender = () => tickToyTrack(roadMaterial);
   group.add(road);
+  const loopView = buildLoopView(stage);
+  if (loopView) group.add(loopView);
 
   group.add(buildTerrain(stage));
   group.add(buildGates(stage));
@@ -759,6 +773,23 @@ function sceneryParts(kind: SceneryKind): SceneryParts {
       const cap = new THREE.BoxGeometry(0.72, 0.22, 3.5);
       cap.translate(0, 1.26, 0);
       return { main: mergeParts([body, cap]), casts: false };
+    }
+    // A toy brick: the studs are what make it a brick rather than a crate.
+    case 'block': {
+      const body = new THREE.BoxGeometry(3.2, 3.0, 3.2);
+      body.translate(0, 1.5, 0);
+      const parts: THREE.BufferGeometry[] = [body];
+      for (const [x, z] of [[-0.8, -0.8], [0.8, -0.8], [-0.8, 0.8], [0.8, 0.8]] as const) {
+        const stud = new THREE.CylinderGeometry(0.5, 0.5, 0.42, 14);
+        stud.translate(x, 3.21, z);
+        parts.push(stud);
+      }
+      return { main: mergeParts(parts), casts: true };
+    }
+    case 'ball': {
+      const sphere = new THREE.IcosahedronGeometry(1.2, 3);
+      sphere.translate(0, 1.2, 0);
+      return { main: sphere, casts: true };
     }
   }
 }
@@ -1182,6 +1213,8 @@ const TERRAIN_COLOUR: Record<string, [number, number]> = {
   town: [0x8a8172, 0x6d665b],
   alpine: [0x4a5340, 0x6e6a60],
   mars: [0x8c4426, 0x6f3520],
+  // A playroom carpet.
+  toy: [0x4f63b8, 0x3f529e],
 };
 
 /**
@@ -1399,6 +1432,7 @@ const PROP_BASE: Record<PropKind, { radius: number; height: number }> = {
   // Drawn a metre tall and stretched to whatever the crossing needs, which is
   // how a single instanced mesh carries piers from 18 m to 51 m.
   pier: { radius: 1.5, height: 1 },
+  booster: { radius: 0.95, height: 1.3 },
 };
 
 /**
@@ -1552,6 +1586,9 @@ function propParts(kind: PropKind): SceneryParts {
       shaft.translate(0, 0.5, 0);
       return { main: shaft, casts: true };
     }
+    // Never built: drawn by `buildLoop`, spinning.
+    case 'booster':
+      return { main: new THREE.CylinderGeometry(0.95, 0.95, 1.3, 16), casts: false };
   }
 }
 
@@ -1565,6 +1602,7 @@ const PROP_COLOUR: Record<PropKind, number> = {
   pole: 0xdcd6c6,
   gatePost: 0xf2c14e,
   pier: 0x8a8579,
+  booster: 0x1c1c22,
 };
 
 function buildProps(stage: Stage): PropsView {
@@ -1579,6 +1617,8 @@ function buildProps(stage: Stage): PropsView {
     if (prop.kind === 'gatePost') continue;
     // Piers are drawn with their bridge, along with the deck they carry.
     if (prop.kind === 'pier') continue;
+    // A booster's tyres are drawn with the loop, spinning.
+    if (prop.kind === 'booster') continue;
     const list = byKind.get(prop.kind) ?? [];
     list.push(prop);
     byKind.set(prop.kind, list);

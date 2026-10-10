@@ -19,6 +19,7 @@ import type { DebrisModel } from './debris.js';
 import type { DriverInput } from './input.js';
 import { type Surface, surface } from './surfaces.js';
 import { slipAngle, slipRatio, tireForces } from './tires.js';
+import { DECK_FLEX, DECK_FLEX_FROM } from './loop.js';
 import {
   type Quat,
   type Vec3,
@@ -147,6 +148,13 @@ export interface VehicleOptions {
    */
   groundWeight?: number;
   /**
+   * Whether a collider is a deck that flexes under a wheel — a loop's plastic
+   * track. Past the car's own travel the deck carries the rest; see
+   * `DECK_FLEX` in `sim/loop.ts`. Nothing else flexes, so on every other
+   * surface full travel is the floor pan, as it always was.
+   */
+  flexes?: (collider: RAPIER.Collider) => boolean;
+  /**
    * True for a car whose position comes off the wire rather than out of the
    * physics — somebody else's car, on a guest.
    *
@@ -198,6 +206,7 @@ export class Vehicle {
   readonly debris: DebrisModel | null;
   readonly conditions: Conditions;
   private readonly groundWeight: number;
+  private readonly flexes: ((collider: RAPIER.Collider) => boolean) | null;
   private effects: DamageEffects = PRISTINE;
 
   readonly wheels: WheelState[] = [];
@@ -229,6 +238,7 @@ export class Vehicle {
     this.debris = options.debris ?? null;
     this.conditions = options.conditions ?? CLEAR_DAY;
     this.groundWeight = options.groundWeight ?? 0;
+    this.flexes = options.flexes ?? null;
     this.remote = options.remote ?? false;
 
     const h = tuning.halfExtents;
@@ -403,10 +413,17 @@ export class Vehicle {
       // A collapsed spring supports less and rebounds worse, so the corner
       // bottoms out and the car pulls toward the damaged side.
       const wear = fx.wheelSuspension[i]!;
-      const force = Math.max(
+      let force = Math.max(
         0,
         t.suspensionStiffness * wear * compression + damping * wear * compressionSpeed,
       );
+      // A loop's deck gives under a wheel the springs can no longer carry.
+      // Measured, a loop the car can get over the top of costs it 4 to 6 g low
+      // down, its springs run out at about 4.9, and past that the floor pan
+      // met the deck and stopped the car dead. The raw reading carries on past
+      // full travel, which is how far the deck has been pressed in.
+      const pressed = maxToi - toi - (t.suspensionRestLength - DECK_FLEX_FROM);
+      if (pressed > 0 && this.flexes?.(result.collider)) force += DECK_FLEX * pressed;
 
       susp[i] = force;
       hit[i] = { point, normal: result.normal as Vec3 };

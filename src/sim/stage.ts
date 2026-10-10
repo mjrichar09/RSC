@@ -13,7 +13,7 @@
  */
 
 import { CLEAR_DAY, type Conditions, describeConditions } from './conditions.js';
-import { type Vec3, add, scale, v3 } from './math.js';
+import { type Vec3, add, dot, scale, sub, v3 } from './math.js';
 import { type ControlPoint, Spline, type SplineSample } from './spline.js';
 import { type Corner, findCorners } from './corners.js';
 import { type Crater, groundHeight, placeCraters, shapeCamber, terrainRise } from './terrain.js';
@@ -28,6 +28,7 @@ import {
   WALL_WIDTH,
 } from './corridor.js';
 import { SOLID_MARGIN, type SceneryItem, scatterScenery } from './scenery.js';
+import { type LoopSpec, TrackLoop } from './loop.js';
 import type { SurfaceId } from './surfaces.js';
 import type { AnimalKind, FlockSpec } from './wildlife.js';
 
@@ -58,7 +59,9 @@ export type PropKind =
   /** A wall of a house. The most solid thing in the game. */
   | 'building'
   | 'gatePost'
-  | 'pier';
+  | 'pier'
+  /** One of a booster's two spinning tyres, either side of the track. */
+  | 'booster';
 
 /** A corner warning board standing on the verge. */
 /**
@@ -355,6 +358,19 @@ export interface StageDef {
   variants?: VariantSpec[];
   /** Number of intermediate checkpoints. They are spaced evenly along the stage. */
   checkpoints?: number;
+  /**
+   * A loop-the-loop, and the booster before it. See `sim/loop.ts`. The road
+   * has to be straight through the booster and run under the loop to meet its
+   * exit, which the `Stage` checks rather than trusts.
+   */
+  loop?: LoopSpec;
+  /**
+   * Whether the insides of tight tarmac corners get sand dragged across them;
+   * true when absent. Off for a stage whose tarmac is not a road: on a plastic
+   * track there is nothing beside it to drag on, and a patch of grip the
+   * renderer is not drawing would be the renderer lying about the road.
+   */
+  spills?: boolean;
 }
 
 /** Half the width of the launch pad and its gantry, metres. */
@@ -404,6 +420,9 @@ const PROP_SHAPE: Record<PropKind, { radius: number; height: number; mass?: numb
   // A bridge pier. Height is per-instance — it is however far it is from the
   // ground to the deck — so this one is only the footprint.
   pier: { radius: 1.5, height: 1 },
+  // A booster's tyre, standing on its edge on the verge with the track
+  // between the pair. Drawn with the loop, like a pier with its bridge.
+  booster: { radius: 0.95, height: 1.3 },
 };
 
 export { CORRIDOR } from './corridor.js';
@@ -418,6 +437,15 @@ export { CORRIDOR } from './corridor.js';
  */
 const APRON_LENGTH = 24;
 const APRON_STEP = 3;
+
+/** How far the booster's tyres stand back from the road edge, metres. */
+export const BOOSTER_SET_BACK = 0.5;
+
+/** How far round from behind the camera swings to look at a loop, radians. */
+const LOOP_CAMERA_SWING = Math.PI * 0.36;
+
+/** Straight, level road the approach to a loop's booster needs before it, metres. */
+const LOOP_STRAIGHT = 40;
 
 export interface StageGeometry {
   /** Flat [x, y, z, ...] triples. */
@@ -576,6 +604,8 @@ export class Stage {
   readonly launchPad: Vec3 | null;
   /** Craters in the open ground, none of them within reach of the road. */
   readonly craters: Crater[];
+  /** The loop-the-loop, or null for a stage with none. */
+  readonly loop: TrackLoop | null;
 
   /**
    * Which side the rockslide came down, -1 left and 1 right, or 0 for none.
@@ -614,10 +644,17 @@ export class Stage {
     );
     this.length = this.spline.length;
     this.geometry = this.buildGeometry();
+    this.loop = def.loop ? this.buildLoop(def.loop) : null;
     this.checkpoints = this.buildCheckpoints(def.checkpoints ?? 3);
     this.cameraZones = this.buildCameraZones();
-    this.corners = findCorners(this.spline, this.length);
-    this.spills = this.buildSpills();
+    // The road's sideways jog under the loop is not a corner anybody drives:
+    // the car is on the loop overhead. Called as one, the co-driver warned of a
+    // pair of fast kinks in the middle of a loop-the-loop.
+    const span = this.loop?.span();
+    this.corners = findCorners(this.spline, this.length).filter(
+      (c) => !span || c.exit < span[0] || c.entry > span[1],
+    );
+    this.spills = def.spills === false ? [] : this.buildSpills();
     // Before the props, which take a collider for each of these boards and a
     // pier for each end of every bridge.
     this.signs = this.buildSigns();
@@ -661,6 +698,45 @@ export class Stage {
       heading: Math.atan2(line.forward.x, line.forward.z),
     };
 
+  }
+
+  /**
+   * The loop, built off the road where it leaves, and checked against the
+   * road where it comes back.
+   *
+   * The loop is not part of the spline — see `sim/loop.ts` — so nothing makes
+   * the two agree except this. A loop whose exit lands a metre beside the exit
+   * lane drops the car off the edge of its own run-out, and a booster on a bend
+   * pushes the car straight on into the bank.
+   */
+  private buildLoop(spec: LoopSpec): TrackLoop {
+    const id = this.def.id;
+    const entry = this.spline.at(spec.at);
+    // The heading from up the approach, not at the entry: a sample's tangent is
+    // taken from its neighbours, the next one is already on the jog, and that
+    // was enough to aim the loop half a metre off its exit lane.
+    const heading = this.spline.at(spec.at - 10).forward;
+    const loop = new TrackLoop(spec, add(entry.position, v3(0, CROWN, 0)), heading);
+
+    const exit = this.spline.locate(loop.exit);
+    if (Math.abs(exit.lateral) > 0.3) {
+      throw new Error(`${id}: the loop's exit lands ${exit.lateral.toFixed(2)} m beside the road`);
+    }
+    if (Math.abs(exit.height - CROWN) > 0.08) {
+      throw new Error(`${id}: the loop's exit is ${(exit.height - CROWN).toFixed(2)} m off the road`);
+    }
+    const square = dot(exit.sample.forward, loop.forward);
+    if (square < 0.999) {
+      throw new Error(`${id}: the road leaves the loop's exit ${Math.acos(square).toFixed(3)} rad off its line`);
+    }
+    for (let d = spec.at - spec.boost.length - LOOP_STRAIGHT; d <= spec.at; d += 2) {
+      const here = this.spline.at(d);
+      const off = dot(sub(here.position, loop.origin), loop.left);
+      if (Math.abs(off) > 0.15 || Math.abs(here.position.y + CROWN - loop.origin.y) > 0.05) {
+        throw new Error(`${id}: the road into the loop is not straight and level at ${d.toFixed(0)} m`);
+      }
+    }
+    return loop;
   }
 
   /**
@@ -862,8 +938,15 @@ export class Stage {
    */
   private buildCheckpoints(count: number): Checkpoint[] {
     const out: Checkpoint[] = [];
+    const span = this.loop?.span();
     for (let i = 1; i <= count; i++) {
       const distance = (this.length * i) / (count + 1);
+      // A gate is a plane and a car on the loop crosses the same plane two or
+      // three times at heights the posts do not reach. Refused, not moved: a
+      // gate that moves reshuffles every prop downstream of it.
+      if (span && distance > span[0] - 20 && distance < span[1] + 20) {
+        throw new Error(`${this.def.id}: checkpoint ${i} at ${distance.toFixed(0)} m is on the loop`);
+      }
       const s = this.spline.at(distance);
       out.push({ distance, position: s.position, width: s.width, left: s.left, forward: s.forward });
     }
@@ -994,7 +1077,40 @@ export class Stage {
         split.push({ from: d, yaw, zoom: zoomAt(d) });
       }
     }
-    return split;
+    return this.loop ? this.cameraForLoop(split, zoomAt) : split;
+  }
+
+  /**
+   * The loop seen from the side.
+   *
+   * Every zone sits behind the road, and from behind a loop is an arch: the
+   * circle is edge-on, and over the top the car is behind its own deck. So for
+   * the booster and the loop the camera swings round to look at it from
+   * three-quarters on, which shows the circle — and stops short of side-on,
+   * because at ninety degrees the car stops driving into the screen and
+   * starts driving across it, which is where the steering begins to read
+   * backwards. The zone before resumes once the car is back on the road.
+   */
+  private cameraForLoop(zones: CameraZone[], zoomAt: (d: number) => number): CameraZone[] {
+    const loop = this.loop!;
+    const [from, to] = loop.span();
+    const start = from - 30;
+    const end = to + 15;
+    const yawAt = (d: number) => {
+      let yaw = zones[0]!.yaw!;
+      for (const z of zones) if (d >= z.from && z.yaw !== undefined) yaw = z.yaw;
+      return yaw;
+    };
+    const bearing = Math.atan2(loop.forward.x, loop.forward.z);
+    // To the side the loop's exit is on, so the way down is the near side.
+    const swing = Math.sign(loop.spec.shift) || 1;
+    const side = bearing + Math.PI - swing * LOOP_CAMERA_SWING;
+    return [
+      ...zones.filter((z) => z.from < start),
+      { from: start, yaw: side, zoom: zoomAt(start) },
+      { from: end, yaw: yawAt(end), zoom: zoomAt(end) },
+      ...zones.filter((z) => z.from > end),
+    ];
   }
 
   /**
@@ -1125,7 +1241,7 @@ export class Stage {
   }
 
   private buildProps(): StageProp[] {
-    const props: StageProp[] = [...this.gatePosts(), ...this.piers(), ...this.roadProps()];
+    const props: StageProp[] = [...this.gatePosts(), ...this.piers(), ...this.roadProps(), ...this.boosterTyres()];
     const profile = this.def.hazards;
     if (!profile || profile.kinds.length === 0) return props;
 
@@ -1171,6 +1287,25 @@ export class Stage {
       });
     }
     return props;
+  }
+
+  /**
+   * The booster's tyres, either side of the approach lane where the booster
+   * starts. Real ones pinch the car between them; these stand on the verge
+   * just clear of the road, which is what makes the gap readable at speed.
+   */
+  private boosterTyres(): StageProp[] {
+    const loop = this.loop;
+    if (!loop) return [];
+    const shape = PROP_SHAPE.booster;
+    const at = loop.boostStart();
+    return ([-1, 1] as const).map((side) => ({
+      kind: 'booster' as const,
+      position: add(at, scale(loop.left, side * (loop.spec.width + BOOSTER_SET_BACK + shape.radius))),
+      radius: shape.radius,
+      height: shape.height,
+      yaw: 0,
+    }));
   }
 
   /**
@@ -1403,6 +1538,12 @@ export class Stage {
    */
   surfaceAt(point: Vec3, hint?: number): { surface: SurfaceId; index: number } {
     const loc = this.spline.locate(point, hint);
+    // On the loop the nearest road sample is whatever is underneath in plan,
+    // which on the way up is the far side of the jog — a wheel on the deck
+    // read as on the bank. The deck is its own surface.
+    if (this.loop?.near(point) && this.loop.locate(point)) {
+      return { surface: this.loop.spec.surface, index: loc.index };
+    }
     if (this.wetAt(loc.distance, loc.lateral, loc.sample.width)) {
       return { surface: 'water', index: loc.index };
     }

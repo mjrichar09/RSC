@@ -550,6 +550,7 @@ const scrubbedFlats: StageDef = {
 
 import { GENERATED_STAGES } from './generated.js';
 import { redPlanet } from './mars.js';
+import { sparkleSpeedway } from './toy.js';
 
 /**
  * Hand-authored stages first, then generated ones.
@@ -861,6 +862,7 @@ export const STAGES: StageDef[] = [
   millstream,
   vieuxVillage,
   scrubbedFlats,
+  sparkleSpeedway,
   grandTraverse,
   coldwaterPass,
   redPlanet,

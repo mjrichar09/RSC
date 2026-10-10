@@ -17,7 +17,8 @@ import { DebrisModel, type DetachEvent, type PartId } from './debris.js';
 import { Ambient } from './ambient.js';
 import { type AnimalKind, Wildlife } from './wildlife.js';
 import { Markers, Signs } from './markers.js';
-import { type Quat, type Vec3, add, lerpVec, rotate, rotateInverse, slerp, v3 } from './math.js';
+import { type Quat, type Vec3, add, lerpVec, rotate, rotateInverse, scale, slerp, v3 } from './math.js';
+import { boostForce } from './loop.js';
 import { type Stage, type StageProp } from './stage.js';
 import { type SurfaceId, surface } from './surfaces.js';
 import { Vehicle, type VehicleState } from './vehicle.js';
@@ -309,6 +310,8 @@ export class SimWorld {
   }
 
   private readonly slots: readonly number[];
+  /** The loop's own collider, the one deck in the game that flexes. */
+  private loopCollider: RAPIER.Collider | null = null;
   private readonly patches: GroundPatch[];
   private readonly baseSurface: SurfaceId;
 
@@ -335,6 +338,17 @@ export class SimWorld {
           .setFriction(1.0),
         ground,
       );
+      // The loop is a ribbon of its own, off the spline; see `sim/loop.ts`.
+      // With its internal edges fixed: a chassis grazing the deck at speed
+      // otherwise meets the edge between two rows as a wall facing it, and it
+      // was measured stopping the car from 116 km/h in one step.
+      if (this.stage.loop) {
+        const { vertices, indices } = this.stage.loop.geometry;
+        this.loopCollider = this.world.createCollider(
+          RAPIER.ColliderDesc.trimesh(vertices, indices, RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES).setFriction(1.0),
+          ground,
+        );
+      }
     } else {
       // Proving ground: a large static slab, used by the handling tests and the
       // free-roam surface patchwork.
@@ -437,7 +451,9 @@ export class SimWorld {
           })
         : null;
     this.events = wantsDamage ? new RAPIER.EventQueue(true) : null;
-    this.markers = this.stage ? new Markers(this.stage.spline, this.stage.length) : null;
+    this.markers = this.stage
+      ? new Markers(this.stage.spline, this.stage.length, this.stage.loop ? [this.stage.loop.span()] : [])
+      : null;
     this.signs = this.stage ? new Signs(this.stage.signs) : null;
 
     const tuning = resolveTuning(options.tuning);
@@ -457,6 +473,7 @@ export class SimWorld {
 
       const vehicle = new Vehicle(RAPIER, this.world, tuning, this.gridSlot(spawn, i), {
         surfaceAt: (p) => surface(this.surfaceIdAt(p)),
+        ...(this.loopCollider ? { flexes: (c: RAPIER.Collider) => c.handle === this.loopCollider!.handle } : {}),
         conditions: this.conditions,
         // The difference between the weight the car has on the ground and the
         // gravity the world has, added while a wheel is down.
@@ -599,6 +616,15 @@ export class SimWorld {
           y: worldDirection.y * sign,
           z: worldDirection.z * sign,
         });
+
+        // The floor pan riding a loop's deck over the top, where the springs
+        // are at the end of their travel and the deck's give is taking the
+        // rest. Measured, about thirty brushes of 1 to 2 kN·s a lap, every
+        // one pushing the car straight up its own axis: not a crash, and
+        // billed as one it dented the floor and shook the camera all the way
+        // round. A hit on a rail comes from the side and is still a hit.
+        const other = first === index ? event.collider2() : event.collider1();
+        if (this.loopCollider && other === this.loopCollider.handle && local.y > 0.85) continue;
 
         const at = impactPointFromForce(local);
         // Only the local car's hits shake the local camera — and now only the
@@ -874,6 +900,7 @@ export class SimWorld {
       previous.position = { ...(car.vehicle.body.translation() as Vec3) };
       previous.rotation = { ...(car.vehicle.body.rotation() as Quat) };
       car.vehicle.step(this.dt, inputs[i] ?? inputs[0] ?? NEUTRAL_INPUT);
+      this.boost(car);
     }
 
     this.world.step(this.events ?? undefined);
@@ -883,6 +910,23 @@ export class SimWorld {
     this.time += this.dt;
     this.steps++;
     this.onStep?.();
+  }
+
+  /**
+   * The booster before a loop: a push along the road toward the speed the
+   * loop is built for, while the car has a wheel on it. After the vehicle's
+   * own step, which clears the forces it is about to add to.
+   */
+  private boost(car: Car): void {
+    const loop = this.stage?.loop;
+    if (!loop) return;
+    const body = car.vehicle.body;
+    const at = loop.boostAt(body.translation() as Vec3);
+    if (!at || car.vehicle.state().airborne) return;
+    const v = body.linvel() as Vec3;
+    const speed = v.x * at.forward.x + v.y * at.forward.y + v.z * at.forward.z;
+    const force = boostForce(body.mass(), speed, loop.spec.boost.speed);
+    body.addForce(scale(at.forward, force), true);
   }
 
   /**

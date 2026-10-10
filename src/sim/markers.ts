@@ -177,8 +177,13 @@ export class Markers {
   /** Bumped when one goes over, so the renderer knows to rebuild its instances. */
   version = 0;
 
-  constructor(spline: Spline, length: number) {
+  /**
+   * @param clear Stretches of road, [from, to] metres, with no poles: under a
+   * loop the deck overhangs the verge, and a pole there stands up through it.
+   */
+  constructor(spline: Spline, length: number, clear: readonly (readonly [number, number])[] = []) {
     for (let d = SPACING; d < length; d += SPACING) {
+      if (clear.some(([from, to]) => d >= from && d <= to)) continue;
       const sample = spline.at(d);
       for (const side of [-1, 1] as const) {
         const off = sample.width + OUTSIDE;

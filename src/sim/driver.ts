@@ -157,6 +157,7 @@ export class Driver {
   private readonly stage: Stage;
   private readonly options: Required<DriverOptions>;
   private hint: number | undefined;
+  private loopHint: number | undefined;
 
   /** Arc length reached so far. Used to detect a stalled or stuck run. */
   progress = 0;
@@ -186,8 +187,12 @@ export class Driver {
     const { maxSpeed } = this.options;
     const gripBudget = this.options.gripBudget * gripFactor(this.options.tuning);
     let limit = maxSpeed;
+    // The road's jog under a loop is not driven — the car is overhead — and
+    // braking for it would arrive at the booster slow for nothing.
+    const span = this.stage.loop?.span();
 
     for (let d = 0; d < scan; d += 4) {
+      if (span && fromDistance + d >= span[0] && fromDistance + d <= span[1]) continue;
       const s = this.stage.spline.at(fromDistance + d);
       const curvature = Math.abs(s.curvature);
       if (curvature < 1e-4) continue;
@@ -224,6 +229,9 @@ export class Driver {
     const loc = this.stage.spline.locate(state.position, this.hint);
     this.hint = loc.index;
     this.progress = loc.distance;
+
+    const onLoop = this.loopInput(state);
+    if (onLoop) return onLoop;
 
     if (Math.abs(state.speed) > 3) this.started = true;
 
@@ -296,6 +304,35 @@ export class Driver {
     // `DriverInput.steer` is the driver's language, where positive is right. So
     // it flips exactly once, here, on the way out.
     return { throttle, brake, steer: -steer, handbrake: 0 };
+  }
+
+  /**
+   * Driving the loop, or null when the car is not on it.
+   *
+   * Everything below works in the world's plan view, and on the loop that is
+   * wrong on every count: over the top the nose points back down the stage, so
+   * the recovery read the car as facing the wrong way and reversed it off the
+   * deck; and the road in plan goes forward, back and forward again, so
+   * progress stalls for seconds at a time. So here the reference is the loop's
+   * own frame — how far across the deck, and how far the nose is turned toward
+   * a rail — and the throttle is held: lifting over the top is how a car falls
+   * off it.
+   */
+  private loopInput(state: VehicleState): DriverInput | null {
+    const loop = this.stage.loop;
+    if (!loop) return null;
+    const on = loop.locate(state.position, this.loopHint);
+    if (!on) {
+      this.loopHint = undefined;
+      return null;
+    }
+    this.loopHint = on.index;
+    this.stalled = 0;
+    this.reversing = 0;
+    const nose = rotate(state.rotation, v3(0, 0, 1));
+    // Positive steer goes left here, as in the rest of the AI's local frame.
+    const steer = clamp(-0.12 * on.lateral - 1.6 * dot(nose, on.sample.left), -0.5, 0.5);
+    return { throttle: 1, brake: 0, steer: -steer, handbrake: 0 };
   }
 
   /** True when the car is pointing back down the stage — used for stuck detection. */

@@ -42,7 +42,11 @@ export type SceneryKind =
   | 'tuft'
   | 'snowFir'
   | 'building'
-  | 'wall';
+  | 'wall'
+  /** A toy brick the size of a shed, studs and all. */
+  | 'block'
+  /** A rubber ball as tall as the car. */
+  | 'ball';
 
 /**
  * Which band a recipe grows in.
@@ -198,6 +202,14 @@ export const DRESSING: Record<string, SceneryRecipe[]> = {
     { kind: 'boulder', band: 'near', density: 16, size: [0.35, 1.0], color: 0x9c4a2a, colorB: 0x7d3a20 },
     { kind: 'boulder', band: 'verge', density: 22, size: [0.16, 0.42], color: 0xa5583a, colorB: 0x86452c },
   ],
+  // A playroom floor: bricks and balls the size of sheds, in the colours toys
+  // come in. Nothing soft and nothing small — a toy box is all hard edges.
+  toy: [
+    { kind: 'block', band: 'far', density: 7, size: [0.9, 1.8], color: 0xe8322f, colorB: 0xffc21a },
+    { kind: 'block', band: 'far', density: 6, size: [0.8, 1.6], color: 0x2f6bff, colorB: 0x2fbf4a },
+    { kind: 'ball', band: 'far', density: 3, size: [1.0, 2.0], color: 0xff4fa8, colorB: 0x2fd6e6 },
+    { kind: 'block', band: 'near', density: 5, size: [0.4, 0.7], color: 0x9b4dff, colorB: 0xff8a1f },
+  ],
   // Wind-bent pines and dune grass, thinning toward the water.
   coast: [
     { kind: 'conifer', band: 'far', density: 9, size: [0.6, 1.1], color: 0x3d5a3c, colorB: 0x4a6440 },
@@ -253,6 +265,8 @@ const FOOTPRINT: Record<SceneryKind, { radius: number; height: number; depth?: n
   boulder: { radius: 0.95, height: 1.7 },
   building: { radius: 3.0, height: 9, depth: 3.0 },
   wall: { radius: 0.3, height: 1.4, depth: 1.7 },
+  block: { radius: 1.6, height: 3.0, depth: 1.6 },
+  ball: { radius: 1.2, height: 2.4 },
   // Soft. You brush through heather, and you brush through grass.
   bush: null,
   tuft: null,
@@ -305,7 +319,7 @@ export const MIN_BUMP_EXTENT = 0.3;
 export const BUMP_PROUD = 0.07;
 
 /** Kinds whose geometry stands on the ground rather than being sunk into it. */
-const STANDING = new Set<SceneryKind>(['building', 'wall']);
+const STANDING = new Set<SceneryKind>(['building', 'wall', 'block', 'ball']);
 
 /**
  * Kinds that make a bump when they are too small to make an obstacle.

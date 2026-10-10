@@ -96,6 +96,7 @@ The sim clock and the wall clock are different things. `dt` is the world's;
 | The height of the open ground away from the road | `sim/terrain.ts` — `groundHeight` |
 | Hazards on the verge, gates, corner signs, bridge piers | `sim/stage.ts` |
 | Things standing *on* the road: chicanes, rockslides | `StageDef.obstacles`, `StageDef.slide` in `sim/stage.ts` |
+| A loop-the-loop, its booster, and the deck that gives | `sim/loop.ts`, `StageDef.loop`; drawn by `render/loopView.ts` and `render/toyTrack.ts` |
 | Water on part of the road, and what it cools | `StageDef.water`, `Stage.wetAt`, `WATER_COOLING` in `sim/damage.ts` |
 | Deer, sheep, and what a strike costs | `sim/wildlife.ts` — `ANIMAL_MASS`, `FlockSpec` |
 | Colliders, contacts, the fixed loop | `sim/world.ts` |
@@ -290,6 +291,24 @@ scannable as it grows; it is append-only.
   outcome — deer strikes, medal times, the AI's grip budget — is stale by
   default and only true when it was last measured. The comment is where the
   measurement goes, and re-running it is the only way to know.
+- **Anything off the spline where up is not +Y.** The corridor, the
+  nearest-sample query, the terrain and the AI's recovery all assume up is
+  world-up, and in a loop it goes all the way round: the AI read itself as
+  facing backwards over the top and reversed, and a wheel on the deck read the
+  surface of whatever road was underneath in plan. The loop is its own ribbon
+  with its own frames, collider and 3D `locate`, and every caller that cares
+  asks it first.
+- **A force along the car's up axis is thrust when the car is tilted to the
+  surface.** Suspension pushes along the body's up, which is harmless at one g.
+  Moving the excess load of a loop off the floor pan and onto the wheels put
+  ten g through them while the car ran a few degrees nose-down to the deck,
+  and the car went up 25 m and came out faster than it went in. A stiffer
+  spring at 120 Hz did the same on its own. When something gains energy, look
+  for the force that is not along a contact normal.
+- **A trimesh edge met by a box at speed is a wall.** A chassis grazing the
+  loop's deck between two 0.5 m rows took 35 kN·s along the direction of
+  travel and stopped dead. `FIX_INTERNAL_EDGES` with outward winding narrows
+  it; not grazing at all is the fix.
 - **Trusting a metric without checking what it counts.** `timeAirborne` counted
   any moment with no wheel down, so a beached car read as a 45-second jump.
 - **Measuring a stop at the standstill.** The slip-ratio denominator clamps at
@@ -1064,6 +1083,15 @@ authored: `Stage.crossings` looks for the pair scan's *opposite* case to
 small one — and puts piers under each end of the span. Grand Traverse has two,
 at 46 m and 20 m of headroom. A hand-placed bridge would be in the wrong place
 the first time a control point moved.
+
+Sparkle Speedway is the toy track, and the only stage with a loop. Its
+numbers live in `sim/loop.ts`: the shape was picked by driving the real car
+through a sweep, the booster sets 30 m/s, and the deck flexes past the car's
+own travel because no loop the car can get over the top of is gentle enough
+for its springs — measured, a general bump stop instead would have changed
+the landings on the five stages that reach full travel today (Pine Loop,
+Quarry Run, Scrubbed Flats, Coldwater Pass, Red Planet). The `Stage` refuses
+a loop whose exit misses its road or a checkpoint under it. It is day only.
 
 Scrubbed Flats is the jumps stage, and it is calibrated differently from the
 rest: the whole lap is speed against vertical geometry, so a lip half a metre
