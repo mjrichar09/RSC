@@ -3085,6 +3085,31 @@ textarea, input { -webkit-user-select: text; user-select: text; }
 }
 .menu .menu-aux:hover,
 .menu .menu-aux.pad-focus { background: var(--paper-hi); }
+/*
+ * The link to the other projects, with the MJR FX mark beside it.
+ *
+ * Its own row rather than part of `.menu-foot`: the footer is `display: none`
+ * on a touch device, which is how the help button once vanished from phones.
+ * Quiet, like the index tabs above it, because it leaves the game.
+ */
+.menu .menu-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 18px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font: 14px/1 var(--font-type);
+  color: var(--paper-ink);
+  text-decoration: none;
+}
+.menu .menu-more:hover,
+.menu .menu-more.pad-focus { background: var(--paper-hi); }
+.menu .menu-more:hover span { text-decoration: underline; }
+.mjrfx-logo { display: block; flex: none; width: auto; height: 15px; }
+/* The site's own accent, #ff5a36. */
+.mjrfx-logo .mjrfx-accent { stroke: #ff5a36; }
 .menu .menu-foot { font: 12px/1.5 var(--font-type); color: var(--paper-faded); border: 0; }
 .menu .menu-foot b { color: var(--paper-ink); }
 

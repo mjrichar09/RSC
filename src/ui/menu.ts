@@ -45,6 +45,23 @@ type Screen = 'main' | 'arcade' | 'name' | 'help' | 'pad';
  */
 const BOOK = '<div class="book-holes" aria-hidden="true"><i></i><i></i><i></i></div><div class="book-margin" aria-hidden="true"></div>';
 
+/**
+ * The MJR FX mark, as mjrfx.vercel.app draws it: one stroked path per letter,
+ * MJR in the text colour and FX in the site's accent. Copied rather than
+ * loaded, so the menu never waits on another site or breaks when it is down.
+ * Decorative here — the link's words say where it goes.
+ */
+const MJRFX_LOGO =
+  '<svg class="mjrfx-logo" viewBox="0 10 428 80" aria-hidden="true" focusable="false" fill="none" stroke-width="18" stroke-linecap="butt">' +
+  '<defs><clipPath id="mjrfx-cap"><rect x="0" y="10" width="428" height="80"/></clipPath></defs>' +
+  '<g clip-path="url(#mjrfx-cap)"><g stroke="currentColor">' +
+  '<path d="M9 92V10L48 62L87 10V92" stroke-linejoin="miter" stroke-miterlimit="10"/>' +
+  '<path d="M128 19H152V81H117V62" stroke-linejoin="miter"/>' +
+  '<path d="M184 92V19H228L240 31V43L228 55H184" stroke-linejoin="miter"/>' +
+  '<path d="M213 55L250 92"/></g>' +
+  '<g class="mjrfx-accent"><path d="M295 92V19H340L413 92" stroke-linejoin="bevel"/>' +
+  '<path d="M346 92L416 8"/><path d="M295 55H377"/></g></g></svg>';
+
 /** Seconds a binding waits for a control before giving up. */
 const CAPTURE_SECONDS = 8;
 
@@ -556,6 +573,7 @@ export class StartMenu {
         ${this.lookRow()}
         ${this.switchRow()}
         ${this.volumeRow()}
+        <a class="menu-more" href="https://mjrfx.vercel.app/" target="_blank" rel="noopener">${MJRFX_LOGO}<span>See more projects here</span></a>
         <div class="menu-foot">
           <span><b>Esc</b> menu · <b>R</b> restart · <b>Q</b> rescue · <b>T</b> tuning · <b>V</b> visibility · <b>K</b> slow-mo</span>
         </div>
