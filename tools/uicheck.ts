@@ -143,9 +143,15 @@ const padButton = async (index: number, until: string) => {
     requestAnimationFrame(() => requestAnimationFrame(() => { b.value = 0; b.pressed = false; }));
   })()`);
   await page.waitForFunction(until);
-  // Seen released before the next press can count as one.
+  // Seen released before the next press can count as one — and seen by the
+  // *pad*, not just by the harness. The release lands in one frame and the
+  // pad's own poll reads it in the next, so the wait is two frames rather than
+  // a duration: it was 200 ms, and on a page drawing three frames a second
+  // (~300 ms each) the next press often arrived before the poll had run, so
+  // the pad still read Down as held and ignored it. Adding one row to the main
+  // menu was enough to tip the timing and stop the second Down ever moving.
   await page.waitForFunction(`window.__pad.buttons[${index}].value === 0`);
-  await page.waitForTimeout(200);
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(null)))));
 };
 const focusedAction = () =>
   page.evaluate(() => (document.querySelector('.pad-focus') as HTMLElement | null)?.dataset.action ?? '');
