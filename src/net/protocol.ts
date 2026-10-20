@@ -1,16 +1,25 @@
 /**
  * What goes over the wire.
  *
- * One host, up to three guests. The host is authoritative: it runs the real
- * `SimWorld` and everyone else runs a copy that is continuously corrected
- * toward it. That is not a preference — Rapier is deterministic for a given
- * build on a given machine but not across machines and browser versions, so
- * lockstep would desync within seconds and there would be no way to tell which
- * copy was right.
+ * One host, up to three guests. Every machine is the authority on *its own
+ * car* and nothing else: it simulates that car from its own controls and
+ * reports where it went, and everybody else's car is a kinematic body played
+ * back from those reports. Lockstep was never an option — Rapier is
+ * deterministic for a given build on a given machine but not across machines
+ * and browser versions, so it would desync within seconds.
  *
- * Guests send inputs; the host sends snapshots. Inputs are four numbers and a
- * sequence, snapshots are a transform and a velocity per car, so the whole
- * protocol fits comfortably in a few hundred bytes per packet at 20 Hz.
+ * The host used to simulate every car, guests' included, from the inputs they
+ * sent, and correct each guest's own car toward its copy. That is the
+ * rubber-banding: inputs reach the host late and on the wrong step, rally
+ * physics on gravel turns a step's difference into metres, and the guest was
+ * pulled back toward a car that had driven a slightly different race. A guest
+ * is already trusted to say when it crossed the line, so trusting it with
+ * where its car is costs nothing new. Jungle Jalopies (`../ChasesGame`) was
+ * built this way from the start and does not rubber-band.
+ *
+ * Guests send their input and their car's state; the host sends snapshots of
+ * every car. Each is a transform and a velocity per car, so the protocol fits
+ * comfortably in a few hundred bytes per packet.
  *
  * Everything here is plain data. No transport, no sockets, no three.js: the
  * same messages go over a data channel, over a loopback pipe in the tests, and
@@ -21,7 +30,7 @@ import type { DriverInput } from '../sim/input.js';
 import type { Conditions } from '../sim/conditions.js';
 
 /** Protocol version. A mismatch is refused rather than half-understood. */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 /** How many cars can share a race. */
 export const MAX_PLAYERS = 4;
@@ -100,6 +109,22 @@ export interface CarSnapshot {
   finished?: number;
 }
 
+/**
+ * A guest's own car, as the guest simulated it: the authority on that car.
+ *
+ * `time` is the guest's own world clock. The host never converts it to its
+ * own; it only plays a guest's reports back in the order and at the spacing
+ * they were made, which is all interpolation needs.
+ */
+export interface CarState {
+  time: number;
+  p: [number, number, number];
+  q: [number, number, number, number];
+  v: [number, number, number];
+  w: [number, number, number];
+  health: number;
+}
+
 export type NetMessage =
   /** Guest → host, once, on connecting. */
   | { t: 'hello'; version: number; name: string; livery: string; number: number }
@@ -112,7 +137,7 @@ export type NetMessage =
   /** Guest → host: ready or not. */
   | { t: 'ready'; ready: boolean }
   /** Host → everyone: build a world for this setup, then say when you have. */
-  | { t: 'start'; setup: RaceSetup; at: number }
+  | { t: 'start'; setup: RaceSetup; at: number; race: number }
   /**
    * Host → everyone: everybody has a world, start the countdown now.
    *
@@ -122,10 +147,22 @@ export type NetMessage =
    * up at a different instant on each screen and the grid was never level.
    */
   | { t: 'go' }
-  /** Guest → host, at `INPUT_HZ`. */
-  | { t: 'input'; seq: number; input: DriverInput }
-  /** Host → everyone, at `SNAPSHOT_HZ`. */
-  | { t: 'snap'; tick: number; time: number; cars: CarSnapshot[]; ack: number }
+  /**
+   * Guest → host, at `INPUT_HZ`: the controls, and where they took the car.
+   *
+   * `race` says which race the state belongs to. Every race starts its world
+   * clock at zero, so a report still in flight from the last one carries a
+   * later time than every report of this one — and filed by time it would
+   * shut the new race out until the clock caught up with the old.
+   */
+  | { t: 'input'; seq: number; input: DriverInput; race?: number; state?: CarState }
+  /**
+   * Host → everyone, at `SNAPSHOT_HZ`. `race` for the same reason as on an
+   * input: a guest that filed race two's snapshots against race one's newest
+   * time dropped every one of them as stale, and the host's car sat on the
+   * grid for the whole of the second race while the host drove it.
+   */
+  | { t: 'snap'; tick: number; time: number; race: number; cars: CarSnapshot[]; ack: number }
   /** Host → everyone: somebody finished, or retired. */
   | { t: 'result'; player: PlayerId; time: number | null; retired: boolean }
   /** Either way, on leaving. */
@@ -227,6 +264,43 @@ export function cleanInput(raw: unknown): DriverInput {
     steer: axis(input.steer, -1),
     handbrake: axis(input.handbrake, 0),
     ...(input.hold === true ? { hold: true } : {}),
+  };
+}
+
+/**
+ * A guest's report of its own car, or null if it is not one.
+ *
+ * Since guests became the authority on their own cars this reaches the host's
+ * physics directly — it is where a kinematic body is put — so it gets the same
+ * treatment as `cleanInput`: one `NaN` in a body's translation takes every car
+ * in the race out of the world together. Refused whole rather than patched,
+ * because a position with one made-up axis is somewhere the car never was.
+ * The rotation is normalised, since a kinematic body takes whatever it is
+ * handed and a quaternion that is not unit length shears the car.
+ */
+export function cleanState(raw: unknown): CarState | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const state = raw as Partial<Record<keyof CarState, unknown>>;
+  const finite = (value: unknown, limit: number): value is number =>
+    typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= limit;
+  const vector = (value: unknown, n: number, limit: number): number[] | null =>
+    Array.isArray(value) && value.length === n && value.every((x) => finite(x, limit)) ? (value as number[]) : null;
+  // A stage is a few kilometres across; nothing legitimate is further out.
+  const p = vector(state.p, 3, 1e5);
+  const q = vector(state.q, 4, 2);
+  const v = vector(state.v, 3, 500);
+  const w = vector(state.w, 3, 500);
+  if (!p || !q || !v || !w || !finite(state.time, 1e7)) return null;
+  const norm = Math.hypot(q[0]!, q[1]!, q[2]!, q[3]!);
+  if (norm < 1e-3) return null;
+  const health = finite(state.health, 1) ? Math.max(0, state.health) : 1;
+  return {
+    time: state.time,
+    p: [p[0]!, p[1]!, p[2]!],
+    q: [q[0]! / norm, q[1]! / norm, q[2]! / norm, q[3]! / norm],
+    v: [v[0]!, v[1]!, v[2]!],
+    w: [w[0]!, w[1]!, w[2]!],
+    health,
   };
 }
 

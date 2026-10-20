@@ -794,14 +794,35 @@ of a race. Two things about it are not negotiable:
   that found a genuine bug was an unhandled rejection on an abandoned invite —
   eight errors beside ten passes, in a suite that runs in a second.
 
-**A held input is not a safe default.** The host drives a guest's car from the
-last input it received, and holding that unchanged for five seconds before
-neutralising it was the whole of "other players drift off course": measured, a
-guest mid-corner at full throttle on 0.7 of lock whose device hitched for two
-seconds had their car turned **90°** by the host, and 134° over three. It fades
-now — steering first and squared, because steering is the only channel that
-changes a car's *course* — and the brake is held to the end, since a car nobody
-is driving should be slowing down.
+**Each machine is the authority on its own car, and on nothing else.** The
+host used to simulate every guest's car from their inputs and correct each
+guest's own car toward its copy. That was the rubber-banding players reported:
+an input reaches the host late and on the wrong step, gravel turns a step's
+difference into metres, and only position was ever corrected — so a host copy
+that had lost a little speed pulled the guest back on every snapshot. Jungle
+Jalopies (`../ChasesGame`) owned each kart on its own phone from the start and
+had none of it. Now a guest sends its car's state with every input, the host
+plays it back into a kinematic body exactly as a guest plays the host's back
+(`net/playback.ts`, shared), and a guest's car is moved by nothing but its own
+physics — `tests/net.test.ts` drives it beside a twin world with no network and
+asserts they agree to a micrometre. The cost is that a shunt between two players
+is felt by each as hitting something immovable, and a modified client could lie
+about where it is.
+
+**A held input is not a safe default.** When the host still drove a guest's car,
+holding the last input unchanged for five seconds before neutralising it was
+the whole of "other players drift off course": a guest mid-corner whose device
+hitched for two seconds had their car turned **90°** by the host. A silent
+guest's car is now carried a tenth of a second on its last velocity and then
+parked; the fade in `host.ts` survives only for what the input still drives,
+which is the wheels and lamps drawn on the host's screen.
+
+**Every race restarts every world clock at zero, so a timestamp needs a race
+number.** The guest's snapshot buffer kept the previous race's newest time, so
+every snapshot of the next race read as stale and was dropped — and the joiner
+watched the host's car sit on the grid while the host drove it. Nothing failed
+for the first race of a session, which is the only one any test ran. `start`,
+`snap` and `input` carry `race` now, and both sides reset their clocks on it.
 
 **A guest was bad over mobile and none of the obvious suspects were the cause.**
 Latency, jitter and loss all measured fine — 200 ms with 4% burst loss holds

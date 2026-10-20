@@ -1,14 +1,17 @@
 /**
  * The authoritative side.
  *
- * The host runs the only real simulation. Guests send it inputs and it sends
- * back what happened. It is the same `SimWorld` the single-player game runs —
- * that is the whole reason this was cheap to build, and it is what the very
- * first structural rule of this project bought: the simulation never imported
- * three.js, so it can be the truth for a race rather than a picture of one.
+ * The host runs the room and the race's bookkeeping, and is the hub every
+ * car's state goes through. It is the authority on its own car (index 0) and
+ * on nothing else: each guest simulates its own car and reports where it went,
+ * and the host plays those reports back into kinematic bodies, exactly the way
+ * a guest plays the host's car back from snapshots. The snapshots it sends
+ * carry every car, so guests see each other through it.
  *
- * The host is also a player. Its own car is index 0, so it drives with zero
- * latency and everyone else is corrected toward it.
+ * It used to simulate every guest's car itself, from their inputs, and correct
+ * each guest toward its copy — which is the rubber-banding `guest.ts` describes.
+ * It is still the same `SimWorld` the single-player game runs; what changed is
+ * only whose physics each car obeys.
  */
 
 import type { SimWorld } from '../sim/world.js';
@@ -16,6 +19,7 @@ import type { DriverInput } from '../sim/input.js';
 import { NEUTRAL_INPUT } from '../sim/input.js';
 import {
   type CarSnapshot,
+  type CarState,
   type Link,
   MAX_PLAYERS,
   type NetMessage,
@@ -28,8 +32,10 @@ import {
   cleanLivery,
   cleanName,
   cleanNumber,
+  cleanState,
   packCar,
 } from './protocol.js';
+import { PlaybackClock, type Sample, file, pose, sampleAt, toQuat, toVec } from './playback.js';
 
 interface Guest {
   id: PlayerId;
@@ -41,6 +47,11 @@ interface Guest {
   seq: number;
   /** Seconds since anything arrived from them. */
   silent: number;
+  /** Their car as they reported it, oldest first, on their own clock. */
+  reports: Sample[];
+  clock: PlaybackClock;
+  /** Condition of their car, as their own damage model has it. */
+  health: number;
 }
 
 export interface HostOptions {
@@ -56,8 +67,16 @@ export interface HostOptions {
   onGo?: () => void;
 }
 
-/** Seconds of silence before a guest's car stops being driven by them. */
+/** Seconds of silence before a guest's last input is cleared outright. */
 const SILENT_TIMEOUT = 5;
+
+/*
+ * A guest's input no longer drives anything on the host — their car is put
+ * where they report it — but it still reaches the kinematic car's vehicle model,
+ * which is what turns its front wheels, lights its brake lamps and revs its
+ * engine on the host's screen. Faded for the same reasons it always was, which
+ * are kept below: a held input looks exactly as wrong as it used to drive.
+ */
 
 /**
  * How long a guest's last input is trusted completely, seconds.
@@ -181,7 +200,17 @@ export class RaceHost {
         wins: 0,
       };
       this.players.push(info);
-      this.guests.set(id, { id, link, info, input: { ...NEUTRAL_INPUT }, seq: -1, silent: 0 });
+      this.guests.set(id, {
+        id,
+        link,
+        info,
+        input: { ...NEUTRAL_INPUT },
+        seq: -1,
+        silent: 0,
+        reports: [],
+        clock: new PlaybackClock(),
+        health: 1,
+      });
 
       link.send({ t: 'welcome', you: id, setup: this.describeSetup() });
       this.broadcastLobby();
@@ -218,9 +247,13 @@ export class RaceHost {
         // input that is older than one already used is not news.
         if (typeof message.seq === 'number' && message.seq > guest.seq) {
           guest.seq = message.seq;
-          // Bounded here because this is the one thing a guest sends that
-          // reaches the host's physics.
           guest.input = cleanInput(message.input);
+          // Bounded here because this is the thing a guest sends that reaches
+          // the host's physics: it is where their kinematic body is put. And
+          // only for this race — a report still in flight from the last one is
+          // on a clock that has since restarted from zero.
+          const state = cleanState(message.state);
+          if (state && this.started && message.race === this.race) this.absorb(guest, state);
         }
         break;
       case 'result':
@@ -256,6 +289,21 @@ export class RaceHost {
     this.broadcastLobby();
   }
 
+  /** File a guest's report of its own car. */
+  private absorb(guest: Guest, state: CarState): void {
+    if (!guest.clock.note(state.time)) return;
+    guest.health = state.health;
+    file(guest.reports, {
+      time: state.time,
+      p: toVec(state.p),
+      q: toQuat(state.q),
+      v: toVec(state.v),
+      w: toVec(state.w),
+      health: state.health,
+      progress: 0,
+    });
+  }
+
   /** Describe the race as it currently stands, for a joining guest. */
   private describeSetup(): RaceSetup {
     return (
@@ -283,8 +331,15 @@ export class RaceHost {
     this.setup = { ...setup, players: this.players.map((player) => ({ ...player })) };
     this.world = world;
     this.started = true;
+    this.race++;
+    // Every guest's world clock starts again at zero with this race.
+    for (const guest of this.guests.values()) {
+      guest.reports.length = 0;
+      guest.clock.reset();
+      guest.health = 1;
+    }
     this.waitingFor = new Set(this.guests.keys());
-    this.broadcast({ t: 'start', setup: this.setup, at: 0 });
+    this.broadcast({ t: 'start', setup: this.setup, at: 0, race: this.race });
     // A host racing alone has nobody to wait for.
     if (this.waitingFor.size === 0) this.releaseGrid();
   }
@@ -308,13 +363,16 @@ export class RaceHost {
 
   private gridReleased = false;
 
+  /** Which race this is. Stamped on every snapshot; see `NetMessage`. */
+  private race = 0;
+
   /**
-   * Advance one fixed step, using whatever each guest last sent.
+   * Advance one fixed step: our own car from our controls, every guest's car
+   * from their reports, played back `INTERP_DELAY` behind the newest.
    *
-   * Faded rather than held: see `stale`. A guest who has gone quiet keeps their
-   * last input for a ninth of a second and then loses it over a third of one,
-   * steering first — because a car driving itself off the road on a stuck lock
-   * is exactly what "the other players drift off course" turned out to be.
+   * A guest who goes quiet is carried on their last velocity for a tenth of a
+   * second and then held where they were last seen — parked, rather than
+   * driven anywhere they did not go.
    */
   step(localInput: DriverInput, dt: number): void {
     if (!this.world) return;
@@ -329,6 +387,10 @@ export class RaceHost {
       if (guest.silent > SILENT_TIMEOUT) guest.input = { ...NEUTRAL_INPUT };
       const car = guest.info.car;
       if (car < inputs.length) inputs[car] = stale(guest.input, guest.silent);
+      const vehicle = this.world.cars[car]?.vehicle;
+      if (vehicle && guest.reports.length > 0) {
+        pose(vehicle, sampleAt(guest.reports, guest.clock.advance(dt)));
+      }
     }
 
     this.world.step(inputs);
@@ -350,6 +412,8 @@ export class RaceHost {
     // and quietly makes twenty snapshots a second into seventeen.
     this.sinceSnapshot -= interval;
 
+    const health = new Map<number, number>();
+    for (const guest of this.guests.values()) health.set(guest.info.car, guest.health);
     const cars: CarSnapshot[] = this.world.cars.map((car, index) => {
       const body = car.vehicle.body;
       return packCar(
@@ -358,7 +422,9 @@ export class RaceHost {
         body.rotation(),
         body.linvel(),
         body.angvel(),
-        car.damage?.condition ?? 1,
+        // A guest's car is damaged in the guest's world, which is the one that
+        // simulates it; the host's copy only stands where it is told.
+        health.get(index) ?? car.damage?.condition ?? 1,
         progressOf(index),
       );
     });
@@ -368,9 +434,10 @@ export class RaceHost {
         t: 'snap',
         tick: this.world.steps,
         time: this.world.time,
+        race: this.race,
         cars,
-        // Echoing their own latest sequence is what lets a guest tell how far
-        // behind the authority its own prediction is.
+        // Their own latest sequence, echoed: how far behind the host's picture
+        // of them is.
         ack: guest.seq,
       });
     }

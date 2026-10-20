@@ -49,9 +49,9 @@ export interface LoopbackOptions {
    * Radio links do not lose packets independently — a handset behind a lorry
    * loses a burst and then nothing. It matters because the netcode's response
    * to one missing input and to twelve missing inputs are different responses:
-   * a single gap is covered, and a burst is long enough for the host to start
-   * fading a guest's throttle toward zero while the guest keeps predicting
-   * full commitment. Independent loss at the same rate never reaches that.
+   * a single gap is covered, and a burst is long enough for the host to run
+   * out of a guest's reports and park their car until the next one lands.
+   * Independent loss at the same rate never reaches that.
    */
   burst?: number;
   /**

@@ -8,10 +8,11 @@
  * browser instead — slowly, and only at whatever latency the machine happened
  * to have that day.
  *
- * The number that matters is the last one: how far the guest's own car ends up
- * from where the host says it is, after a minute of driving at a realistic
- * ping. If that stays small, the game is playable; if it does not, no amount of
- * lobby correctness helps.
+ * Each machine is the authority on its own car, so the numbers that matter are
+ * how far *behind* each side's picture of the other car runs — in seconds, not
+ * metres, because metres are only speed times the delay — and that a guest's
+ * own car is never moved by anything but its own physics. If those hold, the
+ * game is playable; if they do not, no amount of lobby correctness helps.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -71,10 +72,15 @@ async function pair(
   const guest = new RaceGuest(wire.b, { name: 'Guest' });
   wire.flush();
 
-  const hostWorld = await createWorld({ baseSurface: 'tarmac', cars });
-  // The guest builds its world the way the game does: its own car at index 0,
-  // in the grid slot the host has it in, and everybody else's car kinematic
-  // because it is driven from the wire rather than by the physics.
+  // Both build their worlds the way the game does: their own car at index 0
+  // and everybody else's kinematic, because it is driven from the wire rather
+  // than by the physics. The guest's own car sits in the grid slot the host
+  // has it in.
+  const hostWorld = await createWorld({
+    baseSurface: 'tarmac',
+    cars,
+    remote: Array.from({ length: cars - 1 }, (_, i) => i + 1),
+  });
   guestWorld = await createWorld({
     baseSurface: 'tarmac',
     cars,
@@ -105,10 +111,10 @@ async function pair(
    * restarted from zero on each call is a constant input wearing a disguise.
    */
   let slalomClock = 0;
-  const runSlalom = (steps: number) => {
+  const runSlalom = (steps: number, hostInput: DriverInput = CIRCLE) => {
     for (let i = 0; i < steps; i++) {
       slalomClock += DT;
-      host.step(CIRCLE, DT);
+      host.step(hostInput, DT);
       host.maybeSnapshot(DT, progressOf);
       guest.step(
         { throttle: 0.7, brake: 0, steer: Math.sin(slalomClock * 1.6) * 0.6, handbrake: 0 },
@@ -127,6 +133,30 @@ function disagreement(a: SimWorld, b: SimWorld, hostCar: number, guestCar = host
   const q = b.cars[guestCar]!.vehicle.body.translation();
   return Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z);
 }
+
+/**
+ * How far behind a played-back copy runs, in seconds: the distance to the car
+ * it copies over that car's speed. `truth` is the world that simulates the car.
+ */
+function lag(truth: SimWorld, truthCar: number, copy: SimWorld, copyCar: number): number {
+  const v = truth.cars[truthCar]!.vehicle.body.linvel();
+  const speed = Math.hypot(v.x, v.y, v.z);
+  // A copy of a parked car is on top of it whatever the netcode does, which is
+  // how a first draft of these tests measured a car the other one had rolled
+  // into the verge and reported zero lag. Nothing here drives slower than this.
+  if (speed < 3) throw new Error(`the car being followed is barely moving (${speed.toFixed(2)} m/s)`);
+  return disagreement(truth, copy, truthCar, copyCar) / Math.max(speed, 1);
+}
+
+/** A state report for the guest's car, as `RaceGuest` would send one. */
+const report = (time: number, z: number) => ({
+  time,
+  p: [0, 0.5, z] as [number, number, number],
+  q: [0, 0, 0, 1] as [number, number, number, number],
+  v: [0, 0, 0] as [number, number, number],
+  w: [0, 0, 0] as [number, number, number],
+  health: 1,
+});
 
 describe('the lobby', () => {
   it('seats a guest and gives it a car of its own', async () => {
@@ -344,45 +374,69 @@ describe('inputs going up', () => {
     expect(host.playerCount).toBe(2);
   });
 
-  it('lets go of the throttle when a guest goes silent', async () => {
-    // A stuck packet must not become a car driving itself off the stage.
+  it('parks a guest car when the guest goes silent', async () => {
+    // A stuck packet must not become a car driving itself off the stage. The
+    // host no longer drives the car at all, so silence means it stays where it
+    // was last seen — carried a tenth of a second on its last velocity, then
+    // held.
     const { hostWorld, host, wire, run } = await pair();
     run(240, NEUTRAL_INPUT, { ...NEUTRAL_INPUT, throttle: 1 });
 
     // Pull the plug on the guest's sending without closing the link, which is
     // what a wifi drop looks like from the host's side.
     wire.b.send = () => {};
-    let peak = 0;
-    for (let i = 0; i < 120 * 30; i++) {
+    for (let i = 0; i < 60; i++) {
       host.step(NEUTRAL_INPUT, DT);
       wire.advance(DT * 1000);
-      peak = Math.max(peak, Math.abs(hostWorld.cars[1]!.vehicle.body.linvel().z));
     }
-    // Coasting on drag alone, not still accelerating on a stuck throttle.
-    const speed = Math.abs(hostWorld.cars[1]!.vehicle.body.linvel().z);
-    expect(speed).toBeLessThan(peak * 0.5);
+    const parked = hostWorld.cars[1]!.vehicle.body.translation().z;
+    for (let i = 0; i < 120 * 3; i++) {
+      host.step(NEUTRAL_INPUT, DT);
+      wire.advance(DT * 1000);
+    }
+    expect(Math.abs(hostWorld.cars[1]!.vehicle.body.translation().z - parked)).toBeLessThan(0.01);
   });
 
-  it('ignores an input that arrives out of order', async () => {
+  it('ignores a report that arrives out of order', async () => {
     const wire = new LoopbackWire();
     const host = new RaceHost();
     host.accept(wire.a);
     new RaceGuest(wire.b);
     wire.flush();
 
-    const world = await createWorld({ baseSurface: 'tarmac', cars: 2 });
+    const world = await createWorld({ baseSurface: 'tarmac', cars: 2, remote: [1] });
     host.start(SETUP, world);
     wire.flush();
 
-    wire.b.send({ t: 'input', seq: 10, input: { ...NEUTRAL_INPUT, throttle: 1 } });
+    // Two reports in order a short way down the road, then a straggler from
+    // further back in time that would pull the car back to the line.
+    wire.b.send({ t: 'input', seq: 10, input: NEUTRAL_INPUT, race: 1, state: report(1.0, 20) });
+    wire.b.send({ t: 'input', seq: 11, input: NEUTRAL_INPUT, race: 1, state: report(1.1, 21) });
     wire.flush();
-    wire.b.send({ t: 'input', seq: 4, input: { ...NEUTRAL_INPUT, brake: 1 } });
+    wire.b.send({ t: 'input', seq: 4, input: NEUTRAL_INPUT, race: 1, state: report(0.4, 0) });
     wire.flush();
 
-    // The stale packet did not replace the newer one.
-    host.step(NEUTRAL_INPUT, DT);
-    for (let i = 0; i < 200; i++) host.step(NEUTRAL_INPUT, DT);
-    expect(world.cars[1]!.vehicle.body.linvel().z).toBeGreaterThan(1);
+    for (let i = 0; i < 120; i++) host.step(NEUTRAL_INPUT, DT);
+    expect(world.cars[1]!.vehicle.body.translation().z).toBeGreaterThan(19);
+  });
+
+  it('refuses a report that would put a NaN into the world', async () => {
+    const wire = new LoopbackWire();
+    const host = new RaceHost();
+    host.accept(wire.a);
+    new RaceGuest(wire.b);
+    wire.flush();
+    const world = await createWorld({ baseSurface: 'tarmac', cars: 2, remote: [1] });
+    host.start(SETUP, world);
+    wire.flush();
+
+    const bad = { ...report(1, 5), p: [0, Number.NaN, 5] };
+    wire.b.send({ t: 'input', seq: 1, input: NEUTRAL_INPUT, race: 1, state: bad as never });
+    wire.b.send({ t: 'input', seq: 2, input: NEUTRAL_INPUT, race: 1, state: { nonsense: true } as never });
+    wire.flush();
+    for (let i = 0; i < 60; i++) host.step(NEUTRAL_INPUT, DT);
+    const p = world.cars[1]!.vehicle.body.translation();
+    expect(Number.isFinite(p.x + p.y + p.z)).toBe(true);
   });
 });
 
@@ -474,39 +528,99 @@ describe('the session', () => {
   });
 });
 
-describe('prediction', () => {
-  it('keeps the guest car where the host says it is, at 80 ms', async () => {
-    const { hostWorld, guestWorld, guest, run } = await pair({ latency: 40 });
-    run(120 * 20, CIRCLE, CIRCLE);
+describe("a guest's own car", () => {
+  it('is never moved by anything but its own physics', async () => {
+    // The whole of the rubber-banding fix. The guest's car used to be walked
+    // toward the host's copy of it, which had driven a slightly different race
+    // from late inputs. Now the guest's world is the only one that simulates
+    // it: the same car, driven the same way in a world with no network at all,
+    // ends up exactly where the networked one does.
+    const { guestWorld, guest, run } = await pair({ latency: 60, loss: 0.1, jitter: 40 });
+    const twin = await createWorld({ baseSurface: 'tarmac', cars: 2, slots: guest.slots, remote: [1] });
 
-    const off = disagreement(hostWorld, guestWorld, guest.car, 0);
-    // Twenty seconds of full throttle, and the two copies of the car are still
-    // within a car length of each other.
-    expect(off).toBeLessThan(4);
-    // And it got there by blending, not by teleporting every packet.
-    expect(guest.stats.blends).toBeGreaterThan(guest.stats.snaps * 10);
+    // The host's car is in both worlds and can be touched, so the twin's copy
+    // of it is moved exactly as the guest's is: what is under test is that the
+    // snapshots never reach the guest's *own* car, not that two different
+    // worlds agree.
+    const theirs = guestWorld.cars[1]!.vehicle.body;
+    const mirror = twin.cars[1]!.vehicle.body;
+    for (let i = 0; i < 120 * 10; i++) {
+      run(1, NEUTRAL_INPUT, CIRCLE);
+      twin.step([CIRCLE, NEUTRAL_INPUT]);
+      mirror.setNextKinematicTranslation(theirs.nextTranslation());
+      mirror.setNextKinematicRotation(theirs.nextRotation());
+    }
+
+    expect(guest.stats.snapshots).toBeGreaterThan(100);
+    expect(disagreement(guestWorld, twin, 0, 0)).toBeLessThan(1e-6);
+  });
+
+  it('is followed closely by the host at 80 ms', async () => {
+    const { hostWorld, guestWorld, runSlalom } = await pair({ latency: 40 });
+    runSlalom(120 * 20, NEUTRAL_INPUT);
+    // Played back `INTERP_DELAY` behind its newest report, which is one
+    // one-way delay old when it lands: 0.14 s, give or take a send interval.
+    expect(lag(guestWorld, 0, hostWorld, 1)).toBeLessThan(0.2);
   });
 
   it('survives one packet in five going missing', async () => {
-    const { hostWorld, guestWorld, guest, run } = await pair({ latency: 40, loss: 0.2 });
-    run(120 * 20, NEUTRAL_INPUT, CIRCLE);
-    expect(disagreement(hostWorld, guestWorld, guest.car, 0)).toBeLessThan(6);
+    const { hostWorld, guestWorld, runSlalom } = await pair({ latency: 40, loss: 0.2 });
+    runSlalom(120 * 20, NEUTRAL_INPUT);
+    expect(lag(guestWorld, 0, hostWorld, 1)).toBeLessThan(0.25);
   });
+});
 
-  it('follows the other car closely enough to race it', async () => {
+describe("the host's car, on a guest", () => {
+  it('is followed closely enough to race it', async () => {
     // Remote cars are played back behind real time on purpose, so this is
     // allowed to lag — but only by about what the delay plus the latency buys.
-    const { hostWorld, guestWorld, run } = await pair({ latency: 40 });
-    run(120 * 20, CIRCLE, NEUTRAL_INPUT);
-
-    // Measured as time rather than distance, because distance is just speed
-    // times the delay and would fail on a faster car for no good reason.
-    const v = hostWorld.cars[0]!.vehicle.body.linvel();
-    const speed = Math.hypot(v.x, v.y, v.z);
     // The host's car 0 is the guest's car 1, because the guest keeps its own
     // car first — so this also checks the permutation is applied at the wire.
-    const behind = disagreement(hostWorld, guestWorld, 0, 1) / Math.max(speed, 1);
-    expect(behind).toBeLessThan(0.25);
+    const { hostWorld, guestWorld, run } = await pair({ latency: 40 });
+    run(120 * 20, CIRCLE, NEUTRAL_INPUT);
+    expect(lag(hostWorld, 0, guestWorld, 1)).toBeLessThan(0.25);
+  });
+});
+
+describe('a second race in the same lobby', () => {
+  it("shows the host's car moving, and the guest's on the host", async () => {
+    // Reported as "the joiner saw the host's car sitting still at the start
+    // line when the host was actually driving". Every race starts its world
+    // clock at zero again, and the guest kept the last race's newest snapshot
+    // time — so every snapshot of the second race read as older than one
+    // already held and was thrown away, until the second race's clock passed
+    // the first race's length. Latency, so packets of the first race are still
+    // in flight when the second starts.
+    const { host, guest, wire, run } = await pair({ latency: 40 });
+    run(120 * 8, CIRCLE, CIRCLE);
+
+    host.reopen();
+    const hostWorld = await createWorld({ baseSurface: 'tarmac', cars: 2, remote: [1] });
+    const guestWorld = await createWorld({ baseSurface: 'tarmac', cars: 2, slots: guest.slots, remote: [1] });
+    host.start(SETUP, hostWorld);
+    // Not flushed: the first race's stragglers arrive after the second starts,
+    // and the guest goes on stepping its old world until it has a new one.
+    for (let i = 0; i < 12; i++) {
+      host.step(CIRCLE, DT);
+      guest.step(CIRCLE, DT);
+      wire.advance(DT * 1000);
+    }
+    guest.attach(guestWorld);
+
+    const progressOf = (c: number) => hostWorld.cars[c]!.vehicle.body.translation().z;
+    const flat: DriverInput = { throttle: 1, brake: 0, steer: 0, handbrake: 0 };
+    for (let i = 0; i < 120 * 4; i++) {
+      host.step(flat, DT);
+      host.maybeSnapshot(DT, progressOf);
+      guest.step(flat, DT);
+      wire.advance(DT * 1000);
+    }
+
+    // The host's car, on the guest: following, not parked on the grid.
+    expect(guest.stats.snapshots).toBeGreaterThan(60);
+    expect(lag(hostWorld, 0, guestWorld, 1)).toBeLessThan(0.25);
+    // And the guest's car, on the host.
+    expect(lag(guestWorld, 0, hostWorld, 1)).toBeLessThan(0.25);
   });
 });
 
@@ -620,100 +734,34 @@ describe('invite codes', () => {
   });
 });
 
-describe('a guest whose device hitches', () => {
-  it('coasts instead of driving itself off the road', async () => {
-    // The whole of the "other players drift off course" report. The host held a
-    // guest's last input unchanged for five seconds before neutralising it, so a
-    // guest mid-corner whose phone stalled had their car *kept turning* by the
-    // host: measured, two seconds of silence swung it 90 degrees and three swung
-    // it 134, which is a car driving itself in a circle off the stage while its
-    // driver watches. It fades now, steering first.
-    const { host, hostWorld, run } = await pair({ latency: 40 });
-    const turning: DriverInput = { throttle: 1, brake: 0, steer: 0.7, handbrake: 0 };
-    const idle: DriverInput = { throttle: 0, brake: 0, steer: 0, handbrake: 0 };
-    run(120 * 4, idle, turning);
-
-    const heading = () => {
-      const q = hostWorld.cars[1]!.vehicle.body.rotation();
-      return Math.atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.z * q.z));
-    };
-    const before = heading();
-
-    // The guest stops stepping and stops sending; the host carries on alone.
-    for (let i = 0; i < 120 * 3; i++) {
-      host.step(idle, DT);
-      host.maybeSnapshot(DT, () => 0);
-    }
-    const turned =
-      Math.abs(((heading() - before + Math.PI * 3) % (Math.PI * 2)) - Math.PI) * (180 / Math.PI);
-    // A little residual swing while the lock unwinds is right — a dropped packet
-    // must not stab the wheel straight — but the car must end up coasting.
-    expect(turned).toBeLessThan(30);
+describe('a guest on a jittery link', () => {
+  it('is still followed closely by the host', async () => {
+    const { hostWorld, guestWorld, runSlalom } = await pair({ latency: 60, loss: 0.05, jitter: 30 });
+    runSlalom(120 * 10, NEUTRAL_INPUT);
+    expect(lag(guestWorld, 0, hostWorld, 1)).toBeLessThan(0.3);
   });
-
-  it('still ignores ordinary loss and jitter', async () => {
-    // The fade must not fire on a healthy connection: inputs arrive at 60 Hz and
-    // the fresh window is nine of them, so normal loss never reaches it.
-    const { hostWorld, guestWorld, run } = await pair({ latency: 60, loss: 0.05, jitter: 30 });
-    const drive: DriverInput = { throttle: 1, brake: 0, steer: 0.3, handbrake: 0 };
-    const idle: DriverInput = { throttle: 0, brake: 0, steer: 0, handbrake: 0 };
-    run(120 * 10, idle, drive);
-    // The guest's own car, as the host has it, against the guest's prediction.
-    expect(disagreement(hostWorld, guestWorld, 1, 0)).toBeLessThan(5);
-  });
-});
-
-describe('a guest predicting its own car', () => {
-  /** Mean distance between the host's copy of the guest car and the guest's own. */
-  const drive = async (latency: number, loss = 0, jitter = 0) => {
-    const { host, guest, hostWorld, guestWorld, wire } = await pair({ latency, loss, jitter });
-    const idle: DriverInput = { throttle: 1, brake: 0, steer: 0, handbrake: 0 };
-    let sum = 0;
-    let n = 0;
-    for (let i = 0; i < 120 * 20; i++) {
-      const t = i / 120;
-      host.step(idle, DT);
-      host.maybeSnapshot(DT, (c) => hostWorld.cars[c]!.vehicle.body.translation().z);
-      // A slalom. With a constant input a stale packet and a fresh one are the
-      // same packet, and every timing mistake in here is invisible.
-      guest.step({ throttle: 1, brake: 0, steer: Math.sin(t * 2.2) * 0.55, handbrake: 0 }, DT);
-      wire.advance(DT * 1000);
-      if (t > 3) {
-        sum += disagreement(hostWorld, guestWorld, 1, 0);
-        n++;
-      }
-    }
-    return { mean: sum / n, snaps: guest.stats.snaps };
-  };
 
   it('does not get further out the further away the host is', async () => {
-    // The property that matters, and the one that was wrong. `reconcile` used
-    // to compare the authority's position against where the guest was *now*
-    // rather than at the snapshot's own timestamp, so the guest's entire lead —
-    // one-way delay plus snapshot age — was counted as error and corrected
-    // away. Measured before the fix: 0.25 m of mean error at no latency, 1.23 m
-    // at 60 ms, 2.23 m at 120 ms, 3.72 m at 200 ms. A straight line through the
-    // latency, which is a clock mistake rather than the physics disagreeing.
+    /** Mean lag of the host's copy of the guest's car, through a slalom. */
+    const drive = async (latency: number, loss = 0, jitter = 0) => {
+      const { hostWorld, guestWorld, runSlalom } = await pair({ latency, loss, jitter });
+      let sum = 0;
+      let n = 0;
+      for (let i = 0; i < 120 * 20; i++) {
+        runSlalom(1, NEUTRAL_INPUT);
+        if (i > 120 * 3) {
+          sum += lag(guestWorld, 0, hostWorld, 1);
+          n++;
+        }
+      }
+      return sum / n;
+    };
+    // The copy is played back behind its newest report, so it trails by the
+    // buffer plus one one-way delay — and by nothing that grows on its own.
     const near = await drive(0);
     const far = await drive(200, 0.1, 100);
-    expect(near.mean).toBeLessThan(0.6);
-    // The one that matters: a fifth of a second of latency with ten per cent
-    // loss used to cost 3.72 m of standing error. Asserted in absolute metres
-    // rather than as a ratio to `near`, because `near` is small enough that a
-    // ratio against it swings on seed noise alone.
-    expect(far.mean).toBeLessThan(1.5);
-    // And still a guard against the proportionality coming back: it used to be
-    // about fifteen times worse at distance.
-    expect(far.mean).toBeLessThan(near.mean * 10);
-  }, 60_000);
-
-  it('stops teleporting the car on a poor connection', async () => {
-    // `HARD_SNAP` is 2.5 m, and the manufactured error above crossed it past
-    // about 100 ms — so the guest's own car was being *snapped* rather than
-    // nudged, 39 times in thirty seconds at 120 ms and 57 at 200 ms. That is
-    // the jolt a player feels, and it is entirely self-inflicted.
-    const { snaps } = await drive(120, 0.08, 80);
-    expect(snaps).toBeLessThan(5);
+    expect(near).toBeLessThan(0.15);
+    expect(far).toBeLessThan(0.4);
   }, 60_000);
 });
 
@@ -731,12 +779,12 @@ describe("somebody else's car, on a guest", () => {
 
     expect(guestWorld.cars[1]!.vehicle.remote).toBe(true);
     expect(guestWorld.cars[1]!.vehicle.body.isKinematic()).toBe(true);
-    // The guest's own car is still a real car, or it would not be predicting.
+    // Each side's own car is a real car, because that side simulates it.
     expect(guestWorld.cars[0]!.vehicle.remote).toBe(false);
     expect(guestWorld.cars[0]!.vehicle.body.isKinematic()).toBe(false);
-    // And the host simulates every car for real: it is the authority on all of
-    // them, including the contacts between them.
-    for (const car of hostWorld.cars) expect(car.vehicle.body.isKinematic()).toBe(false);
+    expect(hostWorld.cars[0]!.vehicle.body.isKinematic()).toBe(false);
+    // And the host plays the guest's car back the same way.
+    expect(hostWorld.cars[1]!.vehicle.body.isKinematic()).toBe(true);
   });
 
   it('is still moved to where the host says it is', async () => {
@@ -806,10 +854,15 @@ describe('a guest on a mobile link', () => {
     // two copies of the same physics diverge on their own and the snaps are
     // chaos rather than netcode — measured, that input snaps 38 times on a
     // perfect link. The wire is not what this is meant to be measuring.
-    const { guest, runSlalom } = await pair(MOBILE);
-    runSlalom(120 * 20);
-    // Corrections are a blend; a snap is the exception `HARD_SNAP` exists for.
-    expect(guest.stats.snaps * 10).toBeLessThan(guest.stats.blends);
+    const { hostWorld, guestWorld, runSlalom } = await pair(MOBILE);
+    let worst = 0;
+    for (let i = 0; i < 120 * 20; i++) {
+      runSlalom(1, NEUTRAL_INPUT);
+      if (i > 120 * 3) worst = Math.max(worst, lag(guestWorld, 0, hostWorld, 1));
+    }
+    // Played back behind the buffer and the one-way delay (0.1 + 0.13 s),
+    // through bursts of loss the buffer cannot always cover. Measured 0.25 s.
+    expect(worst).toBeLessThan(0.4);
   });
 
   it('does not fall off a cliff when the uplink runs out of packets', async () => {
@@ -819,13 +872,16 @@ describe('a guest on a mobile link', () => {
      * link is genuinely saturated and packets are genuinely being dropped —
      * the point is that dropping them is survivable and queueing them is not.
      */
-    const { hostWorld, guestWorld, guest, runSlalom } = await pair({ ...MOBILE, capacity: 35 });
-    runSlalom(120 * 20);
-
-    // Before the fast channel refused to queue: 111 snaps and 5.17 m.
-    expect(guest.stats.snaps).toBeLessThan(10);
-    expect(guest.stats.worstError).toBeLessThan(2.5);
-    expect(disagreement(hostWorld, guestWorld, guest.car, 0)).toBeLessThan(3);
+    const { hostWorld, guestWorld, runSlalom } = await pair({ ...MOBILE, capacity: 35 });
+    let worst = 0;
+    for (let i = 0; i < 120 * 20; i++) {
+      runSlalom(1, NEUTRAL_INPUT);
+      if (i > 120 * 3) worst = Math.max(worst, lag(guestWorld, 0, hostWorld, 1));
+    }
+    // Queued, a report would reach the host seconds late and this would read
+    // in seconds; dropped, it stays within the buffer and the delay. Measured
+    // 0.30 s.
+    expect(worst).toBeLessThan(0.45);
   });
 
   it('never lets the uplink queue grow without bound', async () => {

@@ -5,8 +5,8 @@
  * drives the same way it always has: sample the controls, advance the world,
  * draw the local car — which is index 0 whether you are hosting or not,
  * because the guest swapped its own car into that slot when it built the world.
- * Below it, one side is the authority and the other is arguing politely with
- * it, and neither the camera nor the HUD needs to know which.
+ * Below it, each side drives its own car and plays everyone else's back from
+ * the wire, and neither the camera nor the HUD needs to know which side it is.
  *
  * No three.js here, on purpose: a race between four cars can be run headlessly,
  * which is how the netcode is tested at all.
@@ -72,14 +72,16 @@ export class MultiplayerSession {
   }
 
   /**
-   * How hard the guest is having to argue with the authority.
+   * How the snapshots are arriving: taken in, and thrown away as stale or as
+   * belonging to another race.
    *
-   * `snaps` is the one that matters: a snap is the car being *teleported*
-   * rather than nudged, and it is what a player feels as a jolt. These counters
-   * have existed since the netcode was written and nothing ever read them, so a
-   * connection quietly falling apart looked exactly like a connection working.
+   * It used to count corrections — blends and snaps of the guest's own car
+   * toward the host's copy. A guest's car is its own now and is never
+   * corrected, so the thing left to watch is whether everybody else's cars are
+   * being fed. A `dropped` that climbs while `snapshots` does not is the host's
+   * car frozen on this screen.
    */
-  get netQuality(): { snaps: number; blends: number; worstError: number } | null {
+  get netQuality(): { snapshots: number; dropped: number } | null {
     return this.guest ? { ...this.guest.stats } : null;
   }
 
