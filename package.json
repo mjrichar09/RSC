@@ -8,6 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:quick": "vitest run --exclude \"tests/drive-*.test.ts\"",
     "telemetry": "tsx tools/headless.ts",
     "shoot": "tsx tools/shoot.ts",
     "typecheck": "tsc --noEmit",

@@ -16,9 +16,8 @@ import {
   visibility,
   visibilityPenalty,
 } from '../src/sim/conditions.js';
-import { Stage, findVariant, stageVariants, variantKey } from '../src/sim/stage.js';
+import { findVariant, stageVariants, variantKey } from '../src/sim/stage.js';
 import { SURFACES } from '../src/sim/surfaces.js';
-import { validateStage } from '../src/sim/runStage.js';
 
 describe('grip', () => {
   it('leaves a dry day exactly as it was', () => {
@@ -148,25 +147,5 @@ describe('variants', () => {
   });
 });
 
-describe('every variant is drivable', () => {
-  const authored = STAGES.filter((s) => (s.variants?.length ?? 0) > 0);
-
-  it.each(authored.flatMap((def) => stageVariants(def).slice(1).map((v) => [def.name, v, def] as const)))(
-    '%s in %s',
-    async (_name, v, def) => {
-      // A variant nobody can finish is not shippable, same bar as a stage.
-      const result = await validateStage(new Stage(def), v.conditions);
-      expect(result.ok, result.reason ?? '').toBe(true);
-      expect(result.time!).toBeLessThan(v.medals.bronze);
-    },
-    // Three laps of a whole stage each, and the two Grand Traverse variants
-    // are the slowest work in the suite: measured at 100.6 s and 101.2 s, over
-    // a budget of 90 s that had been set by eye. They were not hanging and
-    // nothing about the game had changed — the number was simply never true on
-    // a machine this size, and it only went red once the pair drifted the last
-    // second across the line. Same lesson as the `stages.test.ts` budgets, and
-    // set the same way: from the measurement, with room for a machine under
-    // load rather than room for a regression.
-    180_000,
-  );
-});
+// Every variant being drivable is checked in `driving.ts`, beside the stage
+// it belongs to, so the slow part of the suite runs on three cores.
