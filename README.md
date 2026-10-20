@@ -728,23 +728,35 @@ all. Measured, a T-bone at 60 km/h costs the rammer its lights and the victim
 31% of a door — the same numbers a crash into scenery produces, because it is
 the same code.
 
-**Host-authoritative, not lockstep.** Rapier is deterministic for a given build
-on a given machine and not across machines or browser versions, so lockstep
-would desync within seconds with no way to tell which copy was right. One player
-runs the truth; everyone else predicts and is corrected.
+**Each machine owns its own car, not lockstep.** Rapier is deterministic for a
+given build on a given machine and not across machines or browser versions, so
+lockstep would desync within seconds with no way to tell which copy was right.
+So nobody tries to agree on the physics: every player simulates their own car
+from their own input and reports where it went, and every other car — on the
+host as much as on a guest — is a kinematic body played back from those reports.
+The host is the hub that forwards everyone's car to everyone, and the race's
+bookkeeping.
 
-**Prediction on your own car, interpolation on everyone else's.** Your car is
-simulated locally from your own input with no waiting, and the authoritative
-position is folded in as a correction spread over a quarter of a second — past
-2.5 m or 0.7 rad the disagreement is too large to have come from timing, so it
-snaps instead. Other cars are played back 0.1 s behind the newest snapshot,
-which covers a lost packet from the buffer instead of showing as a stutter.
-They stay real rigid bodies with real velocities, so you can still hit them.
+It was host-authoritative first. The host simulated every car from the inputs
+guests sent and each guest's own car was corrected toward the host's copy, and
+that is what players felt as rubber-banding: an input reaches the host late and
+lands on whatever step is next rather than the one it was pressed on, rally
+physics turns a step's difference into metres, and only position was corrected,
+so a host copy that had lost a little speed dragged the guest back on every
+snapshot. Jungle Jalopies (`../ChasesGame`), built on the same base, owned each
+kart on its own phone from the start and does not rubber-band — so RSC does the
+same. A guest was already trusted to say when it crossed the line.
 
-Measured over twenty seconds at 80 ms round trip: your car ends within 4 m of
-where the host has it, reached by blending rather than teleporting, and it holds
-under 20% packet loss. Other cars run 0.16 s behind — the interpolation delay
-plus the latency plus half a snapshot interval, with nothing unaccounted for.
+**Interpolation on everyone else's car.** Other cars are played back 0.1 s
+behind the newest sample from their owner, which covers a lost packet from the
+buffer instead of showing as a stutter. They stay real bodies, so you can still
+hit them — kinematic ones, which means a shunt is felt by each driver as hitting
+something that does not give.
+
+Measured over twenty seconds of slalom, the host's copy of a guest's car runs
+113 ms behind on a perfect link, 147 ms at 80 ms round trip and about 240 ms on
+the mobile profile in `tests/net.test.ts` — the buffer plus one one-way delay,
+with nothing unaccounted for. Your own car is never moved by the network at all.
 
 **A guest's own car is index 0 in its own world.** The whole game above the
 simulation — camera, HUD, damage panel, rescue — is written around the local car
@@ -834,6 +846,6 @@ own run — everyone settles their own race locally.
 - **P11 — Wildlife** ✅ deer that are always seen before they move, plus a
   bounded random tier of gusts and stone strikes.
 
-- **P12 — Multiplayer** ✅ four cars in one world, host-authoritative netcode
-  with prediction and interpolation, WebRTC data channels with no server, and a
+- **P12 — Multiplayer** ✅ four cars in one world, each simulated by the
+  player driving it and interpolated everywhere else, WebRTC data channels with no server, and a
   lobby that connects two players by copy-pasting two codes.

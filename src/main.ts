@@ -990,11 +990,10 @@ const params = new URLSearchParams(location.search);
     loadStage(start.setup.stageId, start.setup.variantId, {
       cars: start.cars,
       ...(start.slots ? { slots: start.slots } : {}),
-      // On a guest every car but your own is driven from the wire, so they are
-      // kinematic. The host simulates all of them for real and marks none.
-      ...(start.guest
-        ? { remote: Array.from({ length: start.cars - 1 }, (_, i) => i + 1) }
-        : {}),
+      // Every car but your own is driven from the wire, so they are kinematic
+      // — on the host as much as on a guest. Each machine simulates only its
+      // own car; see `net/host.ts` for why the host stopped simulating theirs.
+      remote: Array.from({ length: start.cars - 1 }, (_, i) => i + 1),
     });
 
     // Nobody counts down yet. Building a world is asynchronous and takes a
@@ -1005,8 +1004,8 @@ const params = new URLSearchParams(location.search);
     lights.hold();
     start.onGo?.(() => lights.arm());
 
-    // The host is the authority and starts the clock; a guest hands its world
-    // over and is corrected toward the host's from the first snapshot.
+    // The host starts the clock; a guest hands its world over and starts
+    // reporting its own car from the first step.
     if (start.host) start.host.start(start.setup, world);
     else start.guest!.attach(world);
 
