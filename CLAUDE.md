@@ -23,9 +23,17 @@ It is loaded into every session, so it earns its length or it gets cut.
 5. **Anything drawn at the size of a thing you can hit belongs in `sim/`.** If
    the player can see it and the simulation does not know about it, the car will
    drive through it.
-6. **`npm test` is the gate for every change.** After touching stage data,
-   vehicle physics or anything that moves a gate, `npm run stages` as well — it
-   is the only thing that reports a stage that stopped being completable.
+6. **`npm test` is the gate for every change, and CI runs it on every push.**
+   It drives every stage and every weather variant to the finish
+   (`tests/drive-*.test.ts`), so a stage that stopped being completable fails
+   it. `npm run test:quick` is everything *except* that driving — about a
+   twentieth of the time — and is enough on its own for a change that cannot
+   reach the physics: `ui/`, `render/`, `audio/`, `net/`, `tools/`, docs and
+   styles. Anything touching `sim/`, `data/`, `game/race.ts` or the car runs
+   the full `npm test`. After touching stage data, vehicle physics or anything
+   that moves a gate, `npm run stages` as well — not because it can fail (it
+   is a report and cannot), but because it prints the times and medals the
+   tests only bound.
 
 ## Architecture map
 
@@ -137,7 +145,8 @@ The fix there was to add the measurement, not to change the claim.
 The cheap checks come first, and most questions never need an image:
 
 ```bash
-npm test           # the default gate for every change
+npm test           # the gate: everything, including every stage driven to the finish
+npm run test:quick # everything but the stage driving — for changes that cannot reach sim/
 npm run telemetry  # handling questions, in text
 npm run sweep      # balance: lateral g, turn radius, front-minus-rear slip
 npm run stages     # is every stage still completable, and how fast
@@ -217,8 +226,17 @@ a physics engine per test. These are the habits that pay:
 - **Measure before and after, on the same machine, twice.** `perf` numbers move
   40% under load — one run showed 166 µs/step and the next 124 for identical
   code. A single measurement is not evidence.
-- **Put long runs in the background** and keep working; `npm test` is ~100 s and
-  `npm run stages` several minutes.
+- **Put long runs in the background** and keep working; `npm test` is several
+  minutes and `npm run stages` longer. The driving is 95% of `npm test`, which
+  is what `test:quick` leaves out.
+- **Slow tests belong in their own files.** Tests inside one file run one after
+  another and vitest runs *files* in parallel, one per worker
+  (`availableParallelism() - 1`, three on CI's four cores). The stage driving
+  was two files and held two cores for nine minutes while the other forty-seven
+  files finished in fifty seconds; it is three shards now, balanced in
+  `tests/driving.ts` by what each stage costs to drive rather than by how many
+  there are. Same file: a stage's two checks used to drive it twice, three laps
+  each, for one answer — they share one drive now.
 - **A timeout nothing enforces is not a budget, and a timeout set by eye is not
   one either.** The two Grand Traverse validation tests in `stages.test.ts`
   declared 60 s and measured 78 s each, and passed for as long as the runner of
@@ -227,11 +245,17 @@ a physics engine per test. These are the habits that pay:
   twin in `conditions.test.ts` declared 90 s for the same shape of work and
   measured 100.6 s and 101.2 s — enforced the whole time, simply never true on
   a machine this size, and red only once the pair drifted the last second
-  across the line. Both numbers come from the measurement now. Grand Traverse
-  is always the one that goes: it is the longest stage and every one of these
-  drives it three times. When one goes red, check the *reason* before anything
-  else — a timeout and a failed assertion are completely different news, and
-  `git stash` plus one run says whether it was red before you arrived.
+  across the line. Both numbers come from the measurement now. The one that
+  goes is whichever stage costs most to drive, and that is lap length times
+  per-step physics: it was Grand Traverse, and since Red Planet arrived it is
+  Red Planet — the longest lap in the game and the most solid scenery, at
+  5.4 ms a step against Pine Loop's 0.7. It went red on CI with nothing about
+  the game changed: the runner got about 1.75× slower overnight, measured by
+  every CPU-bound test in the suite slowing by 1.6–1.9× while the ones waiting
+  on timers stayed put, and 114 s of a 180 s budget does not survive that.
+  When one goes red, check the *reason* before anything else — a timeout and a
+  failed assertion are completely different news, and `git stash` plus one run
+  says whether it was red before you arrived.
 - **Apply mechanical multi-hunk edits with one patch script** in the scratchpad,
   written with `assert old in s` for every hunk. It fails loudly on a stale
   assumption instead of silently matching nothing, which a fuzzy edit will do.

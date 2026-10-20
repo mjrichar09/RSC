@@ -44,7 +44,8 @@ puts the changed values on the clipboard, ready to paste into
 ## Verification
 
 ```bash
-npm test           # unit + headless handling regression tests (text, fast)
+npm test           # everything, including every stage and variant driven to the finish
+npm run test:quick # everything but the stage driving: for UI, render, net and docs changes
 npm run telemetry  # headless run -> speeds, drift, slide time, 0-100
 npm run sweep      # steady-state cornering matrix -> grip and balance table
 npm run stages     # drive every stage with the AI -> completable? how fast?
@@ -57,7 +58,8 @@ npm run uicheck    # career, arcade and multiplayer all open from the menu
 npm run typecheck
 ```
 
-`npm test` is the default gate for every change. Telemetry answers handling
+`npm test` is the default gate for every change; `test:quick` is enough for one
+that cannot reach the simulation (see `CLAUDE.md`). Telemetry answers handling
 questions in text — orders of magnitude cheaper than a screenshot — and
 `shoot` is reserved for genuinely visual questions, always emitting a single
 labelled composite rather than a burst of images:

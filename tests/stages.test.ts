@@ -14,7 +14,7 @@ import { Race, medalFor } from '../src/game/race.js';
 import { Driver } from '../src/sim/driver.js';
 import { createWorld } from '../src/sim/world.js';
 import { Stage } from '../src/sim/stage.js';
-import { runStage, validateStage } from '../src/sim/runStage.js';
+import { runStage } from '../src/sim/runStage.js';
 
 const stages = STAGES.map((def) => new Stage(def));
 
@@ -61,32 +61,8 @@ describe.each(stages.map((s) => [s.def.name, s] as const))('%s', (_name, stage) 
     expect(Math.abs(here.lateral)).toBeLessThan(1);
   });
 
-  it('can be driven to the finish by the AI', async () => {
-    // Best of three driving styles, which is how `npm run stages` measures a
-    // stage and the only measure that means anything: the driver is chaotic
-    // near its own limit, and a single lap flips between a clean run and one
-    // with an off. This test used to take one lap and passed by four tenths of
-    // a second, which made it a coin flip dressed as an assertion — and the
-    // coin landed the other way the moment the gearbox stopped hunting.
-    const result = await validateStage(stage);
-    expect(result.reason).toBeNull();
-    expect(result.ok).toBe(true);
-    expect(result.time).toBeGreaterThan(10);
-    // Conservative, so inside bronze without being anywhere near author pace.
-    expect(result.time!).toBeLessThan(stage.def.medals.bronze);
-    // Three laps of the longest stage in the game, and it is the slowest thing
-    // in the suite by an order of magnitude. The budget said 60 s and the two
-    // tests measure 78 s each on the machine this was written on — a limit
-    // nothing enforced, because the runner of the day did not apply a
-    // per-test timeout to a test that never yielded, so it went unnoticed for
-    // as long as it was wrong. Set from the measurement, with room for a
-    // machine under load rather than room for a regression.
-  }, 180_000);
-
-  it('keeps the AI mostly on the road', async () => {
-    const result = await validateStage(stage);
-    expect(result.offRoadFraction).toBeLessThan(0.45);
-  }, 180_000);
+  // Driving it to the finish is in `driving.ts`, sharded across three files
+  // so the slow part of the suite runs on three cores rather than one.
 });
 
 describe('race rules', () => {
