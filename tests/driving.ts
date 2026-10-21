@@ -63,13 +63,27 @@ function assign(): Stage[][] {
 }
 
 /**
+ * How long three laps of one stage may take, ms.
+ *
+ * From measurement, not from the eye — a budget set by eye is how these went
+ * red twice before (see "A timeout nothing enforces" in CLAUDE.md). Red Planet
+ * is the most expensive stage to drive and sets it: on CI, with the three
+ * shards running side by side, its three laps measured 226 s and its dust-storm
+ * variant 257 s; on the 4-core session container, 237 s. Coldwater Pass was
+ * 131–141 s and Grand Traverse 91–103 s on the same run. The runner has already
+ * been seen to slow by 1.75× overnight with nothing about the game changed, so
+ * this is the worst measurement with about 1.6× on top — room for a machine
+ * under load, not for a regression. A stage that needs more than this to
+ * drive needs the scenery merge (one collider for all of it, measured 7×
+ * cheaper per step on Red Planet), not a bigger number.
+ */
+const DRIVE_BUDGET = 420_000;
+
+/**
  * Register the driving checks for one shard, numbered from 1.
  *
- * The timeouts are per three laps and come from measurement, not from the eye:
- * on CI before the runner slowed, Red Planet's three laps measured 114 s and
- * Grand Traverse's 40 s, and a budget set by eye is how both of them went red
- * before (see "A timeout nothing enforces" in CLAUDE.md). With the shared run
- * a stage's two checks wait on one drive, so each still fits one budget.
+ * With the shared run a stage's two checks wait on one drive, so each still
+ * fits one budget.
  */
 export function driveShard(index: number): void {
   const mine = assign()[index - 1] ?? [];
@@ -92,12 +106,12 @@ export function driveShard(index: number): void {
       expect(result.time).toBeGreaterThan(10);
       // Conservative, so inside bronze without being anywhere near author pace.
       expect(result.time!).toBeLessThan(stage.def.medals.bronze);
-    }, 180_000);
+    }, DRIVE_BUDGET);
 
     it('keeps the AI mostly on the road', async () => {
       const result = await driven();
       expect(result.offRoadFraction).toBeLessThan(0.45);
-    }, 180_000);
+    }, DRIVE_BUDGET);
 
     // A variant nobody can finish is not shippable, same bar as a stage.
     for (const variant of stageVariants(stage.def).slice(1)) {
@@ -105,7 +119,7 @@ export function driveShard(index: number): void {
         const result = await validateStage(new Stage(stage.def), variant.conditions);
         expect(result.ok, result.reason ?? '').toBe(true);
         expect(result.time!).toBeLessThan(variant.medals.bronze);
-      }, 180_000);
+      }, DRIVE_BUDGET);
     }
   });
 }
