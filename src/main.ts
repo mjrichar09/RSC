@@ -78,6 +78,7 @@ import { type CarStyle, isCarStyle } from './render/carStyles.js';
 import { Garage } from './ui/garage.js';
 import { MultiplayerPanel } from './ui/multiplayer.js';
 import { UpdateBanner, UpdateWatch } from './ui/update.js';
+import { startAnalytics } from './ui/analytics.js';
 import { StartMenu } from './ui/menu.js';
 import { ReplayUi } from './ui/replay.js';
 import { MultiplayerSession } from './game/multiplayer.js';
@@ -1137,6 +1138,8 @@ const params = new URLSearchParams(location.search);
   const updates = new UpdateWatch();
   const updateBanner = new UpdateBanner();
   updates.start();
+  // Visitor counts on the Vercel copy only; see `ui/analytics.ts`.
+  startAnalytics();
 
   // Dropping a connection and going back to the front door are two different
   // things, and only the first happens when the lobby's Back button takes a
